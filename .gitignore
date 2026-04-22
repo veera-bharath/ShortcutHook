@@ -1,0 +1,18 @@
+# Binaries and build artifacts
+build/
+bin/
+obj/
+*.exe
+*.pdb
+
+# Logs
+*.log
+
+# IDE settings
+.vs/
+*.user
+*.suo
+
+# Local config
+# shortcuts.json (Uncomment if you want to keep your specific shortcuts local only)
+# shortcuts.json

@@ -1,0 +1,261 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Management;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+
+namespace ShortcutHookUI;
+
+internal static class TriggerHelpers
+{
+    public const int MOD_CTRL  = 1;
+    public const int MOD_SHIFT = 2;
+    public const int MOD_ALT   = 4;
+    public const int MOD_WIN   = 8;
+
+    public static readonly string[] ValidGestures = {
+        "left+right","double-right","triple-right",
+        "right-scroll-down","right-scroll-up","double-wheel","triple-wheel"
+    };
+
+    public static readonly Dictionary<string,int> VkMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ENTER"]=0x0D, ["RETURN"]=0x0D, ["ESC"]=0x1B, ["ESCAPE"]=0x1B,
+        ["TAB"]=0x09, ["SPACE"]=0x20, ["BACK"]=0x08, ["BACKSPACE"]=0x08,
+        ["DELETE"]=0x2E, ["DEL"]=0x2E, ["INSERT"]=0x2D, ["INS"]=0x2D,
+        ["HOME"]=0x24, ["END"]=0x23, ["PGUP"]=0x21, ["PAGEUP"]=0x21,
+        ["PGDN"]=0x22, ["PAGEDOWN"]=0x22,
+        ["LEFT"]=0x25, ["UP"]=0x26, ["RIGHT"]=0x27, ["DOWN"]=0x28,
+        ["PRTSCR"]=0x2C, ["PRINTSCREEN"]=0x2C,
+        ["F1"]=0x70, ["F2"]=0x71, ["F3"]=0x72, ["F4"]=0x73, ["F5"]=0x74, ["F6"]=0x75,
+        ["F7"]=0x76, ["F8"]=0x77, ["F9"]=0x78, ["F10"]=0x79, ["F11"]=0x7A, ["F12"]=0x7B,
+    };
+
+    static readonly HashSet<string> Mods =
+        new(StringComparer.OrdinalIgnoreCase) { "CTRL","CONTROL","SHIFT","ALT","MENU","WIN" };
+
+    public static int ResolveKeyCode(string k)
+    {
+        var u = k.Trim().ToUpperInvariant();
+        if (VkMap.TryGetValue(u, out var v)) return v;
+        if (u.Length == 1 && u[0] >= 'A' && u[0] <= 'Z') return u[0];
+        if (u.Length == 1 && u[0] >= '0' && u[0] <= '9') return u[0];
+        throw new ArgumentException($"Unknown key '{k}'");
+    }
+
+    public static ParsedKey ParseKeyTrigger(string combo)
+    {
+        var p = new ParsedKey();
+        var keys = new List<int>();
+        foreach (var tokRaw in combo.Split('+'))
+        {
+            var tok = tokRaw.Trim().ToUpperInvariant();
+            if (tok.Length == 0) continue;
+            if (tok is "CTRL" or "CONTROL") p.Mods |= MOD_CTRL;
+            else if (tok is "SHIFT")        p.Mods |= MOD_SHIFT;
+            else if (tok is "ALT" or "MENU") p.Mods |= MOD_ALT;
+            else if (tok is "WIN")          p.Mods |= MOD_WIN;
+            else keys.Add(ResolveKeyCode(tok));
+        }
+        if (keys.Count == 0) throw new ArgumentException($"No non-modifier key in '{combo}'");
+        keys.Sort();
+        p.Keys = keys.ToArray();
+        return p;
+    }
+
+    public static string CanonicalizeTrigger(string trigger)
+    {
+        var t = trigger.Trim();
+        if (t.StartsWith("mouse:", StringComparison.Ordinal))
+        {
+            var g = t.Substring(6).Trim().ToLowerInvariant();
+            if (!ValidGestures.Contains(g)) throw new ArgumentException($"Unknown mouse gesture '{g}'");
+            return "mouse:" + g;
+        }
+        if (t.StartsWith("key:", StringComparison.Ordinal))
+        {
+            var p = ParseKeyTrigger(t.Substring(4));
+            return "key:" + p.Mods + ":" + string.Join(",", p.Keys);
+        }
+        throw new ArgumentException("Trigger must start with 'mouse:' or 'key:'");
+    }
+
+    public static void ValidateShortcutOutput(string combo)
+    {
+        var tokens = combo.Trim().Split('+').Select(t => t.Trim().ToUpperInvariant()).ToArray();
+        if (tokens.All(string.IsNullOrEmpty)) throw new ArgumentException("Output cannot be empty");
+        foreach (var tok in tokens)
+        {
+            if (string.IsNullOrEmpty(tok)) throw new ArgumentException("Empty token");
+            if (Mods.Contains(tok)) continue;
+            if (VkMap.ContainsKey(tok)) continue;
+            if (tok.Length == 1 && ((tok[0] >= 'A' && tok[0] <= 'Z') || (tok[0] >= '0' && tok[0] <= '9'))) continue;
+            throw new ArgumentException($"Unknown key '{tok}'");
+        }
+    }
+
+    public static bool IsKeyPrefixOf(ParsedKey a, ParsedKey b)
+    {
+        if (a.Mods != b.Mods || a.Keys.Length >= b.Keys.Length) return false;
+        foreach (var k in a.Keys) if (!b.Keys.Contains(k)) return false;
+        return true;
+    }
+}
+
+internal static class ConfigService
+{
+    static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never
+    };
+
+    public static readonly List<BindingEntry> Defaults = new()
+    {
+        new() { trigger = "mouse:left+right",   output = "Win+Shift+S" },
+        new() { trigger = "mouse:double-right", output = "Ctrl+C" },
+        new() { trigger = "mouse:triple-right", output = "Ctrl+V" },
+    };
+
+    public static string ConfigPath(string root) => Path.Combine(root, "shortcuts.json");
+
+    public static List<BindingEntry> Read(string root)
+    {
+        var p = ConfigPath(root);
+        if (File.Exists(p))
+        {
+            try
+            {
+                var txt = File.ReadAllText(p);
+                var doc = JsonSerializer.Deserialize<ConfigRoot>(txt);
+                if (doc?.bindings is { Count: > 0 }) return doc.bindings;
+            }
+            catch { }
+        }
+        return new List<BindingEntry>(Defaults);
+    }
+
+    public static void Save(string root, IEnumerable<BindingEntry> bindings)
+    {
+        var doc = new ConfigRoot { bindings = bindings.ToList() };
+        File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(doc, JsonOpts));
+    }
+}
+
+internal static class DaemonService
+{
+    const string MutexName = @"Global\ShortcutHook";
+
+    public static bool IsRunning()
+    {
+        try
+        {
+            using var m = Mutex.OpenExisting(MutexName);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    public static void Start(string root)
+    {
+        var ps = Path.Combine(root, "ShortcutHook.ps1");
+        var psi = new ProcessStartInfo("powershell.exe")
+        {
+            Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{ps}\"",
+            WorkingDirectory = root,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            CreateNoWindow = true,
+            UseShellExecute = false,
+        };
+        Process.Start(psi);
+    }
+
+    public static void Stop()
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'powershell.exe'");
+            foreach (var obj in searcher.Get())
+            {
+                var cmd = obj["CommandLine"] as string ?? "";
+                if (cmd.IndexOf("ShortcutHook.ps1", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    cmd.IndexOf("ShortcutHookUI",   StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    var pid = Convert.ToInt32(obj["ProcessId"]);
+                    try { Process.GetProcessById(pid).Kill(); } catch { }
+                }
+            }
+        }
+        catch { }
+    }
+}
+
+internal static class StartupService
+{
+    static string LnkPath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "ShortcutHook.lnk");
+
+    public static bool IsEnabled() => File.Exists(LnkPath());
+
+    public static void Set(bool enable, string root)
+    {
+        var lnk = LnkPath();
+        if (enable)
+        {
+            var ps = Path.Combine(root, "ShortcutHook.ps1");
+            var shellType = Type.GetTypeFromProgID("WScript.Shell")
+                ?? throw new InvalidOperationException("WScript.Shell unavailable");
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic s = shell.CreateShortcut(lnk);
+            s.TargetPath       = "powershell.exe";
+            s.Arguments        = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{ps}\"";
+            s.WorkingDirectory = root;
+            s.WindowStyle      = 7;
+            s.Save();
+        }
+        else
+        {
+            if (File.Exists(lnk)) File.Delete(lnk);
+        }
+    }
+}
+
+internal static class AppScanner
+{
+    public static List<AppEntry> Scan()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var list = new List<AppEntry>();
+        var dirs = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "Microsoft", "Windows", "Start Menu", "Programs"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                         "Microsoft", "Windows", "Start Menu", "Programs"),
+        };
+        foreach (var dir in dirs)
+        {
+            if (!Directory.Exists(dir)) continue;
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories); }
+            catch { continue; }
+            foreach (var f in files)
+            {
+                var name = Path.GetFileNameWithoutExtension(f);
+                if (name.IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (name.IndexOf("uninst",    StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (name.IndexOf("remove",    StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (!seen.Add(name)) continue;
+                list.Add(new AppEntry { Name = name, Path = f });
+            }
+        }
+        list.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        return list;
+    }
+}
