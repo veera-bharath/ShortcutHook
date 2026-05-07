@@ -94,10 +94,11 @@ public partial class MainWindow : Window
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 
-    readonly string _root;
     readonly List<AppEntry> _apps;
     readonly Dictionary<string, Row> _mouseRows = new();
     readonly List<Row> _kbdRows = new();
+    string _appRoot;
+    bool _setupComplete;
 
     // Capture state — plain C# fields, no scoping issues.
     bool            _captureActive;
@@ -118,7 +119,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        _root = AppContext.BaseDirectory;
+        _appRoot = InstallService.TryGetConfiguredAppRoot(out var configuredRoot)
+            ? configuredRoot
+            : InstallService.DefaultAppRoot;
         _apps = AppScanner.Scan();
 
         _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -146,12 +149,15 @@ public partial class MainWindow : Window
 
     void OnLoaded(object? sender, RoutedEventArgs e)
     {
-        BuildMouseRows();
-        foreach (var b in ConfigService.Read(_root))
-            if (b.trigger.StartsWith("key:", StringComparison.Ordinal))
-                AddKbdRow(b.trigger, b.output);
+        RefreshInstallState();
+        ReloadBindingsFromConfig();
         UpdateHookStatus();
-        StartupToggle.IsChecked = StartupService.IsEnabled();
+        _setupComplete = InstallService.IsSetupComplete()
+                         && InstallService.IsInstalled()
+                         && InstallService.TryGetConfiguredAppRoot(out _appRoot)
+                         && InstallService.IsAppInstalled(_appRoot);
+        StartupToggle.IsChecked = _setupComplete && StartupService.IsEnabled();
+        UpdateSetupState();
         _pollTimer.Start();
     }
 
@@ -160,6 +166,17 @@ public partial class MainWindow : Window
     // =========================================================================
     void UpdateHookStatus()
     {
+        if (!InstallService.IsInstalled())
+        {
+            StatusDot.Fill  = AmberBrush;
+            StatusText.Text = "Runtime not installed";
+            HookBtn.Content = "Start";
+            HookBtn.Background = GreenBrush;
+            HookBtn.IsEnabled = false;
+            return;
+        }
+
+        HookBtn.IsEnabled = true;
         if (DaemonService.IsRunning())
         {
             StatusDot.Fill  = GreenBrush;
@@ -179,24 +196,165 @@ public partial class MainWindow : Window
     void HookBtn_Click(object sender, RoutedEventArgs e)
     {
         HookBtn.IsEnabled = false;
-        if (DaemonService.IsRunning()) { DaemonService.Stop(); UpdateHookStatus(); }
-        else
+        try
         {
-            DaemonService.Start(_root);
-            StatusDot.Fill = AmberBrush;
-            StatusText.Text = "Starting...";
-            HookBtn.Content = "...";
+            if (DaemonService.IsRunning()) { DaemonService.Stop(); UpdateHookStatus(); }
+            else
+            {
+                DaemonService.Start();
+                StatusDot.Fill = AmberBrush;
+                StatusText.Text = "Starting...";
+                HookBtn.Content = "...";
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Hook change failed: {ex.Message}", FeedbackKind.Err);
+            UpdateHookStatus();
         }
         HookBtn.IsEnabled = true;
     }
 
     void StartupToggle_Click(object sender, RoutedEventArgs e)
     {
-        try { StartupService.Set(StartupToggle.IsChecked == true, _root); }
+        try { StartupService.Set(StartupToggle.IsChecked == true); }
         catch (Exception ex)
         {
             ShowFeedback($"Startup change failed: {ex.Message}", FeedbackKind.Err);
             StartupToggle.IsChecked = !StartupToggle.IsChecked;
+        }
+    }
+
+    // =========================================================================
+    // Installation
+    // =========================================================================
+    void RefreshInstallState()
+    {
+        InstallService.TryGetConfiguredAppRoot(out _appRoot);
+        StartupToggle.IsEnabled = InstallService.IsInstalled();
+        UpdateHookStatus();
+    }
+
+    void UpdateSetupState()
+    {
+        var scriptInstalled = InstallService.IsInstalled();
+        var appConfigured   = InstallService.TryGetConfiguredAppRoot(out _appRoot);
+        var appInstalled    = appConfigured && InstallService.IsAppInstalled(_appRoot);
+        var fullyInstalled  = scriptInstalled && appInstalled;
+        var showSetup       = !_setupComplete || !fullyInstalled;
+
+        MainAppRoot.Visibility = showSetup ? Visibility.Collapsed : Visibility.Visible;
+        SetupRoot.Visibility   = showSetup ? Visibility.Visible   : Visibility.Collapsed;
+
+        SetupAppFolderText.Text    = appConfigured ? _appRoot : InstallService.DefaultAppRoot;
+        SetupScriptFolderText.Text = InstallService.ScriptRoot;
+
+        SetupInstallStatusText.Text = fullyInstalled
+            ? $"Installed — app at {_appRoot}, script at {InstallService.ScriptRoot}"
+            : scriptInstalled
+                ? $"Script installed. App not found at {_appRoot}."
+                : "Not installed.";
+        SetupInstallStatusText.Foreground = fullyInstalled ? GreenBrush : TextBrush;
+
+        SetupOpenFolderBtn.IsEnabled = Directory.Exists(InstallService.ScriptRoot);
+        SetupInstallBtn.Content = fullyInstalled ? "Reinstall" : "Choose App Folder and Install";
+        CompleteSetupBtn.IsEnabled = fullyInstalled;
+        SetupHintText.Text = fullyInstalled
+            ? (_setupComplete ? "Setup complete." : "Setup is ready. Choose optional shortcuts and finish.")
+            : "Install first to continue.";
+    }
+
+    void ReloadBindingsFromConfig()
+    {
+        if (_captureActive) EndCapture();
+        KbdStack.Children.Clear();
+        _kbdRows.Clear();
+
+        BuildMouseRows();
+        foreach (var b in ConfigService.Read(InstallService.ScriptRoot))
+            if (b.trigger.StartsWith("key:", StringComparison.Ordinal))
+                AddKbdRow(b.trigger, b.output);
+    }
+
+    void InstallBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Choose where to install the ShortcutHook app. The exe will be placed directly in this folder.",
+            Multiselect = false
+        };
+
+        if (Directory.Exists(_appRoot))
+            dialog.InitialDirectory = _appRoot;
+        else if (Directory.Exists(InstallService.DefaultAppRoot))
+            dialog.InitialDirectory = InstallService.DefaultAppRoot;
+
+        if (dialog.ShowDialog(this) != true || string.IsNullOrWhiteSpace(dialog.FolderName))
+            return;
+
+        try
+        {
+            var appRoot = dialog.FolderName.Trim();
+            InstallService.Install(appRoot);
+            _appRoot = appRoot;
+            _setupComplete = false;
+            RefreshInstallState();
+            ReloadBindingsFromConfig();
+            StartupToggle.IsChecked = StartupService.IsEnabled();
+            UpdateSetupState();
+            ShowFeedback($"Installed. App: {_appRoot} | Script: {InstallService.ScriptRoot}", FeedbackKind.Ok);
+        }
+        catch (Exception ex)
+        {
+            var msg = $"Install failed: {ex.Message}";
+            ShowFeedback(msg, FeedbackKind.Err);
+            if (!_setupComplete) SetupHintText.Text = msg;
+        }
+    }
+
+    void OpenInstallBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try { InstallService.OpenScriptFolder(); }
+        catch (Exception ex)
+        {
+            var msg = $"Open folder failed: {ex.Message}";
+            ShowFeedback(msg, FeedbackKind.Err);
+            if (!_setupComplete) SetupHintText.Text = msg;
+        }
+    }
+
+    void CompleteSetupBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!InstallService.IsInstalled())
+                throw new InvalidOperationException("Install before finishing setup.");
+            if (!InstallService.TryGetConfiguredAppRoot(out _appRoot) || !InstallService.IsAppInstalled(_appRoot))
+                throw new InvalidOperationException("App not installed. Run install first.");
+
+            if (SetupStartMenuCheckbox.IsChecked == true)
+                InstallService.CreateStartMenuShortcut(_appRoot);
+
+            if (SetupDesktopCheckbox.IsChecked == true)
+                InstallService.CreateDesktopShortcut(_appRoot);
+
+            InstallService.MarkSetupComplete();
+            _setupComplete = true;
+            UpdateSetupState();
+            StartupToggle.IsChecked = StartupService.IsEnabled();
+            ShowFeedback("Setup complete.", FeedbackKind.Ok);
+
+            if (!InstallService.IsRunningFromInstalledLocation(_appRoot))
+            {
+                InstallService.LaunchInstalledApp(_appRoot);
+                Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
+            }
+        }
+        catch (Exception ex)
+        {
+            var msg = $"Setup failed: {ex.Message}";
+            SetupHintText.Text = msg;
+            ShowFeedback(msg, FeedbackKind.Err);
         }
     }
 
@@ -226,7 +384,7 @@ public partial class MainWindow : Window
         MouseStack.Children.Clear();
         _mouseRows.Clear();
 
-        var config = ConfigService.Read(_root);
+        var config = ConfigService.Read(InstallService.ScriptRoot);
         var cfgMap = new Dictionary<string,string>();
         foreach (var b in config)
             if (b.trigger.StartsWith("mouse:", StringComparison.Ordinal))
@@ -850,14 +1008,15 @@ public partial class MainWindow : Window
                 if (i != j && TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed))
                     prefixPairs.Add($"{keyParsed[i].Trigger} -> {keyParsed[j].Trigger}");
 
-        try { ConfigService.Save(_root, entries); }
+        try { ConfigService.Save(InstallService.ScriptRoot, entries); }
         catch (Exception ex) { ShowFeedback($"Save failed: {ex.Message}", FeedbackKind.Err); return; }
 
         var wasRunning = DaemonService.IsRunning();
         if (wasRunning)
         {
             DaemonService.Stop();
-            DaemonService.Start(_root);
+            try { DaemonService.Start(); }
+            catch (Exception ex) { ShowFeedback($"Saved, but restart failed: {ex.Message}", FeedbackKind.Err); UpdateHookStatus(); return; }
             StatusDot.Fill = AmberBrush;
             StatusText.Text = "Restarting...";
         }

@@ -162,6 +162,11 @@ public class ShortcutHook {
     static void ExecuteBinding(Binding b) {
         if (b == null) return;
         if (b.OpenPath != null) {
+            bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
+            bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+            if (uWinL) keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            if (uWinR) keybd_event(VK_RWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
             string path = b.OpenPath;
             new Thread(() => {
                 try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
@@ -189,11 +194,15 @@ public class ShortcutHook {
         foreach (byte k in chord)                    keybd_event(k, 0, 0, UIntPtr.Zero);
         for (int i = chord.Length - 1; i >= 0; i--) keybd_event(chord[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
-        if (uWinR)  keybd_event(VK_RWIN,    0, 0, UIntPtr.Zero);
-        if (uWinL)  keybd_event(VK_LWIN,    0, 0, UIntPtr.Zero);
+        // Re-press non-Win modifiers so the user's held keys remain active
         if (uAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
         if (uShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
         if (uCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+
+        // Don't re-press Win — instead swallow the physical Win-up in KbdCallback
+        // so Explorer never sees a clean Win tap and the Start Menu stays closed.
+        if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
+        else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
     }
 
     // =========================================================================
@@ -359,6 +368,7 @@ public class ShortcutHook {
     static Binding        deferred      = null;
     static int            deferGen      = 0;
     const  int            DEFER_MS      = 80;
+    static bool           suppressWinUp = false;
 
     static int ModBit(uint vk) {
         if (vk == VK_LCTRL  || vk == VK_RCTRL  || vk == VK_CONTROL) return MOD_CTRL;
@@ -423,11 +433,19 @@ public class ShortcutHook {
             int  modBit = ModBit(data.vkCode);
 
             if (modBit != 0) {
+                bool swallowWinUp = false;
                 lock (KLock) {
                     if (isDown) heldMods |= modBit;
-                    else if (isUp) { heldMods &= ~modBit; if (deferred != null) FireDeferredIfPending(); }
+                    else if (isUp) {
+                        heldMods &= ~modBit;
+                        if (deferred != null) FireDeferredIfPending();
+                        if ((vk == VK_LWIN || vk == VK_RWIN) && suppressWinUp) {
+                            suppressWinUp = false;
+                            swallowWinUp = true;
+                        }
+                    }
                 }
-                return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
+                return swallowWinUp ? new IntPtr(1) : CallNextHookEx(kbdHookId, nCode, wParam, lParam);
             }
 
             lock (KLock) {

@@ -5,6 +5,7 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Assets\ShortcutHook.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RootNamespace>ShortcutHookUI</RootNamespace>
@@ -23,6 +24,16 @@
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="8.0.0"/>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\ShortcutHook.ico" />
+    <Resource Include="Assets\ShortcutHook.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\ShortcutHookScripts\ShortcutHook.ps1"
+                      LogicalName="ShortcutHookUI.Runtime.ShortcutHook.ps1" />
   </ItemGroup>
 
 </Project>

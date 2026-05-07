@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Management;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
+using Microsoft.Win32;
 
 namespace ShortcutHookUI;
 
@@ -141,8 +143,142 @@ internal static class ConfigService
 
     public static void Save(string root, IEnumerable<BindingEntry> bindings)
     {
+        Directory.CreateDirectory(root);
         var doc = new ConfigRoot { bindings = bindings.ToList() };
         File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(doc, JsonOpts));
+    }
+}
+
+internal static class InstallService
+{
+    const string RegistryKeyPath      = @"Software\ShortcutHook";
+    const string AppInstallPathValue  = "AppInstallPath";
+    const string SetupCompleteValue   = "SetupComplete";
+    const string ScriptResourceName   = "ShortcutHookUI.Runtime.ShortcutHook.ps1";
+    const string ScriptFileName       = "ShortcutHook.ps1";
+    const string UiExeFileName        = "ShortcutHookUI.exe";
+
+    // Script + config always live here — fixed, never changes.
+    public static readonly string ScriptRoot = @"C:\Tools\ShortcutHook";
+    public static string ScriptPath => Path.Combine(ScriptRoot, ScriptFileName);
+
+    // App (exe) default: same folder as script, so a default install is self-contained.
+    public static string DefaultAppRoot => ScriptRoot;
+
+    public static string UiExePath(string appRoot) => Path.Combine(appRoot, UiExeFileName);
+
+    public static bool TryGetConfiguredAppRoot(out string root)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath);
+        var configured = key?.GetValue(AppInstallPathValue) as string;
+        if (string.IsNullOrWhiteSpace(configured)) { root = DefaultAppRoot; return false; }
+        root = configured;
+        return true;
+    }
+
+    static void SaveAppRoot(string root)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath);
+        key.SetValue(AppInstallPathValue, root);
+    }
+
+    public static bool IsSetupComplete()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath);
+        return (key?.GetValue(SetupCompleteValue) as int?) == 1 ||
+               string.Equals(key?.GetValue(SetupCompleteValue)?.ToString(), "1", StringComparison.Ordinal);
+    }
+
+    public static void MarkSetupComplete()
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath);
+        key.SetValue(SetupCompleteValue, 1, RegistryValueKind.DWord);
+    }
+
+    // Script check uses fixed ScriptRoot — no arg needed.
+    public static bool IsInstalled() => File.Exists(ScriptPath);
+
+    // Exe check uses the user-chosen app folder.
+    public static bool IsAppInstalled(string appRoot) => File.Exists(UiExePath(appRoot));
+
+    public static void Install(string appRoot)
+    {
+        // 1. Extract embedded PS1 to fixed script location.
+        Directory.CreateDirectory(ScriptRoot);
+        using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(ScriptResourceName)
+               ?? throw new InvalidOperationException("Embedded daemon script not found."))
+        using (var file = File.Create(ScriptPath))
+        {
+            stream.CopyTo(file);
+        }
+
+        // 2. Copy this exe to the chosen app folder (skip if already there).
+        Directory.CreateDirectory(appRoot);
+        var sourceExe = CurrentExecutablePath();
+        var targetExe = UiExePath(appRoot);
+        if (!string.Equals(Path.GetFullPath(sourceExe), Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase))
+            File.Copy(sourceExe, targetExe, overwrite: true);
+
+        // 3. Write default config if absent.
+        if (!File.Exists(ConfigService.ConfigPath(ScriptRoot)))
+            ConfigService.Save(ScriptRoot, ConfigService.Defaults);
+
+        SaveAppRoot(appRoot);
+    }
+
+    public static void OpenScriptFolder()
+    {
+        Directory.CreateDirectory(ScriptRoot);
+        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{ScriptRoot}\"") { UseShellExecute = true });
+    }
+
+    public static bool IsRunningFromInstalledLocation(string appRoot) =>
+        string.Equals(Path.GetFullPath(CurrentExecutablePath()), Path.GetFullPath(UiExePath(appRoot)),
+                      StringComparison.OrdinalIgnoreCase);
+
+    public static void LaunchInstalledApp(string appRoot)
+    {
+        var installedExe = UiExePath(appRoot);
+        if (!File.Exists(installedExe))
+            throw new FileNotFoundException("Installed UI executable not found.", installedExe);
+        Process.Start(new ProcessStartInfo(installedExe) { WorkingDirectory = appRoot, UseShellExecute = true });
+    }
+
+    static string CurrentExecutablePath() =>
+        Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName
+        ?? throw new InvalidOperationException("Unable to resolve the UI executable path.");
+
+    public static void CreateStartMenuShortcut(string appRoot)
+    {
+        var exePath = UiExePath(appRoot);
+        var shortcutDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Microsoft", "Windows", "Start Menu", "Programs", "ShortcutHook");
+        Directory.CreateDirectory(shortcutDir);
+
+        var shellType = Type.GetTypeFromProgID("WScript.Shell")
+            ?? throw new InvalidOperationException("WScript.Shell unavailable");
+        dynamic shell = Activator.CreateInstance(shellType)!;
+        dynamic shortcut = shell.CreateShortcut(Path.Combine(shortcutDir, "ShortcutHook UI.lnk"));
+        shortcut.TargetPath = exePath;
+        shortcut.WorkingDirectory = appRoot;
+        shortcut.IconLocation = exePath;
+        shortcut.Save();
+    }
+
+    public static void CreateDesktopShortcut(string appRoot)
+    {
+        var exePath = UiExePath(appRoot);
+        var desktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+
+        var shellType = Type.GetTypeFromProgID("WScript.Shell")
+            ?? throw new InvalidOperationException("WScript.Shell unavailable");
+        dynamic shell = Activator.CreateInstance(shellType)!;
+        dynamic shortcut = shell.CreateShortcut(Path.Combine(desktopDir, "ShortcutHook UI.lnk"));
+        shortcut.TargetPath = exePath;
+        shortcut.WorkingDirectory = appRoot;
+        shortcut.IconLocation = exePath;
+        shortcut.Save();
     }
 }
 
@@ -160,13 +296,15 @@ internal static class DaemonService
         catch { return false; }
     }
 
-    public static void Start(string root)
+    public static void Start()
     {
-        var ps = Path.Combine(root, "ShortcutHook.ps1");
+        var ps = InstallService.ScriptPath;
+        if (!File.Exists(ps))
+            throw new FileNotFoundException("ShortcutHook.ps1 is not installed.", ps);
         var psi = new ProcessStartInfo("powershell.exe")
         {
             Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{ps}\"",
-            WorkingDirectory = root,
+            WorkingDirectory = InstallService.ScriptRoot,
             WindowStyle = ProcessWindowStyle.Hidden,
             CreateNoWindow = true,
             UseShellExecute = false,
@@ -203,19 +341,21 @@ internal static class StartupService
 
     public static bool IsEnabled() => File.Exists(LnkPath());
 
-    public static void Set(bool enable, string root)
+    public static void Set(bool enable)
     {
         var lnk = LnkPath();
         if (enable)
         {
-            var ps = Path.Combine(root, "ShortcutHook.ps1");
+            var ps = InstallService.ScriptPath;
+            if (!File.Exists(ps))
+                throw new FileNotFoundException("ShortcutHook.ps1 is not installed.", ps);
             var shellType = Type.GetTypeFromProgID("WScript.Shell")
                 ?? throw new InvalidOperationException("WScript.Shell unavailable");
             dynamic shell = Activator.CreateInstance(shellType)!;
             dynamic s = shell.CreateShortcut(lnk);
             s.TargetPath       = "powershell.exe";
             s.Arguments        = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{ps}\"";
-            s.WorkingDirectory = root;
+            s.WorkingDirectory = InstallService.ScriptRoot;
             s.WindowStyle      = 7;
             s.Save();
         }
