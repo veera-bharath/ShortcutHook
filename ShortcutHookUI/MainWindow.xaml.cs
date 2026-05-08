@@ -358,6 +358,9 @@ public partial class MainWindow : Window
         }
     }
 
+    void AboutBtn_Click(object sender, RoutedEventArgs e) =>
+        new AboutWindow { Owner = this }.ShowDialog();
+
     // =========================================================================
     // Feedback toast
     // =========================================================================

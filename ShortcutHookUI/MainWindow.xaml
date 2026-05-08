@@ -343,11 +343,16 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Margin="0,0,0,16">
-            <TextBlock Text="Shortcut Hook" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold"/>
-            <TextBlock Text="Map mouse gestures and keyboard combos to shortcuts"
-                       Foreground="#555555" FontSize="12" Margin="0,4,0,0"/>
-        </StackPanel>
+        <DockPanel Grid.Row="0" Margin="0,0,0,16">
+            <Button DockPanel.Dock="Right" Content="About" Style="{StaticResource BtnGhost}"
+                    Height="28" Width="56" Padding="0" VerticalAlignment="Top"
+                    Click="AboutBtn_Click"/>
+            <StackPanel>
+                <TextBlock Text="Shortcut Hook" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold"/>
+                <TextBlock Text="Map mouse gestures and keyboard combos to shortcuts"
+                           Foreground="#555555" FontSize="12" Margin="0,4,0,0"/>
+            </StackPanel>
+        </DockPanel>
 
         <Border Grid.Row="1" Style="{StaticResource Card}">
             <Grid>
