@@ -6,24 +6,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Windows-only shortcut-mapping tool. A background PowerShell process installs a low-level mouse hook (`WH_MOUSE_LL`) *and* a low-level keyboard hook (`WH_KEYBOARD_LL`) and maps user-defined triggers (mouse gestures or keyboard combos) to either keyboard chord outputs (VS Code-keybindings style) or shell-execute targets (open an app/file/folder).
 
-Two-piece design: **daemon** is a PowerShell script; **settings UI** is a compiled .NET 8 WPF app distributed as a single-file self-contained `.exe`. Requires Windows 10/11, PowerShell 5+, .NET Framework 4.5+ (for the daemon's `Add-Type`). The `.exe` has no runtime prerequisite — the .NET 8 runtime is bundled.
+Two-piece design: **daemon** is a PowerShell script; **settings UI** is a compiled .NET 8 WPF app distributed as a single-file self-contained `.exe`. Requires Windows 10/11, PowerShell 5+. The `.exe` has no runtime prerequisite — the .NET 8 runtime is bundled and the PS1 daemon is embedded as a manifest resource.
 
 ## Commands
 
 - `build/ShortcutHookUI.exe` — launches the settings UI (WPF dark-mode settings panel).
-- `ShortcutHookUI/Publish.bat` — rebuilds the UI from source and drops a fresh `ShortcutHookUI.exe` into the `build/` folder.
+- `ShortcutHookUI/Publish.bat` — rebuilds the UI from source and drops a fresh `ShortcutHookUI.exe` into `build/`.
 - Log: `ShortcutHook.log` in the root directory (appended, UTF-8).
-- Config: `build/shortcuts.json`.
+- Config: `C:\Tools\ShortcutHook\shortcuts.json` (fixed path after install).
 
 No test harness. Verification is manual: run the daemon, perform the trigger, confirm the chord fires in a target app.
 
 ## Project Structure
 
-- `ShortcutHookScripts/` — Contains the core daemon logic (`ShortcutHook.ps1`).
+- `ShortcutHookScripts/` — Core daemon logic (`ShortcutHook.ps1`). Embedded into the exe as a manifest resource at build time.
 - `ShortcutHookUI/` — .NET 8 WPF project for the settings UI.
-- `build/` — Distribution folder containing the compiled UI and the daemon script.
+- `build/` — Local build output (not tracked by Git; distributed via GitHub Releases).
 - `CLAUDE.md` — Project documentation and AI guidance.
-- `.gitignore` — Git exclusion rules for build artifacts and logs.
+
+## Install layout (runtime)
+
+| What | Where |
+|------|-------|
+| App (UI exe) | User-chosen folder (default `C:\Tools\ShortcutHook`) |
+| Daemon script | Always `C:\Tools\ShortcutHook\ShortcutHook.ps1` (fixed) |
+| Config | Always `C:\Tools\ShortcutHook\shortcuts.json` (fixed) |
+| Registry | `HKCU\Software\ShortcutHook` — `AppInstallPath`, `SetupComplete` |
 
 ## Config schema
 
@@ -53,7 +61,7 @@ Defaults (used if `shortcuts.json` is absent or malformed): Win+Shift+S, Ctrl+C,
 
 ### Two-process model coordinated by a named mutex
 
-`ShortcutHook.ps1` is the daemon. On startup it grabs `Global\ShortcutHook` (a `System.Threading.Mutex`) as a single-instance guard. `ShortcutHookUI.ps1` **never talks to the daemon directly** — it only probes for the daemon's existence by calling `Mutex.OpenExisting('Global\ShortcutHook')` (success = running). Stop is implemented by finding the `powershell.exe` whose command line contains `ShortcutHook.ps1` (and not `ShortcutHookUI`) and killing it. Config changes take effect by kill + relaunch — the daemon reads `shortcuts.json` once at startup only.
+`ShortcutHook.ps1` is the daemon. On startup it grabs `Global\ShortcutHook` (a `System.Threading.Mutex`) as a single-instance guard. The UI **never talks to the daemon directly** — it only probes for the daemon's existence by calling `Mutex.OpenExisting('Global\ShortcutHook')` (success = running). Stop is implemented by finding the `powershell.exe` whose command line contains `ShortcutHook.ps1` (and not `ShortcutHookUI`) and killing it. Config changes take effect by kill + relaunch — the daemon reads `shortcuts.json` once at startup only.
 
 ### The C# hook compiled via Add-Type
 
@@ -76,7 +84,7 @@ Two parallel timer-thread + generation-counter state machines live in `MouseCall
 
 Each gesture maps to a single `Binding` field on the `ShortcutHook` class (`BLeftRight`, `BDoubleRight`, `BTripleRight`, `BRightScrollDown`, `BRightScrollUp`, `BDoubleWheel`, `BTripleWheel`), populated by `LoadBindings` from matching `mouse:` bindings. When a detector fires, `ExecuteBinding` dispatches either `FireOutput` (keyboard chord) or a background-thread `Process.Start` (`open:` path).
 
-### Keyboard matcher (the interesting part)
+### Keyboard matcher
 
 `KbdCallback` runs a small state machine:
 
@@ -93,6 +101,10 @@ Each gesture maps to a single `Binding` field on the `ShortcutHook` class (`BLef
 
 Defer-timer cancellation uses `deferGen` (a monotonically-incrementing int); the timer thread checks `myGen != deferGen` under `KLock` and no-ops if stale.
 
+### Win-key suppression
+
+When a binding fires (both keyboard chords and `open:` targets) while the Win key is physically held, `ExecuteBinding` releases Win synthetically before dispatch and sets `suppressWinUp = true`. `KbdCallback` swallows the physical Win-up event when this flag is set, preventing Explorer from seeing a clean Win tap and opening the Start Menu.
+
 ### Avoiding feedback from our own injections
 
 The keyboard hook ignores events with `LLKHF_INJECTED` (bit 0x10 on `KBDLLHOOKSTRUCT.flags`). This is how `FireOutput` can safely `keybd_event` the output chord without the hook recursively processing its own synthetic keys. **Don't remove this check** — without it, every output would re-enter the matcher and chaos would follow.
@@ -103,40 +115,64 @@ The mouse hook still uses the older `reinjDown`/`reinjUp` counter pattern instea
 
 All fires go through `ExecuteBinding(Binding b)`, which branches on the binding: `b.OpenPath != null` → `Process.Start` on a background thread with `UseShellExecute = true`; otherwise → `FireOutput(b.Output)`. Exactly one of `Output`/`OpenPath` is set per binding (enforced by PS at load time).
 
-When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifiers the user is physically holding, releases them via synthesized `KEYEVENTF_KEYUP`, emits the output chord cleanly, then re-presses the released modifiers. This gives a clean modifier state for the output at the cost of a microseconds-scale modifier blip. Example: user holds Ctrl+S bound to Win+Tab — we release Ctrl, press/release Win+Tab, re-press Ctrl; the app sees a momentary Ctrl release followed by the chord followed by Ctrl down again.
+When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifiers the user is physically holding, releases them via synthesized `KEYEVENTF_KEYUP`, emits the output chord cleanly, then re-presses the released modifiers (Win excluded — see Win-key suppression above).
 
-`open:` outputs skip `FireOutput` entirely — `Process.Start` runs on a background thread so a slow shell-execute (e.g. cold-starting an app) cannot stall the hook callback past `LowLevelHooksTimeout`.
+`open:` outputs skip `FireOutput` entirely — `Process.Start` runs on a background thread so a slow shell-execute cannot stall the hook callback past `LowLevelHooksTimeout`.
 
 ## UI architecture
 
-`ui/` is a .NET 8 WPF project. Build output: a single-file self-contained `ShortcutHookUI.exe` copied to the repo root.
+`ShortcutHookUI/` is a .NET 8 WPF project. Build output: a single-file self-contained `ShortcutHookUI.exe` (68 MB, .NET 8 runtime bundled).
 
 **Project layout:**
-- `ShortcutHookUI.csproj` — `net8.0-windows`, `UseWPF=true`, `UseWindowsForms=true` (needed for `FolderBrowserDialog`), `PublishSingleFile=true`, `SelfContained=true`, `RuntimeIdentifier=win-x64`. Depends on `System.Management` NuGet for WMI (used to find the daemon process by command line).
+- `ShortcutHookUI.csproj` — `net8.0-windows`, `UseWPF=true`, `UseWindowsForms=true` (needed for `FolderBrowserDialog`), `PublishSingleFile=true`, `SelfContained=true`, `RuntimeIdentifier=win-x64`, `Version=1.0.0`. Depends on `System.Management` NuGet for WMI. Embeds `ShortcutHook.ps1` as a manifest resource (`ShortcutHookUI.Runtime.ShortcutHook.ps1`).
 - `App.xaml` / `App.xaml.cs` — minimal WPF app shell.
-- `MainWindow.xaml` — all styles (`BtnPrimary`, `BtnGhost`, `DarkTB`, `DarkCB`, `Toggle`, `Card`, `SectionLabel`, `DarkCBItem`) and the window layout. The keyboard/mouse row grids are constructed in code, not via item templates.
-- `MainWindow.xaml.cs` — the behavior. A single `Row` record holds the shared row state (Grid, OutputPanel, Action enum, OutputValue/Ctrl). Mouse rows are keyed by gesture in `_mouseRows`; keyboard rows live in `_kbdRows`. The capture state (`_captureActive`, `_captureRow`, `_captureBtn`, `_captureMods`, `_captureNonMods`) is private fields on `MainWindow` — no scope drama.
+- `MainWindow.xaml` — all shared styles (`BtnPrimary`, `BtnGhost`, `DarkTB`, `DarkCB`, `Toggle`, `Card`, `SectionLabel`, `DarkCBItem`) and the main window layout. Keyboard/mouse row grids are constructed in code, not via item templates. Contains an `About` button in the header and a `SetupRoot` overlay for first-run setup.
+- `MainWindow.xaml.cs` — main window behavior. `_appRoot` tracks the user-chosen exe install folder (from registry). All config reads/writes use `InstallService.ScriptRoot` (fixed path). Key state: `_mouseRows`, `_kbdRows`, `_setupComplete`, capture fields.
+- `AboutWindow.xaml` / `AboutWindow.xaml.cs` — small dark modal showing app name, version (read from assembly), author (Veera Bharath), and a GitHub button.
 - `Models.cs` — `AppEntry`, `BindingEntry`, `ConfigRoot`, `MouseGestureDef`, `ParsedKey`.
-- `Services.cs` — `TriggerHelpers` (parse, canonicalize, validate shortcut, prefix-of), `ConfigService` (read/write shortcuts.json via `System.Text.Json`), `DaemonService` (mutex probe + Start/Stop, WMI to find PS process with `ShortcutHook.ps1` in cmdline), `StartupService` (create/delete Startup-folder .lnk via WScript.Shell COM), `AppScanner` (enumerate Start Menu `.lnk` files).
-- `Interop.cs` — `DwmSetWindowAttribute` P/Invoke (dark title bar + caption color).
-- `Publish.bat` — `dotnet publish -c Release` + copy the exe to the repo root.
+- `Services.cs` — all service classes (see below).
+- `Interop.cs` — `DwmApi` (dark title bar P/Invoke), `HookApi` (low-level keyboard hook for key capture).
+- `Publish.bat` — `dotnet publish -c Release` + copy exe to `build/`.
+
+**Services.cs classes:**
+- `TriggerHelpers` — parse, canonicalize, validate shortcut, prefix-of detection.
+- `ConfigService` — read/write `shortcuts.json` at `InstallService.ScriptRoot` via `System.Text.Json`.
+- `InstallService` — install logic with split paths:
+  - `ScriptRoot` = `C:\Tools\ShortcutHook` (fixed constant, never changes)
+  - `ScriptPath` = `C:\Tools\ShortcutHook\ShortcutHook.ps1` (derived from ScriptRoot)
+  - `DefaultAppRoot` = `C:\Tools\ShortcutHook` (default, user can change)
+  - `Install(appRoot)` — extracts embedded PS1 to ScriptRoot, copies exe to appRoot, writes default config if absent, saves appRoot to registry
+  - Registry key: `HKCU\Software\ShortcutHook`, values: `AppInstallPath`, `SetupComplete`
+  - `IsInstalled()` — checks PS1 at ScriptRoot (no arg)
+  - `IsAppInstalled(appRoot)` — checks exe at appRoot
+  - `CreateStartMenuShortcut` / `CreateDesktopShortcut` — point to exe at appRoot
+  - `LaunchInstalledApp` / `IsRunningFromInstalledLocation` — for post-setup relaunch
+- `DaemonService` — `Start()` / `Stop()` / `IsRunning()`. Start uses `InstallService.ScriptPath` directly (no arg).
+- `StartupService` — `Set(bool)` writes/removes Startup folder `.lnk` pointing to the daemon script at `InstallService.ScriptPath`.
+- `AppScanner` — enumerates Start Menu `.lnk` files for the Open App picker.
+
+**First-run setup flow:**
+- On launch, `UpdateSetupState()` checks `_setupComplete` + `IsInstalled()` + `IsAppInstalled(_appRoot)`.
+- If not fully set up, `SetupRoot` overlay is shown (covers the main UI).
+- Step 1: folder picker → `InstallService.Install(appRoot)`. Shows both paths read-only: App (chosen) and Script (`C:\Tools\ShortcutHook`).
+- Steps 2 & 3: optional Start Menu / Desktop shortcuts.
+- Finish: `MarkSetupComplete()`, create shortcuts, relaunch from installed exe location if needed.
 
 **Key capture:**
-- Window-level `PreviewKeyDown` / `PreviewKeyUp` handlers. The capture button's `Click` handler schedules `Keyboard.Focus(captureButton)` via `Dispatcher.BeginInvoke(DispatcherPriority.Input, ...)` — deferring is necessary because WPF's mouse-click focus transition races with a same-frame `Focus()` call.
-- State machine mirrors the PS version: modifier bitmask + ordered non-modifier `Key` list. Non-mod key-down accumulates; any key-up when non-mods are present finalizes. A bare Escape (no mods, no keys) cancels.
+- Window-level `PreviewKeyDown` / `PreviewKeyUp` handlers plus a `WH_KEYBOARD_LL` hook installed during capture to swallow system hotkeys (Win+X etc.).
+- State machine: modifier bitmask + ordered non-modifier `Key` list. Non-mod key-down accumulates; any key-up when non-mods are present finalizes. A bare Escape cancels.
 - `e.Key == Key.System` (when Alt is held) resolves to `e.SystemKey` for the actual key.
 
 **Save flow:**
-- Walks the 7 fixed mouse rows + any keyboard rows, runs `TriggerHelpers.CanonicalizeTrigger` for dedup (same signature form as the daemon: `key:{mods}:{sortedKeyVKs}` / `mouse:{gesture}`), blocks exact duplicates, validates `shortcut`-action outputs with `ValidateShortcutOutput`, then writes `shortcuts.json`. Prefix pairs (e.g. `Ctrl+S` bound alongside `Ctrl+S+L`) are **allowed** — they're the whole point of the defer logic in the daemon — but shown as an amber toast so the user knows the shorter combo will have a ~80 ms latency.
-- If the daemon is running at save time, it's killed and relaunched (the daemon reads `shortcuts.json` once at startup).
+- Walks the 7 fixed mouse rows + any keyboard rows, runs `TriggerHelpers.CanonicalizeTrigger` for dedup, blocks exact duplicates, validates shortcut outputs. Prefix pairs are allowed but shown as an amber toast (~80 ms latency warning). Writes `shortcuts.json` to `InstallService.ScriptRoot`, then kill + relaunch the daemon if it was running.
 
-**Daemon interop (from .exe to .ps1):**
-- Liveness: `Mutex.OpenExisting(@"Global\ShortcutHook")` — matches the daemon's single-instance guard.
-- Stop: WMI query `Win32_Process WHERE Name='powershell.exe'`, filter by `CommandLine` containing `ShortcutHook.ps1` and not `ShortcutHookUI`, `Process.Kill()`.
-- Start: `Process.Start("powershell.exe", "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File <daemon>")`.
+**Daemon interop:**
+- Liveness: `Mutex.OpenExisting(@"Global\ShortcutHook")`.
+- Stop: WMI `Win32_Process` query filtered by `CommandLine` containing `ShortcutHook.ps1` and not `ShortcutHookUI`, then `Process.Kill()`.
+- Start: `Process.Start("powershell.exe", "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File <ScriptPath>")`.
 
 **Startup-on-login toggle:**
-- Writes/removes `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ShortcutHook.lnk` via `WScript.Shell` COM (`Type.GetTypeFromProgID` + dynamic dispatch). The shortcut launches the daemon hidden.
+- Writes/removes `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ShortcutHook.lnk` via `WScript.Shell` COM. The shortcut targets `powershell.exe` with args pointing to `InstallService.ScriptPath`.
 
 ## Gotchas when editing
 
@@ -144,7 +180,8 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 - Hook callbacks **must not throw** across the native boundary. The `try { ... } catch { /* swallow */ }` blocks in both callbacks are load-bearing.
 - Never do slow work inside either callback — Windows silently unhooks a callback that exceeds `LowLevelHooksTimeout`. The defer timer and the mouse gesture timer run on separate threads for this reason.
 - PS → C# type bridging: when assigning `byte[]` fields, the value must actually be `[byte[]]`. A bare pipeline output is `object[]`. The `Resolve-OutputChord` and `Resolve-KeyTrigger` helpers return already-cast `byte[]`; preserve this when editing.
-- Adding a new mouse gesture type requires changes in four places: a new detector branch in `MouseCallback`, a new `Binding` field on `ShortcutHook` + assignment in `LoadBindings`, a new entry in `$validGestures` in `ShortcutHook.ps1` and `TriggerHelpers.ValidGestures` in `ui/Services.cs`, and a new entry in `MainWindow.MouseDefs` (`ui/MainWindow.xaml.cs`) so the gesture gets a row in the UI.
+- Adding a new mouse gesture type requires changes in four places: a new detector branch in `MouseCallback`, a new `Binding` field on `ShortcutHook` + assignment in `LoadBindings`, a new entry in `$validGestures` in `ShortcutHook.ps1` and `TriggerHelpers.ValidGestures` in `Services.cs`, and a new entry in `MainWindow.MouseDefs` so the gesture gets a row in the UI.
 - Adding a new output kind (beyond keyboard chords and `open:`) requires: a new nullable field on `ShortcutHook.Binding`, a new branch in `ExecuteBinding`, PS-side parsing in `ShortcutHook.ps1`'s binding-build loop, and UI-side support in `MainWindow.xaml.cs` (`ActionKind` enum + `ActionLabels`/`ActionOrder` arrays, a `SetRowOutput` branch, a `GetRowOutput` branch, and `DetectAction` disambiguation).
 - The UI's "Stop" kills the daemon process. Because `Start()` blocks in `GetMessage`, there is no graceful shutdown path — kill is the design. The `finally` releases the mutex but won't run on kill; the OS reclaims the mutex on process exit.
-- Known v1 limitation: if a user presses a keyboard combo that is a strict prefix of a registered trigger but not itself a registered trigger (e.g. only `Ctrl+S+L` is bound, user types `Ctrl+S`), the shorter combo is **swallowed and discarded** rather than replayed. No current need to fix, but note it if a user reports "Ctrl+S stopped working after I added Ctrl+S+L".
+- `InstallService.ScriptRoot` is a hardcoded constant (`C:\Tools\ShortcutHook`). The daemon script and config always live here. The app exe lives at `_appRoot` (user-chosen, stored in registry). Don't conflate the two.
+- Known v1 limitation: if a user presses a keyboard combo that is a strict prefix of a registered trigger but not itself registered (e.g. only `Ctrl+S+L` is bound, user types `Ctrl+S`), the shorter combo is **swallowed and discarded** rather than replayed. Note it if a user reports "Ctrl+S stopped working after I added Ctrl+S+L".
