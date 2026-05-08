@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Navigation;
 
 namespace ShortcutHookUI;
 
@@ -26,11 +25,11 @@ public partial class AboutWindow : Window
         DwmApi.DwmSetWindowAttribute(hwnd, DwmApi.DWMWA_CAPTION_COLOR,           ref one, 4);
     }
 
-    void GitHubLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
-    {
-        Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
-        e.Handled = true;
-    }
+    void GitHubBtn_Click(object sender, RoutedEventArgs e) =>
+        Process.Start(new ProcessStartInfo("https://github.com/veera-bharath/ShortcutHook")
+        {
+            UseShellExecute = true
+        });
 
     void CloseBtn_Click(object sender, RoutedEventArgs e) => Close();
 }
