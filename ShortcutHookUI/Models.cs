@@ -17,6 +17,7 @@ public sealed class BindingEntry
 
 public sealed class ConfigRoot
 {
+    public bool altHScroll { get; set; } = false;
     public List<BindingEntry> bindings { get; set; } = new();
 }
 

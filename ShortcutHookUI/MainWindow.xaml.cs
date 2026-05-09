@@ -99,6 +99,7 @@ public partial class MainWindow : Window
     readonly List<Row> _kbdRows = new();
     string _appRoot;
     bool _setupComplete;
+    CheckBox? _altHScrollToggle;
 
     // Capture state — plain C# fields, no scoping issues.
     bool            _captureActive;
@@ -386,10 +387,11 @@ public partial class MainWindow : Window
     {
         MouseStack.Children.Clear();
         _mouseRows.Clear();
+        _altHScrollToggle = null;
 
-        var config = ConfigService.Read(InstallService.ScriptRoot);
+        var configRoot = ConfigService.ReadConfig(InstallService.ScriptRoot);
         var cfgMap = new Dictionary<string,string>();
-        foreach (var b in config)
+        foreach (var b in configRoot.bindings)
             if (b.trigger.StartsWith("mouse:", StringComparison.Ordinal))
                 cfgMap[b.trigger.Substring(6)] = b.output;
 
@@ -438,6 +440,47 @@ public partial class MainWindow : Window
                 if (idx >= 0 && idx < ActionOrder.Length) SetRowOutput(row, ActionOrder[idx]);
             };
         }
+
+        // Separator
+        MouseStack.Children.Add(new System.Windows.Shapes.Rectangle
+        {
+            Height = 1, Fill = Br("#333333"), Margin = new Thickness(0, 8, 0, 8)
+        });
+
+        // Hardcoded: Alt + Scroll Wheel → Horizontal Scroll (with toggle)
+        var altRow = new Grid { Margin = new Thickness(0, 0, 0, 5) };
+        altRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(185) });
+        altRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        altRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var altLbl = new TextBlock
+        {
+            Text = "Alt + Scroll Wheel",
+            Foreground = Br("#CCCCCC"), FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(altLbl, 0);
+
+        var altDesc = new TextBlock
+        {
+            Text = "→ Horizontal Scroll",
+            Foreground = Br("#888888"), FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(altDesc, 1);
+
+        _altHScrollToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = configRoot.altHScroll,
+            Margin    = new Thickness(8, 0, 0, 0),
+        };
+        Grid.SetColumn(_altHScrollToggle, 2);
+
+        altRow.Children.Add(altLbl);
+        altRow.Children.Add(altDesc);
+        altRow.Children.Add(_altHScrollToggle);
+        MouseStack.Children.Add(altRow);
     }
 
     // =========================================================================
@@ -1011,7 +1054,12 @@ public partial class MainWindow : Window
                 if (i != j && TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed))
                     prefixPairs.Add($"{keyParsed[i].Trigger} -> {keyParsed[j].Trigger}");
 
-        try { ConfigService.Save(InstallService.ScriptRoot, entries); }
+        var configToSave = new ConfigRoot
+        {
+            altHScroll = _altHScrollToggle?.IsChecked == true,
+            bindings   = entries,
+        };
+        try { ConfigService.Save(InstallService.ScriptRoot, configToSave); }
         catch (Exception ex) { ShowFeedback($"Save failed: {ex.Message}", FeedbackKind.Err); return; }
 
         var wasRunning = DaemonService.IsRunning();

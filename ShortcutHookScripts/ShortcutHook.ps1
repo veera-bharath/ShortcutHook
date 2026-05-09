@@ -46,6 +46,7 @@ public class ShortcutHook {
     private const uint MOUSEEVENTF_RIGHTUP    = 0x0010;
     private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
     private const uint MOUSEEVENTF_MIDDLEUP   = 0x0040;
+    private const uint MOUSEEVENTF_HWHEEL     = 0x1000;
     private const uint KEYEVENTF_KEYUP        = 0x0002;
     private const uint LLKHF_INJECTED         = 0x10;
 
@@ -123,6 +124,8 @@ public class ShortcutHook {
     public static List<Binding> KeyBindings   = new List<Binding>();
     public static Dictionary<string, Binding> KeySigIndex = new Dictionary<string, Binding>();
 
+    public static bool altScrollEnabled = false;
+
     // One Binding ref per mouse gesture (null = not configured)
     public static Binding BLeftRight, BDoubleRight, BTripleRight;
     public static Binding BRightScrollDown, BRightScrollUp;
@@ -164,9 +167,10 @@ public class ShortcutHook {
         if (b.OpenPath != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
-            if (uWinL) keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            if (uWinR) keybd_event(VK_RWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
+            // Don't inject a synthetic Win-up here — that itself triggers Start Menu.
+            // Instead mark that we need to release Win at physical Win-up time, where
+            // we can sandwich it between Ctrl events to break the clean-tap sequence.
+            if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
             string path = b.OpenPath;
             new Thread(() => {
                 try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
@@ -317,6 +321,15 @@ public class ShortcutHook {
                             ExecuteBinding(b);
                             return new IntPtr(1);
                         }
+                    } else if (altScrollEnabled && (GetAsyncKeyState(VK_MENU) & 0x8000) != 0) {
+                        MSLLHOOKSTRUCT ms = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+                        short delta = (short)((ms.mouseData >> 16) & 0xFFFF);
+                        int d = (int)delta;
+                        new Thread(() => {
+                            try { mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)d, UIntPtr.Zero); }
+                            catch { }
+                        }) { IsBackground = true }.Start();
+                        return new IntPtr(1);
                     }
                 }
             }
@@ -368,7 +381,9 @@ public class ShortcutHook {
     static Binding        deferred      = null;
     static int            deferGen      = 0;
     const  int            DEFER_MS      = 80;
-    static bool           suppressWinUp = false;
+    static bool           suppressWinUp        = false;
+    static bool           releaseWinOnSuppress = false;
+    static HashSet<byte>  prefixSwallowed      = new HashSet<byte>();
 
     static int ModBit(uint vk) {
         if (vk == VK_LCTRL  || vk == VK_RCTRL  || vk == VK_CONTROL) return MOD_CTRL;
@@ -407,6 +422,7 @@ public class ShortcutHook {
     static void FireDeferredIfPending() {
         if (deferred != null) {
             Binding b = deferred; deferred = null; deferGen++;
+            prefixSwallowed.Clear();
             ExecuteBinding(b);
         }
     }
@@ -442,6 +458,14 @@ public class ShortcutHook {
                         if ((vk == VK_LWIN || vk == VK_RWIN) && suppressWinUp) {
                             suppressWinUp = false;
                             swallowWinUp = true;
+                            if (releaseWinOnSuppress) {
+                                releaseWinOnSuppress = false;
+                                // Ctrl before Win-up breaks Explorer's clean-tap detection;
+                                // Ctrl after cleans up. Injected Win-up restores key state.
+                                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+                                keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                            }
                         }
                     }
                 }
@@ -457,16 +481,30 @@ public class ShortcutHook {
                     Binding exact = FindExact(heldMods, sk);
                     bool    longer = HasStrictSuperset(heldMods, heldKeys);
                     if (exact != null) {
-                        swallowedKeys.Add(vk); CancelDefer();
+                        swallowedKeys.Add(vk); prefixSwallowed.Clear(); CancelDefer();
                         if (longer) ScheduleDefer(exact); else ExecuteBinding(exact);
                         return new IntPtr(1);
                     }
-                    if (longer) { swallowedKeys.Add(vk); CancelDefer(); return new IntPtr(1); }
+                    if (longer) {
+                        swallowedKeys.Add(vk); prefixSwallowed.Add(vk); CancelDefer();
+                        return new IntPtr(1);
+                    }
                     return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
                 }
                 if (isUp) {
+                    bool wasPrefix = prefixSwallowed.Remove(vk);
                     bool was = swallowedKeys.Remove(vk); heldKeys.Remove(vk);
-                    if (was) { if (deferred != null) FireDeferredIfPending(); return new IntPtr(1); }
+                    if (was) {
+                        bool hadDeferred = deferred != null;
+                        if (hadDeferred) FireDeferredIfPending();
+                        // Prefix-only swallow with no binding fired: replay the key so
+                        // apps receive it (fixes Ctrl+S being lost when Ctrl+S+L is bound).
+                        if (wasPrefix && !hadDeferred) {
+                            keybd_event(vk, 0, 0, UIntPtr.Zero);
+                            keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                        }
+                        return new IntPtr(1);
+                    }
                 }
             }
         }
@@ -568,11 +606,13 @@ $defaults = @(
 )
 
 $configPath = Join-Path $PSScriptRoot 'shortcuts.json'
+$altHScroll = $false
 if (Test-Path $configPath) {
     try {
         $json = Get-Content $configPath -Raw | ConvertFrom-Json
         $rawBindings = @($json.bindings)
         if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
+        if ($json.PSObject.Properties.Name -contains 'altHScroll') { $altHScroll = [bool]$json.altHScroll }
     } catch { Write-Log "Bad shortcuts.json -- using defaults. ($_)"; $rawBindings = $defaults }
 } else {
     Write-Log 'shortcuts.json not found -- using defaults.'
@@ -620,6 +660,9 @@ try {
         else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}" -f $x.Mods, ($x.Keys -join ','), $dest) }
     }
 } catch { Write-Log "LoadBindings failed: $_"; exit 1 }
+
+[ShortcutHook]::altScrollEnabled = $altHScroll
+Write-Log ("Alt+Scroll horizontal: {0}" -f $altHScroll)
 
 # ---------------------------------------------------------------------------
 # Single-instance guard

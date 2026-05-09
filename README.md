@@ -7,6 +7,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords o
 - **Mouse gestures** — Left+Right, Double/Triple Right-click, Right-hold+Scroll, Double/Triple Wheel-click
 - **Keyboard chords** — multi-key combos like `Ctrl+S+L` with smart defer logic for prefix pairs
 - **Open anything** — launch apps, files, or folders via `open:` bindings
+- **Alt+Scroll → Horizontal Scroll** — optional toggle; holding Alt while scrolling fires a horizontal scroll event
 - **First-run setup wizard** — choose where to install the app; daemon script always goes to `C:\Tools\ShortcutHook`
 - **Startup on login** — optional toggle to launch the daemon automatically
 - **Self-contained** — single `.exe`, no installer or runtime prerequisites
@@ -33,6 +34,7 @@ That's it. The daemon starts automatically whenever you save.
 
 ```json
 {
+  "altHScroll": false,
   "bindings": [
     { "trigger": "mouse:left+right",        "output": "Win+Shift+S" },
     { "trigger": "mouse:right-scroll-down", "output": "Win+D" },
@@ -46,6 +48,9 @@ That's it. The daemon starts automatically whenever you save.
 **Trigger prefixes**
 - `mouse:` — `left+right`, `double-right`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`
 - `key:` — any `Mod+Key` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`
+
+**Top-level fields**
+- `altHScroll` — when `true`, holding Alt while scrolling fires a horizontal scroll instead of vertical (toggleable from the UI)
 
 **Outputs**
 - Keyboard chord — `Mod+Key` syntax (e.g. `Win+Shift+S`)

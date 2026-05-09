@@ -37,6 +37,7 @@ No test harness. Verification is manual: run the daemon, perform the trigger, co
 
 ```json
 {
+  "altHScroll": false,
   "bindings": [
     { "trigger": "mouse:left+right",        "output": "Win+Shift+S" },
     { "trigger": "mouse:right-scroll-down", "output": "Win+D" },
@@ -46,6 +47,8 @@ No test harness. Verification is manual: run the daemon, perform the trigger, co
   ]
 }
 ```
+
+`altHScroll` — boolean feature flag. When `true`, holding Alt while scrolling the mouse wheel fires a horizontal scroll (`MOUSEEVENTF_HWHEEL`) instead of a vertical one. Toggled from the UI (bottom of the mouse section). The injection runs on a background thread — never call `mouse_event`/`SendInput` inline inside a LL mouse hook callback or Windows will time out and silently unhook the entire hook.
 
 Trigger prefixes:
 - `mouse:` — one of the seven fixed gesture detectors: `left+right`, `double-right`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`. The last two are double-/triple-click of the middle (wheel) button; the scroll gestures fire while the right button is held. Adding more requires new detection code in `MouseCallback`.
@@ -178,10 +181,11 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 
 - The C# block is a PowerShell here-string (`@"..."@`) so `$` expansion applies — there are no literal `$`s in the C# today; be careful if adding any.
 - Hook callbacks **must not throw** across the native boundary. The `try { ... } catch { /* swallow */ }` blocks in both callbacks are load-bearing.
-- Never do slow work inside either callback — Windows silently unhooks a callback that exceeds `LowLevelHooksTimeout`. The defer timer and the mouse gesture timer run on separate threads for this reason.
+- Never do slow work inside either callback — Windows silently unhooks a callback that exceeds `LowLevelHooksTimeout`. The defer timer and the mouse gesture timer run on separate threads for this reason. **Critically: never call `mouse_event` or `SendInput` inline inside `MouseCallback`** — the injected event is dispatched synchronously through the full hook chain before returning, which easily exceeds the timeout and permanently kills the hook for the session. Always fire injections on a background thread (see the `altHScroll` handler as the pattern).
 - PS → C# type bridging: when assigning `byte[]` fields, the value must actually be `[byte[]]`. A bare pipeline output is `object[]`. The `Resolve-OutputChord` and `Resolve-KeyTrigger` helpers return already-cast `byte[]`; preserve this when editing.
 - Adding a new mouse gesture type requires changes in four places: a new detector branch in `MouseCallback`, a new `Binding` field on `ShortcutHook` + assignment in `LoadBindings`, a new entry in `$validGestures` in `ShortcutHook.ps1` and `TriggerHelpers.ValidGestures` in `Services.cs`, and a new entry in `MainWindow.MouseDefs` so the gesture gets a row in the UI.
 - Adding a new output kind (beyond keyboard chords and `open:`) requires: a new nullable field on `ShortcutHook.Binding`, a new branch in `ExecuteBinding`, PS-side parsing in `ShortcutHook.ps1`'s binding-build loop, and UI-side support in `MainWindow.xaml.cs` (`ActionKind` enum + `ActionLabels`/`ActionOrder` arrays, a `SetRowOutput` branch, a `GetRowOutput` branch, and `DetectAction` disambiguation).
 - The UI's "Stop" kills the daemon process. Because `Start()` blocks in `GetMessage`, there is no graceful shutdown path — kill is the design. The `finally` releases the mutex but won't run on kill; the OS reclaims the mutex on process exit.
 - `InstallService.ScriptRoot` is a hardcoded constant (`C:\Tools\ShortcutHook`). The daemon script and config always live here. The app exe lives at `_appRoot` (user-chosen, stored in registry). Don't conflate the two.
-- Known v1 limitation: if a user presses a keyboard combo that is a strict prefix of a registered trigger but not itself registered (e.g. only `Ctrl+S+L` is bound, user types `Ctrl+S`), the shorter combo is **swallowed and discarded** rather than replayed. Note it if a user reports "Ctrl+S stopped working after I added Ctrl+S+L".
+- When a keyboard combo is a strict prefix of a registered trigger but not itself registered (e.g. only `Ctrl+S+L` is bound, user types `Ctrl+S`), the shorter combo is swallowed while waiting for the longer one. If the longer key never comes, the swallowed key is **replayed** via `prefixSwallowed` tracking — so `Ctrl+S` still works. The replay fires on key-up and only if no binding fired during the wait.
+- Win-key bindings (`key:Win+X → open:...`): the synthetic Win-up that would normally clean up key state is deferred until the physical Win-up is swallowed. At that point a Ctrl-down/Win-up/Ctrl-up sequence is injected to release Win without triggering Start Menu (`releaseWinOnSuppress` flag). Never inject synthetic Win-up eagerly for `open:` bindings — it causes Start Menu to open.

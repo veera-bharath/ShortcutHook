@@ -125,7 +125,7 @@ internal static class ConfigService
 
     public static string ConfigPath(string root) => Path.Combine(root, "shortcuts.json");
 
-    public static List<BindingEntry> Read(string root)
+    public static ConfigRoot ReadConfig(string root)
     {
         var p = ConfigPath(root);
         if (File.Exists(p))
@@ -134,19 +134,28 @@ internal static class ConfigService
             {
                 var txt = File.ReadAllText(p);
                 var doc = JsonSerializer.Deserialize<ConfigRoot>(txt);
-                if (doc?.bindings is { Count: > 0 }) return doc.bindings;
+                if (doc is not null)
+                {
+                    if (doc.bindings is not { Count: > 0 })
+                        doc.bindings = new List<BindingEntry>(Defaults);
+                    return doc;
+                }
             }
             catch { }
         }
-        return new List<BindingEntry>(Defaults);
+        return new ConfigRoot { bindings = new List<BindingEntry>(Defaults) };
     }
 
-    public static void Save(string root, IEnumerable<BindingEntry> bindings)
+    public static List<BindingEntry> Read(string root) => ReadConfig(root).bindings;
+
+    public static void Save(string root, ConfigRoot config)
     {
         Directory.CreateDirectory(root);
-        var doc = new ConfigRoot { bindings = bindings.ToList() };
-        File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(doc, JsonOpts));
+        File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(config, JsonOpts));
     }
+
+    public static void Save(string root, IEnumerable<BindingEntry> bindings) =>
+        Save(root, new ConfigRoot { bindings = bindings.ToList() });
 }
 
 internal static class InstallService
