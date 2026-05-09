@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="ShortcutHookUI/Assets/ShortcutHook.png" alt="ShortcutHook" width="96"/>
+</p>
+
 # ShortcutHook
 
 A Windows tool that maps mouse gestures and keyboard combos to keyboard chords or shell-execute targets (open apps, files, or folders). Runs as a lightweight background daemon with a modern dark-mode WPF settings UI.
@@ -11,6 +15,10 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords o
 - **First-run setup wizard** — choose where to install the app; daemon script always goes to `C:\Tools\ShortcutHook`
 - **Startup on login** — optional toggle to launch the daemon automatically
 - **Self-contained** — single `.exe`, no installer or runtime prerequisites
+
+## Preview
+
+![ShortcutHook UI](ShortcutHookUI/Assets/ShortcutHook%20UI%20window.png)
 
 ## Download
 
