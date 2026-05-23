@@ -4,13 +4,15 @@
 
 # ShortcutHook
 
-A Windows tool that maps mouse gestures and keyboard combos to keyboard chords or shell-execute targets (open apps, files, or folders). Runs as a lightweight background daemon with a modern dark-mode WPF settings UI.
+A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, shell-execute targets, or shell commands. Runs as a lightweight background daemon with a modern dark-mode WPF settings UI.
 
 ## Features
 
-- **Mouse gestures** — Left+Right, Double/Triple Right-click, Right-hold+Scroll, Double/Triple Wheel-click
+- **Mouse gestures** — Left+Right, Left+Right×2, Double/Triple Right-click, Right-hold+Scroll, Double/Triple Wheel-click
+- **Selection-aware double-right** — configure two actions for double-right click: one fires when text is selected, another when nothing is selected
 - **Keyboard chords** — multi-key combos like `Ctrl+S+L` with smart defer logic for prefix pairs
 - **Open anything** — launch apps, files, or folders via `open:` bindings
+- **Run commands** — execute any shell command via `cmd:` (hidden) or `cmdw:` (visible window)
 - **Alt+Scroll → Horizontal Scroll** — optional toggle; holding Alt while scrolling fires a horizontal scroll event
 - **First-run setup wizard** — choose where to install the app; daemon script always goes to `C:\Tools\ShortcutHook`
 - **Startup on login** — optional toggle to launch the daemon automatically
@@ -45,16 +47,21 @@ That's it. The daemon starts automatically whenever you save.
   "altHScroll": false,
   "bindings": [
     { "trigger": "mouse:left+right",        "output": "Win+Shift+S" },
+    { "trigger": "mouse:left+rightx2",      "output": "Ctrl+Z" },
+    { "trigger": "mouse:double-right",      "output": "Ctrl+C" },
+    { "trigger": "mouse:double-right-sel",  "output": "Win+Shift+S" },
     { "trigger": "mouse:right-scroll-down", "output": "Win+D" },
     { "trigger": "key:Ctrl+Alt+C",          "output": "Ctrl+C" },
     { "trigger": "key:Ctrl+S+L",            "output": "F12" },
-    { "trigger": "mouse:double-wheel",      "output": "open:C:\\path\\to\\app.lnk" }
+    { "trigger": "mouse:double-wheel",      "output": "open:C:\\path\\to\\app.lnk" },
+    { "trigger": "key:Ctrl+Alt+T",          "output": "cmd:start wt.exe" },
+    { "trigger": "key:Ctrl+Alt+L",          "output": "cmdw:tasklist" }
   ]
 }
 ```
 
 **Trigger prefixes**
-- `mouse:` — `left+right`, `double-right`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`
+- `mouse:` — `left+right`, `left+rightx2`, `double-right`, `double-right-sel`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`
 - `key:` — any `Mod+Key` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`
 
 **Top-level fields**
@@ -63,6 +70,12 @@ That's it. The daemon starts automatically whenever you save.
 **Outputs**
 - Keyboard chord — `Mod+Key` syntax (e.g. `Win+Shift+S`)
 - Shell execute — `open:<path>` to launch an app, file, or folder
+- Hidden command — `cmd:<command>` runs via `cmd.exe /c`, no window shown
+- Visible command — `cmdw:<command>` opens a `cmd.exe` window and keeps it open after the command finishes
+
+**Selection-aware double-right**
+
+Configure both `mouse:double-right` and `mouse:double-right-sel`. When double-right fires, the daemon injects a silent Ctrl+C and checks the clipboard — if text was copied the `double-right-sel` action fires, otherwise `double-right` fires and the clipboard is restored.
 
 ## Building from source
 
