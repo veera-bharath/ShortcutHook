@@ -375,45 +375,67 @@
 
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
-                        <TextBlock Text="MOUSE SHORTCUTS" Style="{StaticResource SectionLabel}" Margin="0,0,0,10"/>
-                        <Grid Margin="0,0,0,6">
+                        <Grid x:Name="MouseHeader" Cursor="Hand" Background="Transparent"
+                              MouseLeftButtonDown="MouseHeader_Click">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="185"/>
-                                <ColumnDefinition Width="130"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="GESTURE"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold"/>
-                            <TextBlock Text="ACTION"   Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="1" Margin="8,0,0,0"/>
-                            <TextBlock Text="OUTPUT"   Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="2" Margin="8,0,0,0"/>
+                            <TextBlock Text="MOUSE SHORTCUTS" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="MouseChevron" Grid.Column="1" Text="▾"
+                                       Foreground="#555555" FontSize="11" VerticalAlignment="Center"/>
                         </Grid>
-                        <StackPanel x:Name="MouseStack"/>
+                        <StackPanel x:Name="MouseBody" Margin="0,10,0,0">
+                            <Grid Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="185"/>
+                                    <ColumnDefinition Width="130"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="GESTURE" Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold"/>
+                                <TextBlock Text="ACTION"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="1" Margin="8,0,0,0"/>
+                                <TextBlock Text="OUTPUT"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="2" Margin="8,0,0,0"/>
+                            </Grid>
+                            <StackPanel x:Name="MouseStack"/>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
                 <Border Style="{StaticResource Card}">
-                    <DockPanel LastChildFill="True">
-                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-                            <TextBlock Text="KEYBOARD SHORTCUTS" Style="{StaticResource SectionLabel}" Margin="0" VerticalAlignment="Center"/>
-                            <Button x:Name="AddKbdBtn" DockPanel.Dock="Right" Content="+ Add"
-                                    Style="{StaticResource BtnGhost}" Height="24" Width="56" Padding="0" HorizontalAlignment="Right"
-                                    Click="AddKbdBtn_Click"/>
-                        </DockPanel>
-                        <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
+                    <StackPanel>
+                        <Grid x:Name="KbdHeader" Cursor="Hand" Background="Transparent"
+                              MouseLeftButtonDown="KbdHeader_Click">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="185"/>
-                                <ColumnDefinition Width="130"/>
                                 <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="34"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="TRIGGER" Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold"/>
-                            <TextBlock Text="ACTION"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="1" Margin="8,0,0,0"/>
-                            <TextBlock Text="OUTPUT"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="2" Margin="8,0,0,0"/>
+                            <TextBlock Text="KEYBOARD SHORTCUTS" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="KbdChevron" Grid.Column="1" Text="›"
+                                       Foreground="#555555" FontSize="11" VerticalAlignment="Center"/>
                         </Grid>
-                        <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0"
-                                   Text="Click a trigger button then press your key combo. Esc cancels."
-                                   Foreground="#3A3A3A" FontSize="11" TextWrapping="Wrap"/>
-                        <StackPanel x:Name="KbdStack"/>
-                    </DockPanel>
+                        <StackPanel x:Name="KbdBody" Visibility="Collapsed" Margin="0,8,0,0">
+                            <DockPanel Margin="0,0,0,8">
+                                <Button x:Name="AddKbdBtn" DockPanel.Dock="Right" Content="+ Add"
+                                        Style="{StaticResource BtnGhost}" Height="24" Width="56" Padding="0"
+                                        HorizontalAlignment="Right" Click="AddKbdBtn_Click"/>
+                            </DockPanel>
+                            <Grid Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="185"/>
+                                    <ColumnDefinition Width="130"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="34"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="TRIGGER" Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold"/>
+                                <TextBlock Text="ACTION"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="1" Margin="8,0,0,0"/>
+                                <TextBlock Text="OUTPUT"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="2" Margin="8,0,0,0"/>
+                            </Grid>
+                            <StackPanel x:Name="KbdStack"/>
+                            <TextBlock Margin="0,8,0,0"
+                                       Text="Click a trigger button then press your key combo. Esc cancels."
+                                       Foreground="#3A3A3A" FontSize="11" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </StackPanel>
                 </Border>
 
             </StackPanel>

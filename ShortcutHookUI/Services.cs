@@ -20,7 +20,7 @@ internal static class TriggerHelpers
     public const int MOD_WIN   = 8;
 
     public static readonly string[] ValidGestures = {
-        "left+right","double-right","triple-right",
+        "left+right","left+rightx2","double-right","double-right-sel","triple-right",
         "right-scroll-down","right-scroll-up","double-wheel","triple-wheel"
     };
 

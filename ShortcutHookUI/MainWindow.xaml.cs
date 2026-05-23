@@ -14,7 +14,7 @@ using System.Windows.Threading;
 
 namespace ShortcutHookUI;
 
-public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder }
+public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command }
 
 public sealed class Row
 {
@@ -32,16 +32,21 @@ public sealed class Row
     // keyboard-only
     public Button?    CaptureBtn;
     public string     Trigger = "";          // "" or "key:..."
+
+    // command-only
+    public CheckBox?  CmdShowCheckBox;
 }
 
 public partial class MainWindow : Window
 {
-    static readonly string[] ActionLabels = { "Trigger shortcut", "Open app", "Open file", "Open folder" };
-    static readonly ActionKind[] ActionOrder = { ActionKind.Shortcut, ActionKind.OpenApp, ActionKind.OpenFile, ActionKind.OpenFolder };
+    static readonly string[] ActionLabels = { "Trigger shortcut", "Open app", "Open file", "Open folder", "Run command" };
+    static readonly ActionKind[] ActionOrder = { ActionKind.Shortcut, ActionKind.OpenApp, ActionKind.OpenFile, ActionKind.OpenFolder, ActionKind.Command };
 
     static readonly MouseGestureDef[] MouseDefs = {
         new("left+right",        "Left + Right click"),
+        new("left+rightx2",      "Left hold + Right x2"),
         new("double-right",      "Right click twice"),
+        new("double-right-sel",  "Right click twice (text selected)"),
         new("triple-right",      "Right click thrice"),
         new("right-scroll-down", "Right hold + Scroll Down"),
         new("right-scroll-up",   "Right hold + Scroll Up"),
@@ -114,6 +119,9 @@ public partial class MainWindow : Window
     IntPtr _captureHookId = IntPtr.Zero;
     HookApi.LowLevelKeyboardProc? _captureHookProc;
 
+    bool _mouseExpanded = true;
+    bool _kbdExpanded   = false;
+
     readonly DispatcherTimer _pollTimer;
     readonly DispatcherTimer _feedbackTimer;
 
@@ -152,6 +160,7 @@ public partial class MainWindow : Window
     {
         RefreshInstallState();
         ReloadBindingsFromConfig();
+        ApplySectionState();
         UpdateHookStatus();
         _setupComplete = InstallService.IsSetupComplete()
                          && InstallService.IsInstalled()
@@ -160,6 +169,27 @@ public partial class MainWindow : Window
         StartupToggle.IsChecked = _setupComplete && StartupService.IsEnabled();
         UpdateSetupState();
         _pollTimer.Start();
+    }
+
+    // =========================================================================
+    // Accordion
+    // =========================================================================
+    void MouseHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e) => ToggleSection(mouse: true);
+    void KbdHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)   => ToggleSection(mouse: false);
+
+    void ToggleSection(bool mouse)
+    {
+        if (mouse) { _mouseExpanded = !_mouseExpanded; if (_mouseExpanded) _kbdExpanded = false; }
+        else       { _kbdExpanded   = !_kbdExpanded;   if (_kbdExpanded)   _mouseExpanded = false; }
+        ApplySectionState();
+    }
+
+    void ApplySectionState()
+    {
+        MouseBody.Visibility = _mouseExpanded ? Visibility.Visible   : Visibility.Collapsed;
+        MouseChevron.Text    = _mouseExpanded ? "▾" : "›";
+        KbdBody.Visibility   = _kbdExpanded   ? Visibility.Visible   : Visibility.Collapsed;
+        KbdChevron.Text      = _kbdExpanded   ? "▾" : "›";
     }
 
     // =========================================================================
@@ -788,6 +818,8 @@ public partial class MainWindow : Window
 
     ActionKind DetectAction(string output)
     {
+        if (output.StartsWith("cmd:", StringComparison.Ordinal) ||
+            output.StartsWith("cmdw:", StringComparison.Ordinal)) return ActionKind.Command;
         if (string.IsNullOrEmpty(output) || !output.StartsWith("open:", StringComparison.Ordinal))
             return ActionKind.Shortcut;
         var p = output.Substring(5);
@@ -798,16 +830,19 @@ public partial class MainWindow : Window
 
     void SetRowOutput(Row row, ActionKind action)
     {
-        // Snapshot current shortcut-text value into row.OutputValue before tearing down.
+        // Snapshot current shortcut-text / command value into row.OutputValue before tearing down.
         if (row.Action == ActionKind.Shortcut && row.OutputCtrl is TextBox prevTB)
             row.OutputValue = prevTB.Text.Trim();
+        if (row.Action == ActionKind.Command && row.OutputCtrl is TextBox prevCmd && !string.IsNullOrWhiteSpace(prevCmd.Text))
+            row.OutputValue = (row.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + prevCmd.Text.Trim();
 
         // If we're in mid-capture on a button belonging to this row's output, cancel it.
         if (_captureActive && ReferenceEquals(_captureBtn, row.OutputCtrl)) EndCapture();
 
         row.OutputPanel.Children.Clear();
-        row.Action     = action;
-        row.OutputCtrl = null;
+        row.Action          = action;
+        row.OutputCtrl      = null;
+        row.CmdShowCheckBox = null;
 
         switch (action)
         {
@@ -839,6 +874,57 @@ public partial class MainWindow : Window
             case ActionKind.OpenFolder:
                 AddBrowsePanel(row, isFolder: true);
                 break;
+            case ActionKind.Command:
+            {
+                bool isShow = row.OutputValue.StartsWith("cmdw:", StringComparison.Ordinal);
+                string cmdText = isShow ? row.OutputValue.Substring(5)
+                               : row.OutputValue.StartsWith("cmd:", StringComparison.Ordinal)
+                                     ? row.OutputValue.Substring(4) : "";
+
+                var g = new Grid();
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var lbl = new TextBlock
+                {
+                    Text = "cmd:",
+                    Foreground = DimBrush,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(2, 0, 4, 0),
+                };
+                Grid.SetColumn(lbl, 0);
+
+                var tb = new TextBox
+                {
+                    Style      = (Style)FindResource("DarkTB"),
+                    Height     = 28,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize   = 11,
+                    Text       = cmdText,
+                };
+                Grid.SetColumn(tb, 1);
+
+                var showCb = new CheckBox
+                {
+                    Content   = "Show",
+                    Foreground = Br("#CCCCCC"),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin    = new Thickness(8, 0, 2, 0),
+                    IsChecked = isShow,
+                };
+                Grid.SetColumn(showCb, 2);
+
+                g.Children.Add(lbl);
+                g.Children.Add(tb);
+                g.Children.Add(showCb);
+                row.OutputPanel.Children.Add(g);
+                row.OutputCtrl      = tb;
+                row.CmdShowCheckBox = showCb;
+                break;
+            }
         }
     }
 
@@ -992,6 +1078,8 @@ public partial class MainWindow : Window
         ActionKind.OpenApp    => (row.OutputCtrl is ComboBox cb && cb.SelectedItem is AppEntry a) ? "open:" + a.Path : "",
         ActionKind.OpenFile   => row.OutputValue,
         ActionKind.OpenFolder => row.OutputValue,
+        ActionKind.Command    => (row.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
+                                    ? (row.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
         _                     => "",
     };
 

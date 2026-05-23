@@ -2,7 +2,7 @@
 # System-wide low-level hook that maps mouse gestures and keyboard combos to
 # configurable outputs: keyboard chords OR shell-execute (open app/file/folder).
 #
-# Mouse gestures: left+right, double-right, triple-right,
+# Mouse gestures: left+right, left+rightx2, double-right, triple-right,
 #                 right-scroll-down, right-scroll-up, double-wheel, triple-wheel
 # Key triggers:   key:Ctrl+S  |  key:Ctrl+Alt+F5  |  key:Ctrl+S+L
 #
@@ -49,6 +49,9 @@ public class ShortcutHook {
     private const uint MOUSEEVENTF_HWHEEL     = 0x1000;
     private const uint KEYEVENTF_KEYUP        = 0x0002;
     private const uint LLKHF_INJECTED         = 0x10;
+    private const uint CF_UNICODETEXT         = 13;
+    private const uint GMEM_MOVEABLE          = 2;
+    private const int  CLIP_WAIT_MS           = 80;
 
     private const byte VK_SHIFT   = 0x10;
     private const byte VK_CONTROL = 0x11;
@@ -83,6 +86,15 @@ public class ShortcutHook {
     static extern uint GetDoubleClickTime();
     [DllImport("user32.dll")]
     static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")] static extern bool   OpenClipboard(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool   CloseClipboard();
+    [DllImport("user32.dll")] static extern bool   EmptyClipboard();
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint uFormat);
+    [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr hMem);
+    [DllImport("kernel32.dll")] static extern bool   GlobalUnlock(IntPtr hMem);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr hMem);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MSG {
@@ -115,8 +127,10 @@ public class ShortcutHook {
         public string MouseGesture;
         public int    Mods;
         public byte[] Keys;
-        public byte[] Output;        // keyboard chord; null when OpenPath is set
-        public string OpenPath;      // shell-execute target; null when Output is set
+        public byte[] Output;        // keyboard chord; null when OpenPath/CmdLine is set
+        public string OpenPath;      // shell-execute target; null when Output/CmdLine is set
+        public string CmdLine;       // cmd.exe command; null when Output/OpenPath is set
+        public bool   CmdShow;       // true = visible cmd window (/k), false = hidden (/c)
         public string Signature;
     }
 
@@ -130,6 +144,8 @@ public class ShortcutHook {
     public static Binding BLeftRight, BDoubleRight, BTripleRight;
     public static Binding BRightScrollDown, BRightScrollUp;
     public static Binding BDoubleWheel, BTripleWheel;
+    public static Binding BLeftRightDouble;
+    public static Binding BDoubleRightSel;
 
     public static string MakeSignature(int mods, byte[] sortedKeys) {
         string[] parts = new string[sortedKeys.Length];
@@ -142,12 +158,17 @@ public class ShortcutHook {
         BLeftRight = BDoubleRight = BTripleRight = null;
         BRightScrollDown = BRightScrollUp = null;
         BDoubleWheel = BTripleWheel = null;
+        BLeftRightDouble = null;
+        BDoubleRightSel = null;
+        lrPending = false; lrCount = 0;
         foreach (Binding b in bindings) {
             if (b.Kind == "mouse") {
                 MouseBindings.Add(b);
                 switch (b.MouseGesture) {
                     case "left+right":        BLeftRight       = b; break;
+                    case "left+rightx2":      BLeftRightDouble = b; break;
                     case "double-right":      BDoubleRight     = b; break;
+                    case "double-right-sel":  BDoubleRightSel  = b; break;
                     case "triple-right":      BTripleRight     = b; break;
                     case "right-scroll-down": BRightScrollDown = b; break;
                     case "right-scroll-up":   BRightScrollUp   = b; break;
@@ -159,6 +180,62 @@ public class ShortcutHook {
                 KeySigIndex[b.Signature] = b;
             }
         }
+    }
+
+    // ---------- Clipboard helpers (selection detection) ----------
+    static string GetClipboardText() {
+        try {
+            if (!OpenClipboard(IntPtr.Zero)) return null;
+            IntPtr h = GetClipboardData(CF_UNICODETEXT);
+            if (h == IntPtr.Zero) { CloseClipboard(); return null; }
+            IntPtr p = GlobalLock(h);
+            if (p == IntPtr.Zero) { CloseClipboard(); return null; }
+            string s = Marshal.PtrToStringUni(p);
+            GlobalUnlock(h);
+            CloseClipboard();
+            return s;
+        } catch { try { CloseClipboard(); } catch { } return null; }
+    }
+    static void ClearClipboard() {
+        try { if (OpenClipboard(IntPtr.Zero)) { EmptyClipboard(); CloseClipboard(); } } catch { }
+    }
+    static void SetClipboardText(string text) {
+        try {
+            if (string.IsNullOrEmpty(text)) { ClearClipboard(); return; }
+            int byteCount = (text.Length + 1) * 2;
+            IntPtr hMem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)byteCount);
+            if (hMem == IntPtr.Zero) return;
+            IntPtr p = GlobalLock(hMem);
+            if (p == IntPtr.Zero) { GlobalFree(hMem); return; }
+            for (int i = 0; i < text.Length; i++) Marshal.WriteInt16(p + i * 2, (short)text[i]);
+            Marshal.WriteInt16(p + text.Length * 2, 0);
+            GlobalUnlock(hMem);
+            if (OpenClipboard(IntPtr.Zero)) {
+                EmptyClipboard();
+                if (SetClipboardData(CF_UNICODETEXT, hMem) == IntPtr.Zero) GlobalFree(hMem);
+                CloseClipboard();
+            } else { GlobalFree(hMem); }
+        } catch { }
+    }
+    // Injects Ctrl+C, waits CLIP_WAIT_MS, then checks whether clipboard gained text.
+    // If no selection found, restores the clipboard to its prior state.
+    static bool DetectTextSelection() {
+        string saved = GetClipboardText();
+        ClearClipboard();
+        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        keybd_event(0x43, 0, 0, UIntPtr.Zero);
+        keybd_event(0x43, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        Thread.Sleep(CLIP_WAIT_MS);
+        string got = GetClipboardText();
+        bool hasSel = !string.IsNullOrEmpty(got);
+        if (!hasSel) { if (saved != null) SetClipboardText(saved); else ClearClipboard(); }
+        return hasSel;
+    }
+    static void ExecuteDoubleRight() {
+        if (BDoubleRightSel == null) { ExecuteBinding(BDoubleRight); return; }
+        bool hasSel = DetectTextSelection();
+        ExecuteBinding(hasSel ? BDoubleRightSel : BDoubleRight);
     }
 
     // ---------- Output dispatch ----------
@@ -175,6 +252,28 @@ public class ShortcutHook {
             new Thread(() => {
                 try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
                 catch { }
+            }) { IsBackground = true }.Start();
+        } else if (b.CmdLine != null) {
+            bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
+            bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+            if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
+            string cmd = b.CmdLine;
+            bool show = b.CmdShow;
+            new Thread(() => {
+                try {
+                    if (show) {
+                        Process.Start(new ProcessStartInfo("cmd.exe") {
+                            Arguments = "/k " + cmd,
+                            UseShellExecute = true,
+                        });
+                    } else {
+                        Process.Start(new ProcessStartInfo("cmd.exe") {
+                            Arguments = "/c " + cmd,
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                        });
+                    }
+                } catch { }
             }) { IsBackground = true }.Start();
         } else {
             FireOutput(b.Output);
@@ -236,6 +335,9 @@ public class ShortcutHook {
     static int  lastWheelTick   = 0;
     static int  reinjWheelDown  = 0;
     static int  reinjWheelUp    = 0;
+    static int  lrGen           = 0;
+    static int  lrCount         = 0;
+    static bool lrPending       = false;
 
     static void Reinject(bool withUp) {
         Interlocked.Increment(ref reinjDown);
@@ -275,10 +377,30 @@ public class ShortcutHook {
                     int myGen = ++mGeneration;
                     rightHeld = true; suppressRightUp = false;
 
-                    if (leftDown) {
+                    if (leftDown || lrPending) {
+                        int capturedLrGen = ++lrGen;
                         rightClickCount = 0; rightPending = false; rightUpSeen = false;
                         suppressRightUp = true; leftDown = false;
-                        ExecuteBinding(BLeftRight);
+                        if (!lrPending) lrCount = 1; else lrCount++;
+                        if (lrCount >= 2 && BLeftRightDouble != null) {
+                            lrPending = false; lrCount = 0;
+                            ExecuteBinding(BLeftRightDouble);
+                            return new IntPtr(1);
+                        }
+                        if (BLeftRightDouble == null) {
+                            lrPending = false; lrCount = 0;
+                            ExecuteBinding(BLeftRight);
+                            return new IntPtr(1);
+                        }
+                        lrPending = true;
+                        new Thread(() => {
+                            Thread.Sleep(dblClickMs);
+                            lock (MLock) {
+                                if (capturedLrGen != lrGen || !lrPending) return;
+                                lrPending = false; lrCount = 0;
+                                ExecuteBinding(BLeftRight);
+                            }
+                        }) { IsBackground = true }.Start();
                         return new IntPtr(1);
                     }
 
@@ -296,7 +418,7 @@ public class ShortcutHook {
                             rightPending = false;
                             int count = rightClickCount; rightClickCount = 0;
                             if      (count == 1) Reinject(!rightHeld || rightUpSeen);
-                            else if (count == 2) { if (rightHeld) suppressRightUp = true; ExecuteBinding(BDoubleRight); }
+                            else if (count == 2) { if (rightHeld) suppressRightUp = true; ExecuteDoubleRight(); }
                             else                 { if (rightHeld) suppressRightUp = true; ExecuteBinding(BTripleRight); }
                         }
                     }) { IsBackground = true }.Start();
@@ -622,7 +744,7 @@ if (Test-Path $configPath) {
 # ---------------------------------------------------------------------------
 # Build Binding objects
 # ---------------------------------------------------------------------------
-$validGestures = @('left+right','double-right','triple-right','right-scroll-down','right-scroll-up','double-wheel','triple-wheel')
+$validGestures = @('left+right','left+rightx2','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','double-wheel','triple-wheel')
 $built = New-Object System.Collections.Generic.List[ShortcutHook+Binding]
 
 foreach ($b in $rawBindings) {
@@ -642,6 +764,12 @@ foreach ($b in $rawBindings) {
 
         if ($b.output -match '^open:(.+)$') {
             $nb.OpenPath = $Matches[1].Trim()
+        } elseif ($b.output -match '^cmdw:(.+)$') {
+            $nb.CmdLine = $Matches[1].Trim(); $nb.CmdShow = $true
+        } elseif ($b.output -match '^cmd:(.+)$') {
+            $cmdVal = $Matches[1].Trim()
+            if ($cmdVal -match '^cmd:(.+)$') { $cmdVal = $Matches[1].Trim() }
+            $nb.CmdLine = $cmdVal; $nb.CmdShow = $false
         } else {
             $nb.Output = Resolve-OutputChord $b.output
         }
@@ -655,7 +783,7 @@ try {
     [ShortcutHook]::LoadBindings($built.ToArray())
     Write-Log ("Loaded {0} binding(s)." -f $built.Count)
     foreach ($x in $built) {
-        $dest = if ($x.OpenPath) { "open:$($x.OpenPath)" } else { "[{0}]" -f ($x.Output -join ',') }
+        $dest = if ($x.OpenPath) { "open:$($x.OpenPath)" } elseif ($x.CmdLine) { if ($x.CmdShow) { "cmdw:$($x.CmdLine)" } else { "cmd:$($x.CmdLine)" } } else { "[{0}]" -f ($x.Output -join ',') }
         if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}" -f $x.MouseGesture, $dest) }
         else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}" -f $x.Mods, ($x.Keys -join ','), $dest) }
     }
