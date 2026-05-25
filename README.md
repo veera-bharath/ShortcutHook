@@ -6,6 +6,8 @@
 
 A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, shell-execute targets, or shell commands. Runs as a lightweight background daemon with a modern dark-mode WPF settings UI.
 
+**[⬇️ Go to Download Section](#download)**
+
 ## Features
 
 - **Mouse gestures** — Left+Right, Left+Right×2, Double/Triple Right-click, Right-hold+Scroll, Double/Triple Wheel-click
@@ -24,7 +26,10 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 ## Download
 
-Grab the latest `ShortcutHookUI.exe` from the [Releases](https://github.com/veera-bharath/ShortcutHook/releases) page.
+Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
+
+- 🚀 [Download Latest EXE](https://github.com/veera-bharath/ShortcutHook/releases/latest/download/ShortcutHookUI.exe)
+- 📦 [Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)
 
 1. Run `ShortcutHookUI.exe`
 2. The setup wizard appears on first launch — choose an app folder (default `C:\Tools\ShortcutHook`) and click **Finish Setup**
