@@ -28,7 +28,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
 
-- 🚀 [Download Latest EXE](https://github.com/veera-bharath/ShortcutHook/releases/latest/download/ShortcutHookUI.exe)
+- 🚀 [Download v1.3 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.3/ShortcutHookUI.exe)
 - 📦 [Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)
 
 1. Run `ShortcutHookUI.exe`
