@@ -11,7 +11,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 ## Features
 
 - **Mouse gestures** — Left+Right, Left+Right×2, Double/Triple Right-click, Right-hold+Scroll, Double/Triple Wheel-click
-- **Selection-aware double-right** — configure two actions for double-right click: one fires when text is selected, another when nothing is selected
+- **Selection-aware double-right** — configure separate triggers for selected vs. unselected states. Works seamlessly for text, files, folders, and images in Explorer, web browsers, and other applications
 - **Keyboard chords** — multi-key combos like `Ctrl+S+L` with smart defer logic for prefix pairs
 - **Open anything** — launch apps, files, or folders via `open:` bindings
 - **Run commands** — execute any shell command via `cmd:` (hidden) or `cmdw:` (visible window)
@@ -80,7 +80,11 @@ That's it. The daemon starts automatically whenever you save.
 
 **Selection-aware double-right**
 
-Configure both `mouse:double-right` and `mouse:double-right-sel`. When double-right fires, the daemon injects a silent Ctrl+C and checks the clipboard — if text was copied the `double-right-sel` action fires, otherwise `double-right` fires and the clipboard is restored.
+Configure both `mouse:double-right` (runs when nothing is selected, e.g. for Paste) and `mouse:double-right-sel` (runs when something is selected, e.g. for Copy). 
+
+The daemon dynamically uses two advanced detection strategies depending on the active application:
+- **File Explorer Native Query**: If the active foreground window is File Explorer or the Desktop, the daemon uses dynamic COM Automation Reflection to query `SelectedItems.Count` natively. If there is no selection, it executes Paste instantly with **zero clipboard clearing and zero simulated keystrokes**, completely avoiding any recursive system folder copy prompts (like `$RECYCLE.BIN`).
+- **High-Fidelity Clipboard Backup & Restoration**: For all other applications, the daemon performs a simulated `Ctrl+C` check. It utilizes unmanaged Win32 APIs (`EnumClipboardFormats`, `GetClipboardData`, `GlobalAlloc`) to create a format-preserving binary-level backup of the clipboard (supporting text, copied files, HTML, rich text, and unmanaged GDI bitmap handles like `CF_BITMAP` and `CF_ENHMETAFILE` using `CopyImage`). If no selection is detected, the clipboard state is fully and losslessly restored, enabling copied images to be pasted into browser chats (like ChatGPT or Gemini) exactly like a physical `Ctrl+V` keypress.
 
 ## Building from source
 
