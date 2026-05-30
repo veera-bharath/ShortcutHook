@@ -68,6 +68,11 @@ That's it. The daemon starts automatically whenever you save.
 **Trigger prefixes**
 - `mouse:` — `left+right`, `left+rightx2`, `double-right`, `double-right-sel`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`
 - `key:` — any `Mod+Key` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`
+  > [!IMPORTANT]
+  > To prevent hijacking standard operating system and application shortcuts, global single-letter `Ctrl` triggers (e.g. `Ctrl+A` through `Ctrl+Z`) are restricted and blocked. However, you can freely use:
+  > - **Multi-key chords** (e.g., `Ctrl+K+C`, `Ctrl+S+L`)
+  > - **Multi-modifier letter triggers** (e.g., `Ctrl+Shift+C`, `Ctrl+Alt+S`)
+  > - **Non-letter Ctrl triggers** (e.g., `Ctrl+1`, `Ctrl+F5`, `Ctrl+Space`)
 
 **Top-level fields**
 - `altHScroll` — when `true`, holding Alt while scrolling fires a horizontal scroll instead of vertical (toggleable from the UI)
