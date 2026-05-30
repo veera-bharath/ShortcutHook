@@ -22,6 +22,7 @@ try { Add-Type @"
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -50,6 +51,7 @@ public class ShortcutHook {
     private const uint KEYEVENTF_KEYUP        = 0x0002;
     private const uint LLKHF_INJECTED         = 0x10;
     private const uint CF_UNICODETEXT         = 13;
+    private const uint CF_HDROP               = 15;
     private const uint GMEM_MOVEABLE          = 2;
     private const int  CLIP_WAIT_MS           = 80;
 
@@ -95,6 +97,14 @@ public class ShortcutHook {
     [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr hMem);
     [DllImport("kernel32.dll")] static extern bool   GlobalUnlock(IntPtr hMem);
     [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr hMem);
+    [DllImport("user32.dll")] static extern uint EnumClipboardFormats(uint format);
+    [DllImport("user32.dll")] static extern int  CountClipboardFormats();
+    [DllImport("kernel32.dll")] static extern UIntPtr GlobalSize(IntPtr hMem);
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr CopyImage(IntPtr hImage, uint uType, int cx, int cy, uint flags);
+    [DllImport("gdi32.dll", SetLastError = true)]  static extern bool DeleteObject(IntPtr hObject);
+    [DllImport("gdi32.dll", SetLastError = true)]  static extern IntPtr CopyEnhMetaFile(IntPtr hemfSrc, string lpszFile);
+    [DllImport("gdi32.dll", SetLastError = true)]  static extern bool DeleteEnhMetaFile(IntPtr hemf);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MSG {
@@ -183,53 +193,275 @@ public class ShortcutHook {
     }
 
     // ---------- Clipboard helpers (selection detection) ----------
-    static string GetClipboardText() {
-        try {
-            if (!OpenClipboard(IntPtr.Zero)) return null;
-            IntPtr h = GetClipboardData(CF_UNICODETEXT);
-            if (h == IntPtr.Zero) { CloseClipboard(); return null; }
-            IntPtr p = GlobalLock(h);
-            if (p == IntPtr.Zero) { CloseClipboard(); return null; }
-            string s = Marshal.PtrToStringUni(p);
-            GlobalUnlock(h);
-            CloseClipboard();
-            return s;
-        } catch { try { CloseClipboard(); } catch { } return null; }
+    public class ClipboardBackupItem {
+        public uint Format;
+        public byte[] Data;
+        public IntPtr GdiHandle;
     }
+
+    static List<ClipboardBackupItem> BackupClipboard() {
+        var backup = new List<ClipboardBackupItem>();
+        try {
+            if (!OpenClipboard(IntPtr.Zero)) return backup;
+            uint format = 0;
+            while ((format = EnumClipboardFormats(format)) != 0) {
+                IntPtr hData = GetClipboardData(format);
+                if (hData == IntPtr.Zero) continue;
+                
+                if (format == 2) { // CF_BITMAP
+                    IntPtr hCopy = CopyImage(hData, 0, 0, 0, 0); // IMAGE_BITMAP = 0
+                    if (hCopy != IntPtr.Zero) {
+                        backup.Add(new ClipboardBackupItem { Format = format, GdiHandle = hCopy });
+                    }
+                } else if (format == 14) { // CF_ENHMETAFILE
+                    IntPtr hCopy = CopyEnhMetaFile(hData, null);
+                    if (hCopy != IntPtr.Zero) {
+                        backup.Add(new ClipboardBackupItem { Format = format, GdiHandle = hCopy });
+                    }
+                } else { // Standard HGLOBAL formats
+                    UIntPtr size = GlobalSize(hData);
+                    if (size == UIntPtr.Zero) continue;
+                    int len = (int)size.ToUInt64();
+                    byte[] data = new byte[len];
+                    IntPtr pSrc = GlobalLock(hData);
+                    if (pSrc != IntPtr.Zero) {
+                        Marshal.Copy(pSrc, data, 0, len);
+                        GlobalUnlock(hData);
+                        backup.Add(new ClipboardBackupItem { Format = format, Data = data });
+                    }
+                }
+            }
+            CloseClipboard();
+        } catch {
+            try { CloseClipboard(); } catch {}
+        }
+        return backup;
+    }
+
     static void ClearClipboard() {
         try { if (OpenClipboard(IntPtr.Zero)) { EmptyClipboard(); CloseClipboard(); } } catch { }
     }
-    static void SetClipboardText(string text) {
+
+    static void FreeGdiHandle(uint format, IntPtr h) {
         try {
-            if (string.IsNullOrEmpty(text)) { ClearClipboard(); return; }
-            int byteCount = (text.Length + 1) * 2;
-            IntPtr hMem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)byteCount);
-            if (hMem == IntPtr.Zero) return;
-            IntPtr p = GlobalLock(hMem);
-            if (p == IntPtr.Zero) { GlobalFree(hMem); return; }
-            for (int i = 0; i < text.Length; i++) Marshal.WriteInt16(p + i * 2, (short)text[i]);
-            Marshal.WriteInt16(p + text.Length * 2, 0);
-            GlobalUnlock(hMem);
-            if (OpenClipboard(IntPtr.Zero)) {
-                EmptyClipboard();
-                if (SetClipboardData(CF_UNICODETEXT, hMem) == IntPtr.Zero) GlobalFree(hMem);
-                CloseClipboard();
-            } else { GlobalFree(hMem); }
-        } catch { }
+            if (format == 2) DeleteObject(h);
+            else if (format == 14) DeleteEnhMetaFile(h);
+        } catch {}
     }
-    // Injects Ctrl+C, waits CLIP_WAIT_MS, then checks whether clipboard gained text.
+
+    static void FreeBackup(List<ClipboardBackupItem> backup) {
+        if (backup == null) return;
+        foreach (var item in backup) {
+            if (item.GdiHandle != IntPtr.Zero) {
+                FreeGdiHandle(item.Format, item.GdiHandle);
+            }
+        }
+    }
+
+    static void RestoreClipboard(List<ClipboardBackupItem> backup) {
+        if (backup == null) return;
+        try {
+            if (!OpenClipboard(IntPtr.Zero)) return;
+            EmptyClipboard();
+            foreach (var item in backup) {
+                if (item.GdiHandle != IntPtr.Zero) {
+                    if (SetClipboardData(item.Format, item.GdiHandle) == IntPtr.Zero) {
+                        FreeGdiHandle(item.Format, item.GdiHandle);
+                    }
+                } else if (item.Data != null) {
+                    IntPtr hMem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)item.Data.Length);
+                    if (hMem == IntPtr.Zero) continue;
+                    IntPtr pDst = GlobalLock(hMem);
+                    if (pDst == IntPtr.Zero) {
+                        GlobalFree(hMem);
+                        continue;
+                    }
+                    Marshal.Copy(item.Data, 0, pDst, item.Data.Length);
+                    GlobalUnlock(hMem);
+                    if (SetClipboardData(item.Format, hMem) == IntPtr.Zero) {
+                        GlobalFree(hMem);
+                    }
+                }
+            }
+            CloseClipboard();
+        } catch {
+            try { CloseClipboard(); } catch {}
+        }
+    }
+
+    static bool ClipboardHasData() {
+        return CountClipboardFormats() > 0;
+    }
+
+    static byte[] GetClipboardFormatData(uint format) {
+        try {
+            if (!OpenClipboard(IntPtr.Zero)) return null;
+            IntPtr hData = GetClipboardData(format);
+            if (hData == IntPtr.Zero) { CloseClipboard(); return null; }
+            UIntPtr size = GlobalSize(hData);
+            if (size == UIntPtr.Zero) { CloseClipboard(); return null; }
+            int len = (int)size.ToUInt64();
+            byte[] data = new byte[len];
+            IntPtr pSrc = GlobalLock(hData);
+            if (pSrc != IntPtr.Zero) {
+                Marshal.Copy(pSrc, data, 0, len);
+                GlobalUnlock(hData);
+            }
+            CloseClipboard();
+            return data;
+        } catch {
+            try { CloseClipboard(); } catch {}
+        }
+        return null;
+    }
+
+    static List<string> GetCopiedFiles(byte[] dropFilesData) {
+        var files = new List<string>();
+        if (dropFilesData == null || dropFilesData.Length < 20) return files;
+        try {
+            int pFiles = BitConverter.ToInt32(dropFilesData, 0);
+            bool fWide = dropFilesData[16] != 0;
+            if (pFiles < 0 || pFiles >= dropFilesData.Length) return files;
+            
+            if (fWide) {
+                int i = pFiles;
+                while (i < dropFilesData.Length - 1) {
+                    if (dropFilesData[i] == 0 && dropFilesData[i + 1] == 0) break;
+                    int start = i;
+                    while (i < dropFilesData.Length - 1 && (dropFilesData[i] != 0 || dropFilesData[i + 1] != 0)) {
+                        i += 2;
+                    }
+                    int byteLen = i - start;
+                    if (byteLen > 0) {
+                        string path = System.Text.Encoding.Unicode.GetString(dropFilesData, start, byteLen);
+                        files.Add(path);
+                    }
+                    i += 2;
+                }
+            } else {
+                int i = pFiles;
+                while (i < dropFilesData.Length) {
+                    if (dropFilesData[i] == 0) break;
+                    int start = i;
+                    while (i < dropFilesData.Length && dropFilesData[i] != 0) {
+                        i++;
+                    }
+                    int byteLen = i - start;
+                    if (byteLen > 0) {
+                        string path = System.Text.Encoding.Default.GetString(dropFilesData, start, byteLen);
+                        files.Add(path);
+                    }
+                    i++;
+                }
+            }
+        } catch {}
+        return files;
+    }
+
+    static bool IsSystemOrHidden(string path) {
+        try {
+            string u = path.ToUpper();
+            if (u.Contains("$RECYCLE.BIN") || u.Contains("SYSTEM VOLUME INFORMATION")) return true;
+            FileAttributes attrs = File.GetAttributes(path);
+            if ((attrs & (FileAttributes.Hidden | FileAttributes.System)) != 0) return true;
+        } catch {}
+        return false;
+    }
+
+    static bool IsExplorerInvisibleSelection(List<string> files) {
+        if (files.Count == 0) return false;
+        foreach (var file in files) {
+            if (!IsSystemOrHidden(file)) return false;
+        }
+        return true;
+    }
+
+    static int GetExplorerSelectionCount() {
+        try {
+            IntPtr fgHwnd = GetForegroundWindow();
+            if (fgHwnd == IntPtr.Zero) return -1;
+            
+            Type shellAppType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellAppType == null) return -1;
+            
+            object shell = Activator.CreateInstance(shellAppType);
+            if (shell == null) return -1;
+            
+            object windows = shellAppType.InvokeMember("Windows", 
+                System.Reflection.BindingFlags.InvokeMethod, null, shell, null);
+            if (windows == null) return -1;
+            
+            int count = (int)windows.GetType().InvokeMember("Count", 
+                System.Reflection.BindingFlags.GetProperty, null, windows, null);
+                
+            for (int i = 0; i < count; i++) {
+                object window = windows.GetType().InvokeMember("Item", 
+                    System.Reflection.BindingFlags.InvokeMethod, null, windows, new object[] { i });
+                if (window == null) continue;
+                
+                object hwndObj = window.GetType().InvokeMember("HWND", 
+                    System.Reflection.BindingFlags.GetProperty, null, window, null);
+                    
+                IntPtr hwnd = IntPtr.Zero;
+                if (hwndObj is int) hwnd = new IntPtr((int)hwndObj);
+                else if (hwndObj is long) hwnd = new IntPtr((long)hwndObj);
+                
+                if (hwnd == fgHwnd) {
+                    string name = (string)window.GetType().InvokeMember("Name", 
+                        System.Reflection.BindingFlags.GetProperty, null, window, null);
+                    if (name != null && name.ToLower().Contains("explorer")) {
+                        object document = window.GetType().InvokeMember("Document", 
+                            System.Reflection.BindingFlags.GetProperty, null, window, null);
+                        if (document != null) {
+                            object selectedItems = document.GetType().InvokeMember("SelectedItems", 
+                                System.Reflection.BindingFlags.InvokeMethod, null, document, null);
+                            if (selectedItems != null) {
+                                int selCount = (int)selectedItems.GetType().InvokeMember("Count", 
+                                    System.Reflection.BindingFlags.GetProperty, null, selectedItems, null);
+                                return selCount;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {}
+        return -1;
+    }
+
+    // Injects Ctrl+C, waits CLIP_WAIT_MS, then checks whether clipboard gained data.
     // If no selection found, restores the clipboard to its prior state.
     static bool DetectTextSelection() {
-        string saved = GetClipboardText();
+        int explorerSelCount = GetExplorerSelectionCount();
+        if (explorerSelCount >= 0) {
+            return explorerSelCount > 0;
+        }
+        
+        // Fallback selection detection (text, files, etc. in other apps)
+        var saved = BackupClipboard();
         ClearClipboard();
         keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
         keybd_event(0x43, 0, 0, UIntPtr.Zero);
         keybd_event(0x43, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         Thread.Sleep(CLIP_WAIT_MS);
-        string got = GetClipboardText();
-        bool hasSel = !string.IsNullOrEmpty(got);
-        if (!hasSel) { if (saved != null) SetClipboardText(saved); else ClearClipboard(); }
+        
+        bool hasSel = ClipboardHasData();
+        if (hasSel) {
+            // Check if it's an Explorer default/invisible selection (e.g. $RECYCLE.BIN)
+            byte[] hdropData = GetClipboardFormatData(CF_HDROP);
+            if (hdropData != null) {
+                var files = GetCopiedFiles(hdropData);
+                if (IsExplorerInvisibleSelection(files)) {
+                    hasSel = false;
+                }
+            }
+        }
+
+        if (!hasSel) {
+            RestoreClipboard(saved);
+        } else {
+            FreeBackup(saved); // Free GDI copies to prevent leaks when backup is discarded
+        }
         return hasSel;
     }
     static void ExecuteDoubleRight() {
