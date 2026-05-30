@@ -594,8 +594,17 @@ public partial class MainWindow : Window
             btn: capBtn,
             onCommit: combo =>
             {
-                row.Trigger = "key:" + combo;
-                RestoreTriggerButton(capBtn, row.Trigger);
+                try
+                {
+                    TriggerHelpers.CanonicalizeTrigger("key:" + combo);
+                    row.Trigger = "key:" + combo;
+                    RestoreTriggerButton(capBtn, row.Trigger);
+                }
+                catch (Exception ex)
+                {
+                    ShowFeedback(ex.Message, FeedbackKind.Err);
+                    RestoreTriggerButton(capBtn, row.Trigger);
+                }
             },
             onRestore: () => RestoreTriggerButton(capBtn, row.Trigger));
 

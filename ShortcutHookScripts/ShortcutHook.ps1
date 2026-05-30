@@ -947,6 +947,9 @@ function Resolve-KeyTrigger([string]$combo) {
     }
     if ($keys.Count -eq 0) { throw "No non-modifier key in '$combo'" }
     $arr = $keys.ToArray(); [Array]::Sort($arr)
+    if ($mods -eq 1 -and $arr.Length -eq 1 -and $arr[0] -ge 0x41 -and $arr[0] -le 0x5A) {
+        throw "Trigger '$combo' is restricted because 'Ctrl + single letter' conflicts with standard system shortcuts. Please use a multi-key combo (e.g. Ctrl+K+C) or add another modifier (e.g. Ctrl+Shift+C)."
+    }
     [pscustomobject]@{ Mods = $mods; Keys = [byte[]]$arr }
 }
 

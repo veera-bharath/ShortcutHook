@@ -81,6 +81,11 @@ internal static class TriggerHelpers
         if (t.StartsWith("key:", StringComparison.Ordinal))
         {
             var p = ParseKeyTrigger(t.Substring(4));
+            // Restrict single-letter Ctrl triggers (Ctrl + A-Z) to prevent conflicts with standard shortcuts
+            if (p.Mods == MOD_CTRL && p.Keys.Length == 1 && p.Keys[0] >= 0x41 && p.Keys[0] <= 0x5A)
+            {
+                throw new ArgumentException("Triggers like 'Ctrl+Letter' are restricted because they conflict with standard shortcuts. Please use a multi-key combo (e.g. Ctrl+K+C) or add another modifier (e.g. Ctrl+Shift+C).");
+            }
             return "key:" + p.Mods + ":" + string.Join(",", p.Keys);
         }
         throw new ArgumentException("Trigger must start with 'mouse:' or 'key:'");
