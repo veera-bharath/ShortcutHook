@@ -1275,6 +1275,14 @@ public partial class MainWindow : Window
                 prefixPairs.Add($"{keyParsed[i].Trigger} -> {keyParsed[j].Trigger}");
             }
 
+        // Probe each enabled keyboard binding against RegisterHotKey to detect combos already
+        // claimed by Windows or another app. Non-blocking — the LL hook fires regardless, but
+        // behaviour may be inconsistent so we warn the user.
+        var conflicts = new List<string>();
+        foreach (var (trig, parsed, _, _) in keyParsed)
+            if (HotkeyProbe.IsConflicted(parsed.Mods, parsed.Keys[0]))
+                conflicts.Add(trig.Substring(4));
+
         var configToSave = new ConfigRoot
         {
             altHScroll = _altHScrollToggle?.IsChecked == true,
@@ -1293,11 +1301,15 @@ public partial class MainWindow : Window
             StatusText.Text = "Restarting...";
         }
 
+        var savedPrefix = wasRunning ? "Saved, restarting." : "Saved.";
+        var warnParts   = new List<string>();
         if (prefixPairs.Count > 0)
-        {
-            var prefix = wasRunning ? "Saved, restarting. " : "Saved. ";
-            ShowFeedback(prefix + "Prefix pair(s): " + string.Join("; ", prefixPairs) + ". Shorter fires after ~80 ms.", FeedbackKind.Warn);
-        }
+            warnParts.Add("Prefix pair(s): " + string.Join("; ", prefixPairs) + ". Shorter fires after ~80 ms.");
+        if (conflicts.Count > 0)
+            warnParts.Add("Hotkey conflict(s): " + string.Join(", ", conflicts) + ". Will still fire via low-level hook but may behave inconsistently.");
+
+        if (warnParts.Count > 0)
+            ShowFeedback(savedPrefix + " " + string.Join(" ", warnParts), FeedbackKind.Warn);
         else if (wasRunning) ShowFeedback("Saved — daemon restarting.", FeedbackKind.Ok);
         else                 ShowFeedback("Settings saved.", FeedbackKind.Ok);
     }

@@ -45,3 +45,38 @@ internal static class HookApi
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern IntPtr GetModuleHandle(string? lpModuleName);
 }
+
+internal static class HotkeyProbe
+{
+    const uint FS_ALT     = 0x0001;
+    const uint FS_CONTROL = 0x0002;
+    const uint FS_SHIFT   = 0x0004;
+    const uint FS_WIN     = 0x0008;
+    const int  PROBE_ID   = 0xBEEF;
+
+    [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+    [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    static uint ToFsMods(int mods)
+    {
+        uint fs = 0;
+        if ((mods & TriggerHelpers.MOD_CTRL)  != 0) fs |= FS_CONTROL;
+        if ((mods & TriggerHelpers.MOD_SHIFT) != 0) fs |= FS_SHIFT;
+        if ((mods & TriggerHelpers.MOD_ALT)   != 0) fs |= FS_ALT;
+        if ((mods & TriggerHelpers.MOD_WIN)   != 0) fs |= FS_WIN;
+        return fs;
+    }
+
+    // Probes {mods, vk} via RegisterHotKey dry-run. Must be called from the UI thread.
+    // Returns true if the combo is already claimed by Windows or another app.
+    public static bool IsConflicted(int mods, int vk)
+    {
+        try
+        {
+            bool ok = RegisterHotKey(IntPtr.Zero, PROBE_ID, ToFsMods(mods), (uint)vk);
+            if (ok) UnregisterHotKey(IntPtr.Zero, PROBE_ID);
+            return !ok;
+        }
+        catch { return false; }
+    }
+}
