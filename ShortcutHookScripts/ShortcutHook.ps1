@@ -105,6 +105,14 @@ public class ShortcutHook {
     [DllImport("gdi32.dll", SetLastError = true)]  static extern IntPtr CopyEnhMetaFile(IntPtr hemfSrc, string lpszFile);
     [DllImport("gdi32.dll", SetLastError = true)]  static extern bool DeleteEnhMetaFile(IntPtr hemf);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+    static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, System.Text.StringBuilder lpExeName, ref uint lpdwSize);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool CloseHandle(IntPtr hObject);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MSG {
@@ -142,11 +150,13 @@ public class ShortcutHook {
         public string CmdLine;       // cmd.exe command; null when Output/OpenPath is set
         public bool   CmdShow;       // true = visible cmd window (/k), false = hidden (/c)
         public string Signature;
+        public string App;           // null = global; process name (case-insensitive) for app-scoped
     }
 
     public static List<Binding> MouseBindings = new List<Binding>();
     public static List<Binding> KeyBindings   = new List<Binding>();
-    public static Dictionary<string, Binding> KeySigIndex = new Dictionary<string, Binding>();
+    // Each signature maps to an ordered list: app-scoped bindings first, global last.
+    public static Dictionary<string, List<Binding>> KeySigIndex = new Dictionary<string, List<Binding>>();
 
     public static bool altScrollEnabled = false;
 
@@ -171,6 +181,8 @@ public class ShortcutHook {
         BLeftRightDouble = null;
         BDoubleRightSel = null;
         lrPending = false; lrCount = 0;
+        var scopedKbd = new List<Binding>();
+        var globalKbd = new List<Binding>();
         foreach (Binding b in bindings) {
             if (b.Kind == "mouse") {
                 MouseBindings.Add(b);
@@ -187,8 +199,19 @@ public class ShortcutHook {
                 }
             } else if (b.Kind == "key") {
                 KeyBindings.Add(b);
-                KeySigIndex[b.Signature] = b;
+                if (b.App != null) scopedKbd.Add(b); else globalKbd.Add(b);
             }
+        }
+        // Index scoped bindings first so FindExact checks them before global ones.
+        foreach (Binding b in scopedKbd) {
+            List<Binding> list;
+            if (!KeySigIndex.TryGetValue(b.Signature, out list)) { list = new List<Binding>(); KeySigIndex[b.Signature] = list; }
+            list.Add(b);
+        }
+        foreach (Binding b in globalKbd) {
+            List<Binding> list;
+            if (!KeySigIndex.TryGetValue(b.Signature, out list)) { list = new List<Binding>(); KeySigIndex[b.Signature] = list; }
+            list.Add(b);
         }
     }
 
@@ -751,15 +774,53 @@ public class ShortcutHook {
         byte[] arr = new byte[heldKeys.Count]; heldKeys.CopyTo(arr); Array.Sort(arr); return arr;
     }
 
-    static Binding FindExact(int mods, byte[] sk) {
-        if (sk.Length == 0) return null;
-        Binding b; return KeySigIndex.TryGetValue(MakeSignature(mods, sk), out b) ? b : null;
+    static string GetForegroundProcessName() {
+        try {
+            IntPtr fgWnd = GetForegroundWindow();
+            if (fgWnd == IntPtr.Zero) return "";
+            uint pid;
+            GetWindowThreadProcessId(fgWnd, out pid);
+            if (pid == 0) return "";
+            const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+            IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (hProc == IntPtr.Zero) return "";
+            try {
+                var sb = new System.Text.StringBuilder(1024);
+                uint size = 1024;
+                if (!QueryFullProcessImageName(hProc, 0, sb, ref size)) return "";
+                return System.IO.Path.GetFileName(sb.ToString(0, (int)size));
+            } finally { CloseHandle(hProc); }
+        } catch { return ""; }
     }
 
-    static bool HasStrictSuperset(int mods, HashSet<byte> keys) {
+    // fgApp is passed by ref so FindExact and HasStrictSuperset share the same lazy lookup per keydown.
+    static Binding FindExact(int mods, byte[] sk, ref string fgApp) {
+        if (sk.Length == 0) return null;
+        List<Binding> candidates;
+        if (!KeySigIndex.TryGetValue(MakeSignature(mods, sk), out candidates)) return null;
+        // Fast path: single global binding (the common case)
+        if (candidates.Count == 1 && candidates[0].App == null) return candidates[0];
+        if (fgApp == null) fgApp = GetForegroundProcessName();
+        // Scoped bindings are at the front; check them first
+        foreach (Binding b in candidates) {
+            if (b.App == null) continue;
+            if (string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) return b;
+        }
+        // Fall back to global binding
+        foreach (Binding b in candidates) {
+            if (b.App == null) return b;
+        }
+        return null;
+    }
+
+    static bool HasStrictSuperset(int mods, HashSet<byte> keys, ref string fgApp) {
         if (keys.Count == 0) return false;
         foreach (Binding b in KeyBindings) {
             if (b.Mods != mods || b.Keys.Length <= keys.Count) continue;
+            if (b.App != null) {
+                if (fgApp == null) fgApp = GetForegroundProcessName();
+                if (!string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) continue;
+            }
             bool ok = true;
             foreach (byte k in keys) {
                 bool found = false;
@@ -832,8 +893,9 @@ public class ShortcutHook {
                         return swallowedKeys.Contains(vk) ? new IntPtr(1) : CallNextHookEx(kbdHookId, nCode, wParam, lParam);
                     heldKeys.Add(vk);
                     byte[]  sk    = SortedHeldKeys();
-                    Binding exact = FindExact(heldMods, sk);
-                    bool    longer = HasStrictSuperset(heldMods, heldKeys);
+                    string  fgApp = null; // lazily populated; shared between FindExact and HasStrictSuperset
+                    Binding exact = FindExact(heldMods, sk, ref fgApp);
+                    bool    longer = HasStrictSuperset(heldMods, heldKeys, ref fgApp);
                     if (exact != null) {
                         swallowedKeys.Add(vk); prefixSwallowed.Clear(); CancelDefer();
                         if (longer) ScheduleDefer(exact); else ExecuteBinding(exact);
@@ -1008,6 +1070,9 @@ foreach ($b in $rawBindings) {
         } else {
             $nb.Output = Resolve-OutputChord $b.output
         }
+        if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
+            $nb.App = $b.app.Trim()
+        }
         $built.Add($nb)
     } catch {
         Write-Log "Skip '$($b.trigger)' -> '$($b.output)': $_"
@@ -1018,9 +1083,10 @@ try {
     [ShortcutHook]::LoadBindings($built.ToArray())
     Write-Log ("Loaded {0} binding(s)." -f $built.Count)
     foreach ($x in $built) {
-        $dest = if ($x.OpenPath) { "open:$($x.OpenPath)" } elseif ($x.CmdLine) { if ($x.CmdShow) { "cmdw:$($x.CmdLine)" } else { "cmd:$($x.CmdLine)" } } else { "[{0}]" -f ($x.Output -join ',') }
-        if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}" -f $x.MouseGesture, $dest) }
-        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}" -f $x.Mods, ($x.Keys -join ','), $dest) }
+        $dest  = if ($x.OpenPath) { "open:$($x.OpenPath)" } elseif ($x.CmdLine) { if ($x.CmdShow) { "cmdw:$($x.CmdLine)" } else { "cmd:$($x.CmdLine)" } } else { "[{0}]" -f ($x.Output -join ',') }
+        $scope = if ($x.App) { " [app:$($x.App)]" } else { "" }
+        if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}" -f $x.MouseGesture, $dest, $scope) }
+        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}" -f $x.Mods, ($x.Keys -join ','), $dest, $scope) }
     }
 } catch { Write-Log "LoadBindings failed: $_"; exit 1 }
 
@@ -1036,7 +1102,7 @@ if (-not $mutexCreated) { Write-Log 'Already running.'; exit }
 
 try {
     Write-Host 'ShortcutHook active:' -ForegroundColor Green
-    foreach ($b in $rawBindings) { Write-Host ("  {0,-28} ->  {1}" -f $b.trigger, $b.output) -ForegroundColor Cyan }
+    foreach ($b in $rawBindings) { Write-Host ("  {0,-28} ->  {1}{2}" -f $b.trigger, $b.output, $(if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) { "  [app:$($b.app)]" } else { "" })) -ForegroundColor Cyan }
     Write-Host 'Ctrl+C to stop.' -ForegroundColor DarkGray
     [ShortcutHook]::Start()
     Write-Log 'Message loop exited normally.'
