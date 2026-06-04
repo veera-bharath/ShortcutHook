@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace ShortcutHookUI;
 
@@ -13,6 +14,10 @@ public sealed class BindingEntry
 {
     public string trigger { get; set; } = "";
     public string output  { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? app    { get; set; }  // null = global; process name (e.g. "Code.exe") for app-scoped
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? enabled  { get; set; }  // null/true = active; false = disabled (preserved but not loaded)
 }
 
 public sealed class ConfigRoot

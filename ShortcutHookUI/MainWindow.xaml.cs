@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -32,9 +33,15 @@ public sealed class Row
     // keyboard-only
     public Button?    CaptureBtn;
     public string     Trigger = "";          // "" or "key:..."
+    public string?    App;                   // null = global; process name for app-scoped
+    public ComboBox?  AppCombo;
 
     // command-only
     public CheckBox?  CmdShowCheckBox;
+
+    // enabled state
+    public bool      Enabled       = true;
+    public CheckBox? EnabledToggle;
 }
 
 public partial class MainWindow : Window
@@ -94,10 +101,55 @@ public partial class MainWindow : Window
     static readonly Brush RedBrush   = Br("#E85C5C");
     static readonly Brush DimBrush   = Br("#555555");
     static readonly Brush TextBrush  = Br("#E8E8E8");
+    static readonly Brush LabelBrush = Br("#CCCCCC");
     static readonly Brush DarkBorder = Br("#2E2E2E");
     static readonly Brush BtnHoverBg = Br("#1F1F1F");
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
+
+    static string? GetAppComboValue(ComboBox? cb)
+    {
+        var s = cb?.SelectedItem as string;
+        return string.IsNullOrEmpty(s) || s == "All apps" ? null : s;
+    }
+
+    static void PopulateAppCombo(ComboBox cb, string? current)
+    {
+        cb.Items.Clear();
+        cb.Items.Add("All apps");
+
+        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Process.GetProcesses())
+        {
+            using (p)
+            {
+                try { if (!string.IsNullOrEmpty(p.ProcessName)) names.Add(p.ProcessName + ".exe"); }
+                catch { }
+            }
+        }
+        foreach (var n in names) cb.Items.Add(n);
+
+        // Keep the stored value selectable even if that process isn't currently running.
+        if (!string.IsNullOrWhiteSpace(current) && !names.Contains(current))
+            cb.Items.Add(current);
+
+        if (string.IsNullOrWhiteSpace(current))
+        {
+            cb.SelectedIndex = 0;
+            return;
+        }
+        for (int i = 1; i < cb.Items.Count; i++)
+            if (string.Equals(cb.Items[i] as string, current, StringComparison.OrdinalIgnoreCase))
+                { cb.SelectedIndex = i; return; }
+        cb.SelectedIndex = 0;
+    }
+
+    static void UpdateAppComboStyle(ComboBox cb)
+    {
+        bool scoped = GetAppComboValue(cb) != null;
+        cb.BorderBrush = scoped ? AmberBrush : DarkBorder;
+        cb.Foreground  = scoped ? AmberBrush : LabelBrush;
+    }
 
     readonly List<AppEntry> _apps;
     readonly Dictionary<string, Row> _mouseRows = new();
@@ -304,7 +356,7 @@ public partial class MainWindow : Window
         BuildMouseRows();
         foreach (var b in ConfigService.Read(InstallService.ScriptRoot))
             if (b.trigger.StartsWith("key:", StringComparison.Ordinal))
-                AddKbdRow(b.trigger, b.output);
+                AddKbdRow(b.trigger, b.output, b.app, b.enabled != false);
     }
 
     void InstallBtn_Click(object sender, RoutedEventArgs e)
@@ -420,21 +472,23 @@ public partial class MainWindow : Window
         _altHScrollToggle = null;
 
         var configRoot = ConfigService.ReadConfig(InstallService.ScriptRoot);
-        var cfgMap = new Dictionary<string,string>();
+        var cfgMap = new Dictionary<string, BindingEntry>();
         foreach (var b in configRoot.bindings)
             if (b.trigger.StartsWith("mouse:", StringComparison.Ordinal))
-                cfgMap[b.trigger.Substring(6)] = b.output;
+                cfgMap[b.trigger.Substring(6)] = b;
 
         foreach (var def in MouseDefs)
         {
-            cfgMap.TryGetValue(def.Gesture, out var stored);
-            stored ??= "";
-            var action = DetectAction(stored);
+            cfgMap.TryGetValue(def.Gesture, out var storedEntry);
+            var stored     = storedEntry?.output ?? "";
+            var rowEnabled = storedEntry?.enabled != false;
+            var action     = DetectAction(stored);
 
             var grid = new Grid { Margin = new Thickness(0,0,0,5) };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(185) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var lbl = new TextBlock {
                 Text = def.Label, Foreground = Br("#CCCCCC"),
@@ -448,21 +502,37 @@ public partial class MainWindow : Window
             var outPanel = new Grid { Margin = new Thickness(8,0,0,0) };
             Grid.SetColumn(outPanel, 2);
 
+            var enableToggle = new CheckBox
+            {
+                Style     = (Style)FindResource("Toggle"),
+                IsChecked = rowEnabled,
+                Margin    = new Thickness(8, 0, 0, 0),
+                ToolTip   = "Enable this binding",
+            };
+            Grid.SetColumn(enableToggle, 3);
+
             grid.Children.Add(lbl);
             grid.Children.Add(actionCB);
             grid.Children.Add(outPanel);
+            grid.Children.Add(enableToggle);
             MouseStack.Children.Add(grid);
 
             var row = new Row {
-                Container   = grid,
-                OutputPanel = outPanel,
-                Action      = action,
-                OutputValue = stored,
-                MouseGesture= def.Gesture,
-                Label       = def.Label,
+                Container     = grid,
+                OutputPanel   = outPanel,
+                Action        = action,
+                OutputValue   = stored,
+                MouseGesture  = def.Gesture,
+                Label         = def.Label,
+                Enabled       = rowEnabled,
+                EnabledToggle = enableToggle,
             };
             _mouseRows[def.Gesture] = row;
             SetRowOutput(row, action);
+            if (!rowEnabled) grid.Opacity = 0.45;
+
+            enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
+            enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
 
             actionCB.SelectionChanged += (_, __) =>
             {
@@ -518,7 +588,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdRow("", "");
 
-    void AddKbdRow(string triggerStr, string outputStr)
+    void AddKbdRow(string triggerStr, string outputStr, string? app = null, bool enabled = true)
     {
         var initAction = DetectAction(outputStr);
 
@@ -526,6 +596,8 @@ public partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(185) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
 
         var capBtn = new Button
@@ -545,6 +617,30 @@ public partial class MainWindow : Window
         var outPanel = new Grid { Margin = new Thickness(8,0,0,0) };
         Grid.SetColumn(outPanel, 2);
 
+        var appCB = new ComboBox
+        {
+            Style      = (Style)FindResource("DarkCB"),
+            Height     = 28,
+            Margin     = new Thickness(6,0,0,0),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+            ToolTip    = "App filter — 'All apps' fires everywhere; open your target app first, then pick it here",
+        };
+        PopulateAppCombo(appCB, app);
+        UpdateAppComboStyle(appCB);
+        appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
+        appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
+        Grid.SetColumn(appCB, 3);
+
+        var enableToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = enabled,
+            Margin    = new Thickness(6, 0, 0, 0),
+            ToolTip   = "Enable this binding",
+        };
+        Grid.SetColumn(enableToggle, 4);
+
         var delBtn = new Button
         {
             Style   = (Style)FindResource("BtnGhost"),
@@ -553,11 +649,13 @@ public partial class MainWindow : Window
             Margin  = new Thickness(6,0,0,0),
             Padding = new Thickness(0),
         };
-        Grid.SetColumn(delBtn, 3);
+        Grid.SetColumn(delBtn, 5);
 
         grid.Children.Add(capBtn);
         grid.Children.Add(actionCB);
         grid.Children.Add(outPanel);
+        grid.Children.Add(appCB);
+        grid.Children.Add(enableToggle);
         grid.Children.Add(delBtn);
 
         var displayTrig = !string.IsNullOrEmpty(triggerStr) && triggerStr.StartsWith("key:", StringComparison.Ordinal)
@@ -568,14 +666,22 @@ public partial class MainWindow : Window
 
         var row = new Row
         {
-            Container   = grid,
-            OutputPanel = outPanel,
-            Action      = initAction,
-            OutputValue = outputStr,
-            Trigger     = triggerStr,
-            CaptureBtn  = capBtn,
+            Container     = grid,
+            OutputPanel   = outPanel,
+            Action        = initAction,
+            OutputValue   = outputStr,
+            Trigger       = triggerStr,
+            CaptureBtn    = capBtn,
+            App           = app,
+            AppCombo      = appCB,
+            Enabled       = enabled,
+            EnabledToggle = enableToggle,
         };
         SetRowOutput(row, initAction);
+        if (!enabled) grid.Opacity = 0.45;
+
+        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
+        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
 
         actionCB.SelectionChanged += (_, __) =>
         {
@@ -1107,22 +1213,32 @@ public partial class MainWindow : Window
             var row  = _mouseRows[def.Gesture];
             var outp = GetRowOutput(row);
             if (string.IsNullOrEmpty(outp)) continue;
-            if (row.Action == ActionKind.Shortcut)
+            if (row.Enabled && row.Action == ActionKind.Shortcut)
             {
                 try { TriggerHelpers.ValidateShortcutOutput(outp); }
                 catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
             }
-            entries.Add(new BindingEntry { trigger = "mouse:" + def.Gesture, output = outp });
+            var mouseEntry = new BindingEntry { trigger = "mouse:" + def.Gesture, output = outp };
+            if (!row.Enabled) mouseEntry.enabled = false;
+            entries.Add(mouseEntry);
         }
 
-        var keyParsed = new List<(string Trigger, ParsedKey Parsed, int Row)>();
+        var keyParsed = new List<(string Trigger, ParsedKey Parsed, int Row, string? App)>();
         int idx = 0;
         foreach (var r in _kbdRows)
         {
             idx++;
-            var trig = r.Trigger;
-            var outp = GetRowOutput(r);
+            var trig    = r.Trigger;
+            var outp    = GetRowOutput(r);
+            var appStr  = GetAppComboValue(r.AppCombo) ?? "";
             if (string.IsNullOrEmpty(trig) && string.IsNullOrEmpty(outp)) continue;
+
+            if (!r.Enabled)
+            {
+                entries.Add(new BindingEntry { trigger = trig, output = outp, app = appStr.Length > 0 ? appStr : null, enabled = false });
+                continue;
+            }
+
             if (string.IsNullOrEmpty(trig)) { ShowFeedback($"Keyboard row {idx}: no trigger recorded.", FeedbackKind.Err); return; }
             if (string.IsNullOrEmpty(outp)) { ShowFeedback($"Keyboard row {idx}: no output configured.", FeedbackKind.Err); return; }
 
@@ -1135,12 +1251,14 @@ public partial class MainWindow : Window
                 try { TriggerHelpers.ValidateShortcutOutput(outp); }
                 catch (Exception ex) { ShowFeedback($"Keyboard row {idx} (output): {ex.Message}", FeedbackKind.Err); return; }
             }
-            if (canonSeen.ContainsKey(canon)) { ShowFeedback($"Keyboard row {idx}: duplicate trigger.", FeedbackKind.Err); return; }
-            canonSeen[canon] = idx;
+            // Dedup key includes app scope: same trigger + same app is a duplicate, different apps are valid.
+            var dedupKey = canon + "|" + appStr.ToLowerInvariant();
+            if (canonSeen.ContainsKey(dedupKey)) { ShowFeedback($"Keyboard row {idx}: duplicate trigger{(appStr.Length > 0 ? $" for app '{appStr}'" : "")}.", FeedbackKind.Err); return; }
+            canonSeen[dedupKey] = idx;
 
             var parsed = TriggerHelpers.ParseKeyTrigger(trig.Substring(4));
-            keyParsed.Add((trig, parsed, idx));
-            entries.Add(new BindingEntry { trigger = trig, output = outp });
+            keyParsed.Add((trig, parsed, idx, appStr.Length > 0 ? appStr : null));
+            entries.Add(new BindingEntry { trigger = trig, output = outp, app = appStr.Length > 0 ? appStr : null });
         }
 
         if (entries.Count == 0) { ShowFeedback("Add at least one binding before saving.", FeedbackKind.Err); return; }
@@ -1148,8 +1266,22 @@ public partial class MainWindow : Window
         var prefixPairs = new List<string>();
         for (int i = 0; i < keyParsed.Count; i++)
             for (int j = 0; j < keyParsed.Count; j++)
-                if (i != j && TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed))
-                    prefixPairs.Add($"{keyParsed[i].Trigger} -> {keyParsed[j].Trigger}");
+            {
+                if (i == j || !TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed)) continue;
+                // Bindings scoped to different apps can never conflict at runtime — skip the warning.
+                var appI = keyParsed[i].App; var appJ = keyParsed[j].App;
+                if (appI != null && appJ != null &&
+                    !string.Equals(appI, appJ, StringComparison.OrdinalIgnoreCase)) continue;
+                prefixPairs.Add($"{keyParsed[i].Trigger} -> {keyParsed[j].Trigger}");
+            }
+
+        // Probe each enabled keyboard binding against RegisterHotKey to detect combos already
+        // claimed by Windows or another app. Non-blocking — the LL hook fires regardless, but
+        // behaviour may be inconsistent so we warn the user.
+        var conflicts = new List<string>();
+        foreach (var (trig, parsed, _, _) in keyParsed)
+            if (HotkeyProbe.IsConflicted(parsed.Mods, parsed.Keys[0]))
+                conflicts.Add(trig.Substring(4));
 
         var configToSave = new ConfigRoot
         {
@@ -1169,11 +1301,15 @@ public partial class MainWindow : Window
             StatusText.Text = "Restarting...";
         }
 
+        var savedPrefix = wasRunning ? "Saved, restarting." : "Saved.";
+        var warnParts   = new List<string>();
         if (prefixPairs.Count > 0)
-        {
-            var prefix = wasRunning ? "Saved, restarting. " : "Saved. ";
-            ShowFeedback(prefix + "Prefix pair(s): " + string.Join("; ", prefixPairs) + ". Shorter fires after ~80 ms.", FeedbackKind.Warn);
-        }
+            warnParts.Add("Prefix pair(s): " + string.Join("; ", prefixPairs) + ". Shorter fires after ~80 ms.");
+        if (conflicts.Count > 0)
+            warnParts.Add("Hotkey conflict(s): " + string.Join(", ", conflicts) + ". Will still fire via low-level hook but may behave inconsistently.");
+
+        if (warnParts.Count > 0)
+            ShowFeedback(savedPrefix + " " + string.Join(" ", warnParts), FeedbackKind.Warn);
         else if (wasRunning) ShowFeedback("Saved — daemon restarting.", FeedbackKind.Ok);
         else                 ShowFeedback("Settings saved.", FeedbackKind.Ok);
     }
