@@ -793,13 +793,14 @@ public class ShortcutHook {
         } catch { return ""; }
     }
 
-    static Binding FindExact(int mods, byte[] sk) {
+    // fgApp is passed by ref so FindExact and HasStrictSuperset share the same lazy lookup per keydown.
+    static Binding FindExact(int mods, byte[] sk, ref string fgApp) {
         if (sk.Length == 0) return null;
         List<Binding> candidates;
         if (!KeySigIndex.TryGetValue(MakeSignature(mods, sk), out candidates)) return null;
         // Fast path: single global binding (the common case)
         if (candidates.Count == 1 && candidates[0].App == null) return candidates[0];
-        string fgApp = GetForegroundProcessName();
+        if (fgApp == null) fgApp = GetForegroundProcessName();
         // Scoped bindings are at the front; check them first
         foreach (Binding b in candidates) {
             if (b.App == null) continue;
@@ -812,9 +813,8 @@ public class ShortcutHook {
         return null;
     }
 
-    static bool HasStrictSuperset(int mods, HashSet<byte> keys) {
+    static bool HasStrictSuperset(int mods, HashSet<byte> keys, ref string fgApp) {
         if (keys.Count == 0) return false;
-        string fgApp = null;
         foreach (Binding b in KeyBindings) {
             if (b.Mods != mods || b.Keys.Length <= keys.Count) continue;
             if (b.App != null) {
@@ -893,8 +893,9 @@ public class ShortcutHook {
                         return swallowedKeys.Contains(vk) ? new IntPtr(1) : CallNextHookEx(kbdHookId, nCode, wParam, lParam);
                     heldKeys.Add(vk);
                     byte[]  sk    = SortedHeldKeys();
-                    Binding exact = FindExact(heldMods, sk);
-                    bool    longer = HasStrictSuperset(heldMods, heldKeys);
+                    string  fgApp = null; // lazily populated; shared between FindExact and HasStrictSuperset
+                    Binding exact = FindExact(heldMods, sk, ref fgApp);
+                    bool    longer = HasStrictSuperset(heldMods, heldKeys, ref fgApp);
                     if (exact != null) {
                         swallowedKeys.Add(vk); prefixSwallowed.Clear(); CancelDefer();
                         if (longer) ScheduleDefer(exact); else ExecuteBinding(exact);

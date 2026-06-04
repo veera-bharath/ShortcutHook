@@ -97,6 +97,7 @@ public partial class MainWindow : Window
     static readonly Brush RedBrush   = Br("#E85C5C");
     static readonly Brush DimBrush   = Br("#555555");
     static readonly Brush TextBrush  = Br("#E8E8E8");
+    static readonly Brush LabelBrush = Br("#CCCCCC");
     static readonly Brush DarkBorder = Br("#2E2E2E");
     static readonly Brush BtnHoverBg = Br("#1F1F1F");
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
@@ -116,8 +117,11 @@ public partial class MainWindow : Window
         var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in Process.GetProcesses())
         {
-            try { if (!string.IsNullOrEmpty(p.ProcessName)) names.Add(p.ProcessName + ".exe"); }
-            catch { }
+            using (p)
+            {
+                try { if (!string.IsNullOrEmpty(p.ProcessName)) names.Add(p.ProcessName + ".exe"); }
+                catch { }
+            }
         }
         foreach (var n in names) cb.Items.Add(n);
 
@@ -140,7 +144,7 @@ public partial class MainWindow : Window
     {
         bool scoped = GetAppComboValue(cb) != null;
         cb.BorderBrush = scoped ? AmberBrush : DarkBorder;
-        cb.Foreground  = scoped ? AmberBrush : Br("#CCCCCC");
+        cb.Foreground  = scoped ? AmberBrush : LabelBrush;
     }
 
     readonly List<AppEntry> _apps;
@@ -1178,7 +1182,7 @@ public partial class MainWindow : Window
             entries.Add(new BindingEntry { trigger = "mouse:" + def.Gesture, output = outp });
         }
 
-        var keyParsed = new List<(string Trigger, ParsedKey Parsed, int Row)>();
+        var keyParsed = new List<(string Trigger, ParsedKey Parsed, int Row, string? App)>();
         int idx = 0;
         foreach (var r in _kbdRows)
         {
@@ -1205,7 +1209,7 @@ public partial class MainWindow : Window
             canonSeen[dedupKey] = idx;
 
             var parsed = TriggerHelpers.ParseKeyTrigger(trig.Substring(4));
-            keyParsed.Add((trig, parsed, idx));
+            keyParsed.Add((trig, parsed, idx, appStr.Length > 0 ? appStr : null));
             entries.Add(new BindingEntry { trigger = trig, output = outp, app = appStr.Length > 0 ? appStr : null });
         }
 
@@ -1214,8 +1218,14 @@ public partial class MainWindow : Window
         var prefixPairs = new List<string>();
         for (int i = 0; i < keyParsed.Count; i++)
             for (int j = 0; j < keyParsed.Count; j++)
-                if (i != j && TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed))
-                    prefixPairs.Add($"{keyParsed[i].Trigger} -> {keyParsed[j].Trigger}");
+            {
+                if (i == j || !TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed)) continue;
+                // Bindings scoped to different apps can never conflict at runtime — skip the warning.
+                var appI = keyParsed[i].App; var appJ = keyParsed[j].App;
+                if (appI != null && appJ != null &&
+                    !string.Equals(appI, appJ, StringComparison.OrdinalIgnoreCase)) continue;
+                prefixPairs.Add($"{keyParsed[i].Trigger} -> {keyParsed[j].Trigger}");
+            }
 
         var configToSave = new ConfigRoot
         {
