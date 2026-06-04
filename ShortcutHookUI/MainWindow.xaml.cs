@@ -32,6 +32,8 @@ public sealed class Row
     // keyboard-only
     public Button?    CaptureBtn;
     public string     Trigger = "";          // "" or "key:..."
+    public string?    App;                   // null = global; process name for app-scoped
+    public TextBox?   AppTextBox;
 
     // command-only
     public CheckBox?  CmdShowCheckBox;
@@ -98,6 +100,14 @@ public partial class MainWindow : Window
     static readonly Brush BtnHoverBg = Br("#1F1F1F");
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
+
+    static void UpdateAppTextBoxStyle(TextBox tb)
+    {
+        if (string.IsNullOrWhiteSpace(tb.Text))
+            tb.ClearValue(TextBox.BorderBrushProperty);
+        else
+            tb.BorderBrush = AmberBrush;
+    }
 
     readonly List<AppEntry> _apps;
     readonly Dictionary<string, Row> _mouseRows = new();
@@ -304,7 +314,7 @@ public partial class MainWindow : Window
         BuildMouseRows();
         foreach (var b in ConfigService.Read(InstallService.ScriptRoot))
             if (b.trigger.StartsWith("key:", StringComparison.Ordinal))
-                AddKbdRow(b.trigger, b.output);
+                AddKbdRow(b.trigger, b.output, b.app);
     }
 
     void InstallBtn_Click(object sender, RoutedEventArgs e)
@@ -518,7 +528,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdRow("", "");
 
-    void AddKbdRow(string triggerStr, string outputStr)
+    void AddKbdRow(string triggerStr, string outputStr, string? app = null)
     {
         var initAction = DetectAction(outputStr);
 
@@ -526,6 +536,7 @@ public partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(185) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
 
         var capBtn = new Button
@@ -545,6 +556,20 @@ public partial class MainWindow : Window
         var outPanel = new Grid { Margin = new Thickness(8,0,0,0) };
         Grid.SetColumn(outPanel, 2);
 
+        var appTB = new TextBox
+        {
+            Style      = (Style)FindResource("DarkTB"),
+            Height     = 28,
+            Margin     = new Thickness(6,0,0,0),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+            Text       = app ?? "",
+            ToolTip    = "App filter — leave empty for all apps, or enter a process name (e.g. Code.exe)",
+        };
+        UpdateAppTextBoxStyle(appTB);
+        appTB.TextChanged += (_, __) => UpdateAppTextBoxStyle(appTB);
+        Grid.SetColumn(appTB, 3);
+
         var delBtn = new Button
         {
             Style   = (Style)FindResource("BtnGhost"),
@@ -553,11 +578,12 @@ public partial class MainWindow : Window
             Margin  = new Thickness(6,0,0,0),
             Padding = new Thickness(0),
         };
-        Grid.SetColumn(delBtn, 3);
+        Grid.SetColumn(delBtn, 4);
 
         grid.Children.Add(capBtn);
         grid.Children.Add(actionCB);
         grid.Children.Add(outPanel);
+        grid.Children.Add(appTB);
         grid.Children.Add(delBtn);
 
         var displayTrig = !string.IsNullOrEmpty(triggerStr) && triggerStr.StartsWith("key:", StringComparison.Ordinal)
@@ -574,6 +600,8 @@ public partial class MainWindow : Window
             OutputValue = outputStr,
             Trigger     = triggerStr,
             CaptureBtn  = capBtn,
+            App         = app,
+            AppTextBox  = appTB,
         };
         SetRowOutput(row, initAction);
 
@@ -1120,8 +1148,9 @@ public partial class MainWindow : Window
         foreach (var r in _kbdRows)
         {
             idx++;
-            var trig = r.Trigger;
-            var outp = GetRowOutput(r);
+            var trig    = r.Trigger;
+            var outp    = GetRowOutput(r);
+            var appStr  = r.AppTextBox?.Text.Trim() ?? "";
             if (string.IsNullOrEmpty(trig) && string.IsNullOrEmpty(outp)) continue;
             if (string.IsNullOrEmpty(trig)) { ShowFeedback($"Keyboard row {idx}: no trigger recorded.", FeedbackKind.Err); return; }
             if (string.IsNullOrEmpty(outp)) { ShowFeedback($"Keyboard row {idx}: no output configured.", FeedbackKind.Err); return; }
@@ -1135,12 +1164,14 @@ public partial class MainWindow : Window
                 try { TriggerHelpers.ValidateShortcutOutput(outp); }
                 catch (Exception ex) { ShowFeedback($"Keyboard row {idx} (output): {ex.Message}", FeedbackKind.Err); return; }
             }
-            if (canonSeen.ContainsKey(canon)) { ShowFeedback($"Keyboard row {idx}: duplicate trigger.", FeedbackKind.Err); return; }
-            canonSeen[canon] = idx;
+            // Dedup key includes app scope: same trigger + same app is a duplicate, different apps are valid.
+            var dedupKey = canon + "|" + appStr.ToLowerInvariant();
+            if (canonSeen.ContainsKey(dedupKey)) { ShowFeedback($"Keyboard row {idx}: duplicate trigger{(appStr.Length > 0 ? $" for app '{appStr}'" : "")}.", FeedbackKind.Err); return; }
+            canonSeen[dedupKey] = idx;
 
             var parsed = TriggerHelpers.ParseKeyTrigger(trig.Substring(4));
             keyParsed.Add((trig, parsed, idx));
-            entries.Add(new BindingEntry { trigger = trig, output = outp });
+            entries.Add(new BindingEntry { trigger = trig, output = outp, app = appStr.Length > 0 ? appStr : null });
         }
 
         if (entries.Count == 0) { ShowFeedback("Add at least one binding before saving.", FeedbackKind.Err); return; }
