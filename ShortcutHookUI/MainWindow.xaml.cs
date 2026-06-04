@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -33,7 +34,7 @@ public sealed class Row
     public Button?    CaptureBtn;
     public string     Trigger = "";          // "" or "key:..."
     public string?    App;                   // null = global; process name for app-scoped
-    public TextBox?   AppTextBox;
+    public ComboBox?  AppCombo;
 
     // command-only
     public CheckBox?  CmdShowCheckBox;
@@ -101,12 +102,45 @@ public partial class MainWindow : Window
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 
-    static void UpdateAppTextBoxStyle(TextBox tb)
+    static string? GetAppComboValue(ComboBox? cb)
     {
-        if (string.IsNullOrWhiteSpace(tb.Text))
-            tb.ClearValue(TextBox.BorderBrushProperty);
-        else
-            tb.BorderBrush = AmberBrush;
+        var s = cb?.SelectedItem as string;
+        return string.IsNullOrEmpty(s) || s == "All apps" ? null : s;
+    }
+
+    static void PopulateAppCombo(ComboBox cb, string? current)
+    {
+        cb.Items.Clear();
+        cb.Items.Add("All apps");
+
+        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Process.GetProcesses())
+        {
+            try { if (!string.IsNullOrEmpty(p.ProcessName)) names.Add(p.ProcessName + ".exe"); }
+            catch { }
+        }
+        foreach (var n in names) cb.Items.Add(n);
+
+        // Keep the stored value selectable even if that process isn't currently running.
+        if (!string.IsNullOrWhiteSpace(current) && !names.Contains(current))
+            cb.Items.Add(current);
+
+        if (string.IsNullOrWhiteSpace(current))
+        {
+            cb.SelectedIndex = 0;
+            return;
+        }
+        for (int i = 1; i < cb.Items.Count; i++)
+            if (string.Equals(cb.Items[i] as string, current, StringComparison.OrdinalIgnoreCase))
+                { cb.SelectedIndex = i; return; }
+        cb.SelectedIndex = 0;
+    }
+
+    static void UpdateAppComboStyle(ComboBox cb)
+    {
+        bool scoped = GetAppComboValue(cb) != null;
+        cb.BorderBrush = scoped ? AmberBrush : DarkBorder;
+        cb.Foreground  = scoped ? AmberBrush : Br("#CCCCCC");
     }
 
     readonly List<AppEntry> _apps;
@@ -556,19 +590,20 @@ public partial class MainWindow : Window
         var outPanel = new Grid { Margin = new Thickness(8,0,0,0) };
         Grid.SetColumn(outPanel, 2);
 
-        var appTB = new TextBox
+        var appCB = new ComboBox
         {
-            Style      = (Style)FindResource("DarkTB"),
+            Style      = (Style)FindResource("DarkCB"),
             Height     = 28,
             Margin     = new Thickness(6,0,0,0),
             FontFamily = new FontFamily("Consolas"),
             FontSize   = 11,
-            Text       = app ?? "",
-            ToolTip    = "App filter — leave empty for all apps, or enter a process name (e.g. Code.exe)",
+            ToolTip    = "App filter — 'All apps' fires everywhere; open your target app first, then pick it here",
         };
-        UpdateAppTextBoxStyle(appTB);
-        appTB.TextChanged += (_, __) => UpdateAppTextBoxStyle(appTB);
-        Grid.SetColumn(appTB, 3);
+        PopulateAppCombo(appCB, app);
+        UpdateAppComboStyle(appCB);
+        appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
+        appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
+        Grid.SetColumn(appCB, 3);
 
         var delBtn = new Button
         {
@@ -583,7 +618,7 @@ public partial class MainWindow : Window
         grid.Children.Add(capBtn);
         grid.Children.Add(actionCB);
         grid.Children.Add(outPanel);
-        grid.Children.Add(appTB);
+        grid.Children.Add(appCB);
         grid.Children.Add(delBtn);
 
         var displayTrig = !string.IsNullOrEmpty(triggerStr) && triggerStr.StartsWith("key:", StringComparison.Ordinal)
@@ -601,7 +636,7 @@ public partial class MainWindow : Window
             Trigger     = triggerStr,
             CaptureBtn  = capBtn,
             App         = app,
-            AppTextBox  = appTB,
+            AppCombo    = appCB,
         };
         SetRowOutput(row, initAction);
 
@@ -1150,7 +1185,7 @@ public partial class MainWindow : Window
             idx++;
             var trig    = r.Trigger;
             var outp    = GetRowOutput(r);
-            var appStr  = r.AppTextBox?.Text.Trim() ?? "";
+            var appStr  = GetAppComboValue(r.AppCombo) ?? "";
             if (string.IsNullOrEmpty(trig) && string.IsNullOrEmpty(outp)) continue;
             if (string.IsNullOrEmpty(trig)) { ShowFeedback($"Keyboard row {idx}: no trigger recorded.", FeedbackKind.Err); return; }
             if (string.IsNullOrEmpty(outp)) { ShowFeedback($"Keyboard row {idx}: no output configured.", FeedbackKind.Err); return; }
