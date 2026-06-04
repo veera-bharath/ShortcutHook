@@ -38,6 +38,10 @@ public sealed class Row
 
     // command-only
     public CheckBox?  CmdShowCheckBox;
+
+    // enabled state
+    public bool      Enabled       = true;
+    public CheckBox? EnabledToggle;
 }
 
 public partial class MainWindow : Window
@@ -352,7 +356,7 @@ public partial class MainWindow : Window
         BuildMouseRows();
         foreach (var b in ConfigService.Read(InstallService.ScriptRoot))
             if (b.trigger.StartsWith("key:", StringComparison.Ordinal))
-                AddKbdRow(b.trigger, b.output, b.app);
+                AddKbdRow(b.trigger, b.output, b.app, b.enabled != false);
     }
 
     void InstallBtn_Click(object sender, RoutedEventArgs e)
@@ -468,21 +472,23 @@ public partial class MainWindow : Window
         _altHScrollToggle = null;
 
         var configRoot = ConfigService.ReadConfig(InstallService.ScriptRoot);
-        var cfgMap = new Dictionary<string,string>();
+        var cfgMap = new Dictionary<string, BindingEntry>();
         foreach (var b in configRoot.bindings)
             if (b.trigger.StartsWith("mouse:", StringComparison.Ordinal))
-                cfgMap[b.trigger.Substring(6)] = b.output;
+                cfgMap[b.trigger.Substring(6)] = b;
 
         foreach (var def in MouseDefs)
         {
-            cfgMap.TryGetValue(def.Gesture, out var stored);
-            stored ??= "";
-            var action = DetectAction(stored);
+            cfgMap.TryGetValue(def.Gesture, out var storedEntry);
+            var stored     = storedEntry?.output ?? "";
+            var rowEnabled = storedEntry?.enabled != false;
+            var action     = DetectAction(stored);
 
             var grid = new Grid { Margin = new Thickness(0,0,0,5) };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(185) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var lbl = new TextBlock {
                 Text = def.Label, Foreground = Br("#CCCCCC"),
@@ -496,21 +502,37 @@ public partial class MainWindow : Window
             var outPanel = new Grid { Margin = new Thickness(8,0,0,0) };
             Grid.SetColumn(outPanel, 2);
 
+            var enableToggle = new CheckBox
+            {
+                Style     = (Style)FindResource("Toggle"),
+                IsChecked = rowEnabled,
+                Margin    = new Thickness(8, 0, 0, 0),
+                ToolTip   = "Enable this binding",
+            };
+            Grid.SetColumn(enableToggle, 3);
+
             grid.Children.Add(lbl);
             grid.Children.Add(actionCB);
             grid.Children.Add(outPanel);
+            grid.Children.Add(enableToggle);
             MouseStack.Children.Add(grid);
 
             var row = new Row {
-                Container   = grid,
-                OutputPanel = outPanel,
-                Action      = action,
-                OutputValue = stored,
-                MouseGesture= def.Gesture,
-                Label       = def.Label,
+                Container     = grid,
+                OutputPanel   = outPanel,
+                Action        = action,
+                OutputValue   = stored,
+                MouseGesture  = def.Gesture,
+                Label         = def.Label,
+                Enabled       = rowEnabled,
+                EnabledToggle = enableToggle,
             };
             _mouseRows[def.Gesture] = row;
             SetRowOutput(row, action);
+            if (!rowEnabled) grid.Opacity = 0.45;
+
+            enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
+            enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
 
             actionCB.SelectionChanged += (_, __) =>
             {
@@ -566,7 +588,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdRow("", "");
 
-    void AddKbdRow(string triggerStr, string outputStr, string? app = null)
+    void AddKbdRow(string triggerStr, string outputStr, string? app = null, bool enabled = true)
     {
         var initAction = DetectAction(outputStr);
 
@@ -575,6 +597,7 @@ public partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
 
         var capBtn = new Button
@@ -609,6 +632,15 @@ public partial class MainWindow : Window
         appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
         Grid.SetColumn(appCB, 3);
 
+        var enableToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = enabled,
+            Margin    = new Thickness(6, 0, 0, 0),
+            ToolTip   = "Enable this binding",
+        };
+        Grid.SetColumn(enableToggle, 4);
+
         var delBtn = new Button
         {
             Style   = (Style)FindResource("BtnGhost"),
@@ -617,12 +649,13 @@ public partial class MainWindow : Window
             Margin  = new Thickness(6,0,0,0),
             Padding = new Thickness(0),
         };
-        Grid.SetColumn(delBtn, 4);
+        Grid.SetColumn(delBtn, 5);
 
         grid.Children.Add(capBtn);
         grid.Children.Add(actionCB);
         grid.Children.Add(outPanel);
         grid.Children.Add(appCB);
+        grid.Children.Add(enableToggle);
         grid.Children.Add(delBtn);
 
         var displayTrig = !string.IsNullOrEmpty(triggerStr) && triggerStr.StartsWith("key:", StringComparison.Ordinal)
@@ -633,16 +666,22 @@ public partial class MainWindow : Window
 
         var row = new Row
         {
-            Container   = grid,
-            OutputPanel = outPanel,
-            Action      = initAction,
-            OutputValue = outputStr,
-            Trigger     = triggerStr,
-            CaptureBtn  = capBtn,
-            App         = app,
-            AppCombo    = appCB,
+            Container     = grid,
+            OutputPanel   = outPanel,
+            Action        = initAction,
+            OutputValue   = outputStr,
+            Trigger       = triggerStr,
+            CaptureBtn    = capBtn,
+            App           = app,
+            AppCombo      = appCB,
+            Enabled       = enabled,
+            EnabledToggle = enableToggle,
         };
         SetRowOutput(row, initAction);
+        if (!enabled) grid.Opacity = 0.45;
+
+        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
+        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
 
         actionCB.SelectionChanged += (_, __) =>
         {
@@ -1174,12 +1213,14 @@ public partial class MainWindow : Window
             var row  = _mouseRows[def.Gesture];
             var outp = GetRowOutput(row);
             if (string.IsNullOrEmpty(outp)) continue;
-            if (row.Action == ActionKind.Shortcut)
+            if (row.Enabled && row.Action == ActionKind.Shortcut)
             {
                 try { TriggerHelpers.ValidateShortcutOutput(outp); }
                 catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
             }
-            entries.Add(new BindingEntry { trigger = "mouse:" + def.Gesture, output = outp });
+            var mouseEntry = new BindingEntry { trigger = "mouse:" + def.Gesture, output = outp };
+            if (!row.Enabled) mouseEntry.enabled = false;
+            entries.Add(mouseEntry);
         }
 
         var keyParsed = new List<(string Trigger, ParsedKey Parsed, int Row, string? App)>();
@@ -1191,6 +1232,13 @@ public partial class MainWindow : Window
             var outp    = GetRowOutput(r);
             var appStr  = GetAppComboValue(r.AppCombo) ?? "";
             if (string.IsNullOrEmpty(trig) && string.IsNullOrEmpty(outp)) continue;
+
+            if (!r.Enabled)
+            {
+                entries.Add(new BindingEntry { trigger = trig, output = outp, app = appStr.Length > 0 ? appStr : null, enabled = false });
+                continue;
+            }
+
             if (string.IsNullOrEmpty(trig)) { ShowFeedback($"Keyboard row {idx}: no trigger recorded.", FeedbackKind.Err); return; }
             if (string.IsNullOrEmpty(outp)) { ShowFeedback($"Keyboard row {idx}: no output configured.", FeedbackKind.Err); return; }
 

@@ -1046,6 +1046,9 @@ $built = New-Object System.Collections.Generic.List[ShortcutHook+Binding]
 
 foreach ($b in $rawBindings) {
     try {
+        if ($b.PSObject.Properties.Name -contains 'enabled' -and $b.enabled -eq $false) {
+            Write-Log "Skip disabled binding: $($b.trigger)"; continue
+        }
         $nb = [ShortcutHook+Binding]::new()
         if ($b.trigger -match '^mouse:(.+)$') {
             $g = $Matches[1].ToLower()
