@@ -2,7 +2,7 @@
   <img src="ShortcutHookUI/Assets/ShortcutHook.png" alt="ShortcutHook" width="96"/>
 </p>
 
-# ShortcutHook
+<h1 align="center">ShortcutHook</h1>
 
 A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, shell-execute targets, or shell commands. Runs as a lightweight background daemon with a modern dark-mode WPF settings UI.
 
