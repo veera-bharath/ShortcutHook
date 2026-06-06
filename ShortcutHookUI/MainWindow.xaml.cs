@@ -578,70 +578,44 @@ public partial class MainWindow : Window
                             string? app, bool enabled, bool isGlobal)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
-        // col1=*:   chain stack
-        // col2=100: app combo
-        // col3=Auto: enable toggle
-        // col4=Auto: add (+) or delete (×) button
+        // col1=*:   chain stack — chain items + control row (app/enable/delay/+chain all live here)
+        // col2=Auto: variant add (+) or delete (×) button — top-aligned
         var grid = new Grid { Margin = new Thickness(0, 0, 0, 3) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         if (isGlobal)
         {
-            var lbl = new TextBlock { Text = def.Label, Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            var lbl = new TextBlock { Text = def.Label, Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 5, 0, 0) };
             Grid.SetColumn(lbl, 0);
             grid.Children.Add(lbl);
         }
         else
         {
-            var arrow = new TextBlock { Text = "↳", Foreground = Br("#3A3A3A"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+            var arrow = new TextBlock { Text = "↳", Foreground = Br("#3A3A3A"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 5, 0, 0) };
             Grid.SetColumn(arrow, 0);
             grid.Children.Add(arrow);
         }
 
-        var chainStack = new StackPanel { Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Top };
+        var chainStack = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
         Grid.SetColumn(chainStack, 1);
         grid.Children.Add(chainStack);
 
-        var appCB = new ComboBox
+        var variantBtn = new Button
         {
-            Style      = (Style)FindResource("DarkCB"),
-            Height     = 28,
-            Margin     = new Thickness(6, 0, 0, 0),
-            FontFamily = new FontFamily("Consolas"),
-            FontSize   = 11,
-            ToolTip    = "App scope — 'All apps' fires everywhere; pick a specific app to scope this gesture",
-            VerticalAlignment = VerticalAlignment.Top,
-        };
-        PopulateAppCombo(appCB, app);
-        UpdateAppComboStyle(appCB);
-        appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
-        appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
-        Grid.SetColumn(appCB, 2);
-        grid.Children.Add(appCB);
-
-        var enableToggle = new CheckBox { Style = (Style)FindResource("Toggle"), IsChecked = enabled, Margin = new Thickness(6, 0, 0, 0), ToolTip = "Enable this binding", VerticalAlignment = VerticalAlignment.Top };
-        Grid.SetColumn(enableToggle, 3);
-
-        var actionBtn = new Button
-        {
-            Style   = (Style)FindResource("BtnGhost"),
-            Content = isGlobal ? "+" : "✕",
-            Height  = 26,
-            Width   = 26,
-            Padding = new Thickness(0),
-            Margin  = new Thickness(4, 0, 0, 0),
+            Style    = (Style)FindResource("BtnGhost"),
+            Content  = isGlobal ? "+" : "✕",
+            Height   = 26,
+            Width    = 26,
+            Padding  = new Thickness(0),
+            Margin   = new Thickness(4, 1, 0, 0),
             FontSize = isGlobal ? 15 : 12,
             ToolTip  = isGlobal ? "Add an app-specific variant for this gesture" : "Remove this variant",
             VerticalAlignment = VerticalAlignment.Top,
         };
-        Grid.SetColumn(actionBtn, 4);
-
-        grid.Children.Add(enableToggle);
-        grid.Children.Add(actionBtn);
+        Grid.SetColumn(variantBtn, 2);
+        grid.Children.Add(variantBtn);
 
         var row = new Row
         {
@@ -650,30 +624,19 @@ public partial class MainWindow : Window
             OutputDelay  = outputDelay,
             MouseGesture = def.Gesture,
             Label        = def.Label,
-            App          = app,
-            AppCombo     = appCB,
-            Enabled      = enabled,
-            EnabledToggle = enableToggle,
         };
 
-        BuildChainStack(row, outputs);
+        BuildChainStack(row, outputs, app, enabled);
         if (!enabled) grid.Opacity = 0.45;
 
-        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
-        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
-
         if (isGlobal)
-        {
-            actionBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, null, true, isGlobal: false);
-        }
+            variantBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, null, true, isGlobal: false);
         else
-        {
-            actionBtn.Click += (_, __) =>
+            variantBtn.Click += (_, __) =>
             {
                 container.Children.Remove(grid);
                 _mouseRows[def.Gesture].Remove(row);
             };
-        }
 
         container.Children.Add(grid);
         _mouseRows[def.Gesture].Add(row);
@@ -683,8 +646,8 @@ public partial class MainWindow : Window
     // Chain stack builder
     // =========================================================================
 
-    // Builds the chain stack UI (all chain items + footer) into row.ChainStack.
-    void BuildChainStack(Row row, List<string> outputs)
+    // Builds chain items + control row into row.ChainStack.
+    void BuildChainStack(Row row, List<string> outputs, string? app, bool enabled)
     {
         row.ChainStack.Children.Clear();
         row.Chain.Clear();
@@ -693,20 +656,20 @@ public partial class MainWindow : Window
         foreach (var o in effectiveOutputs)
             AddChainItem(row, o, rebuild: false);
 
-        var footer = BuildChainFooter(row);
-        row.ChainFooter = footer;
-        row.ChainStack.Children.Add(footer);
+        var controlRow = BuildChainControlRow(row, app, enabled);
+        row.ChainFooter = controlRow;
+        row.ChainStack.Children.Add(controlRow);
 
         RefreshChainDeleteButtons(row);
         RefreshChainFooter(row);
     }
 
-    // Adds one action item to the chain (appends before footer if already built).
+    // Adds one action item to the chain (appends before the control row if already built).
     ChainedAction AddChainItem(Row row, string output, bool rebuild = true)
     {
         var action = DetectAction(output);
 
-        // Item grid: [ActionCombo 120][OutputPanel *][× Auto]
+        // Item grid: [ActionCombo 120][OutputPanel *][chain-× Auto]
         var itemGrid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -723,10 +686,10 @@ public partial class MainWindow : Window
             Style   = (Style)FindResource("BtnGhost"),
             Content = "✕",
             Height  = 26,
-            Width   = 26,
+            Width   = 22,
             Padding = new Thickness(0),
-            Margin  = new Thickness(4, 0, 0, 0),
-            FontSize = 11,
+            Margin  = new Thickness(3, 0, 0, 0),
+            FontSize = 10,
             ToolTip  = "Remove this action from the chain",
         };
         Grid.SetColumn(delBtn, 2);
@@ -737,12 +700,12 @@ public partial class MainWindow : Window
 
         var item = new ChainedAction
         {
-            Action       = action,
-            OutputValue  = output,
+            Action        = action,
+            OutputValue   = output,
             ItemContainer = itemGrid,
-            ActionCombo  = actionCB,
-            OutputPanel  = outPanel,
-            DeleteBtn    = delBtn,
+            ActionCombo   = actionCB,
+            OutputPanel   = outPanel,
+            DeleteBtn     = delBtn,
         };
         SetChainItemOutput(row, item, action);
 
@@ -756,7 +719,6 @@ public partial class MainWindow : Window
         {
             if (row.Chain.Count <= 1) return;
             row.Chain.Remove(item);
-            // Remove item from ChainStack (before footer, so just remove by reference)
             row.ChainStack.Children.Remove(itemGrid);
             RefreshChainDeleteButtons(row);
             RefreshChainFooter(row);
@@ -766,7 +728,6 @@ public partial class MainWindow : Window
 
         if (rebuild && row.ChainFooter != null)
         {
-            // Insert before footer
             int footerIdx = row.ChainStack.Children.IndexOf(row.ChainFooter);
             if (footerIdx >= 0)
                 row.ChainStack.Children.Insert(footerIdx, itemGrid);
@@ -783,48 +744,56 @@ public partial class MainWindow : Window
         return item;
     }
 
-    // Builds the footer row: [+ Add action]  [delay: [tb] ms]
-    Grid BuildChainFooter(Row row)
+    // Builds the bottom control row for a variant:
+    // [+ chain][delay-lbl][delay-tb][ms][spacer *][AppCombo 95][Enable]
+    // The app combo and enable toggle live here so they always align with the full chain block.
+    Grid BuildChainControlRow(Row row, string? app, bool enabled)
     {
         var footer = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+        // col 0: + add-chain button
+        // col 1: "delay:" label  (hidden when chain = 1)
+        // col 2: delay textbox   (hidden when chain = 1)
+        // col 3: "ms" label      (hidden when chain = 1)
+        // col 4: spacer
+        // col 5: app combo
+        // col 6: enable toggle
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var addBtn = new Button
         {
             Style   = (Style)FindResource("BtnGhost"),
-            Content = "+ Add action",
+            Content = "+ chain",
             Height  = 24,
-            Padding = new Thickness(8, 0, 8, 0),
-            FontSize = 11,
-            ToolTip  = "Add another action to the chain",
+            Padding = new Thickness(6, 0, 6, 0),
+            FontSize = 10,
+            ToolTip  = "Add another action to this chain",
         };
         Grid.SetColumn(addBtn, 0);
-        addBtn.Click += (_, __) =>
-        {
-            AddChainItem(row, "", rebuild: true);
-        };
+        addBtn.Click += (_, __) => AddChainItem(row, "", rebuild: true);
 
         var delayLbl = new TextBlock
         {
             Text = "delay:",
             Foreground = DimBrush,
             FontFamily = new FontFamily("Consolas"),
-            FontSize = 11,
+            FontSize = 10,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(10, 0, 4, 0),
+            Margin = new Thickness(8, 0, 3, 0),
         };
-        Grid.SetColumn(delayLbl, 2);
+        Grid.SetColumn(delayLbl, 1);
 
         var delayTB = new TextBox
         {
             Style      = (Style)FindResource("DarkTB"),
             Height     = 24,
-            Width      = 52,
             FontFamily = new FontFamily("Consolas"),
-            FontSize   = 11,
+            FontSize   = 10,
             Text       = row.OutputDelay > 0 ? row.OutputDelay.ToString() : "0",
             ToolTip    = "Delay between chained actions (ms)",
         };
@@ -833,27 +802,58 @@ public partial class MainWindow : Window
             if (int.TryParse(delayTB.Text, out var ms) && ms >= 0)
                 row.OutputDelay = ms;
         };
-        Grid.SetColumn(delayTB, 3);
+        Grid.SetColumn(delayTB, 2);
 
         var msLbl = new TextBlock
         {
-            Text = " ms",
+            Text = "ms",
             Foreground = DimBrush,
             FontFamily = new FontFamily("Consolas"),
-            FontSize = 11,
+            FontSize = 10,
             VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(3, 0, 0, 0),
         };
-        // Appended inline after delayTB — use a WrapPanel or just another column
-        // We'll use a second text column after the TB
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        Grid.SetColumn(msLbl, 4);
+        Grid.SetColumn(msLbl, 3);
+
+        var appCB = new ComboBox
+        {
+            Style      = (Style)FindResource("DarkCB"),
+            Height     = 26,
+            Margin     = new Thickness(6, 0, 0, 0),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+            ToolTip    = "App scope — 'All apps' fires everywhere; pick a specific app to scope this binding",
+        };
+        PopulateAppCombo(appCB, app);
+        UpdateAppComboStyle(appCB);
+        appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
+        appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
+        Grid.SetColumn(appCB, 5);
+
+        var enableToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = enabled,
+            Margin    = new Thickness(6, 0, 0, 0),
+            ToolTip   = "Enable this binding",
+        };
+        Grid.SetColumn(enableToggle, 6);
+
+        row.AppCombo      = appCB;
+        row.EnabledToggle = enableToggle;
+        row.Enabled       = enabled;
+        row.DelayBox      = delayTB;
+
+        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
+        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
 
         footer.Children.Add(addBtn);
         footer.Children.Add(delayLbl);
         footer.Children.Add(delayTB);
         footer.Children.Add(msLbl);
+        footer.Children.Add(appCB);
+        footer.Children.Add(enableToggle);
 
-        row.DelayBox = delayTB;
         return footer;
     }
 
@@ -867,14 +867,13 @@ public partial class MainWindow : Window
 
     void RefreshChainFooter(Row row)
     {
-        // Show delay controls only when chain has multiple actions
         if (row.ChainFooter == null) return;
         bool multi = row.Chain.Count > 1;
-        // cols 2,3,4 are the delay controls
+        // cols 1-3 are the delay controls — hidden when single action
         foreach (UIElement child in row.ChainFooter.Children)
         {
             int col = Grid.GetColumn(child);
-            if (col >= 2)
+            if (col >= 1 && col <= 3)
                 child.Visibility = multi ? Visibility.Visible : Visibility.Collapsed;
         }
     }
@@ -1002,41 +1001,14 @@ public partial class MainWindow : Window
 
     Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, string? app, bool enabled)
     {
-        // col0=*: chain stack   col1=100: app combo  col2=Auto: enable  col3=Auto: delete
+        // col0=*: chain stack (chain items + control row with app/enable/delay/+chain all inside)
+        // col1=Auto: delete-variant button (top-aligned to card header)
         var grid = new Grid { Margin = new Thickness(0, 3, 0, 0) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var chainStack = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
+        var chainStack = new StackPanel();
         Grid.SetColumn(chainStack, 0);
-
-        var appCB = new ComboBox
-        {
-            Style      = (Style)FindResource("DarkCB"),
-            Height     = 28,
-            Margin     = new Thickness(6, 0, 0, 0),
-            FontFamily = new FontFamily("Consolas"),
-            FontSize   = 11,
-            ToolTip    = "App scope — 'All apps' fires everywhere; pick a specific app to override per-app",
-            VerticalAlignment = VerticalAlignment.Top,
-        };
-        PopulateAppCombo(appCB, app);
-        UpdateAppComboStyle(appCB);
-        appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
-        appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
-        Grid.SetColumn(appCB, 1);
-
-        var enableToggle = new CheckBox
-        {
-            Style     = (Style)FindResource("Toggle"),
-            IsChecked = enabled,
-            Margin    = new Thickness(6, 0, 0, 0),
-            ToolTip   = "Enable this binding",
-            VerticalAlignment = VerticalAlignment.Top,
-        };
-        Grid.SetColumn(enableToggle, 2);
 
         var delBtn = new Button
         {
@@ -1045,32 +1017,24 @@ public partial class MainWindow : Window
             Height  = 26,
             Width   = 26,
             Padding = new Thickness(0),
-            Margin  = new Thickness(4, 0, 0, 0),
+            Margin  = new Thickness(4, 1, 0, 0),
             FontSize = 11,
+            ToolTip  = "Remove this variant",
             VerticalAlignment = VerticalAlignment.Top,
         };
-        Grid.SetColumn(delBtn, 3);
+        Grid.SetColumn(delBtn, 1);
 
         grid.Children.Add(chainStack);
-        grid.Children.Add(appCB);
-        grid.Children.Add(enableToggle);
         grid.Children.Add(delBtn);
 
         var row = new Row
         {
-            Container     = grid,
-            ChainStack    = chainStack,
-            OutputDelay   = outputDelay,
-            App           = app,
-            AppCombo      = appCB,
-            Enabled       = enabled,
-            EnabledToggle = enableToggle,
+            Container   = grid,
+            ChainStack  = chainStack,
+            OutputDelay = outputDelay,
         };
-        BuildChainStack(row, outputs);
+        BuildChainStack(row, outputs, app, enabled);
         if (!enabled) grid.Opacity = 0.45;
-
-        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
-        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
 
         delBtn.Click += (_, __) =>
         {
