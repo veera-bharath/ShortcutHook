@@ -527,7 +527,7 @@ public partial class MainWindow : Window
         {
             gestureGroups.TryGetValue(def.Gesture, out var bindings);
 
-            var gestureSP = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
+            var gestureSP = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
             _mouseGestureStacks[def.Gesture] = gestureSP;
             _mouseRows[def.Gesture] = new List<Row>();
 
@@ -578,29 +578,43 @@ public partial class MainWindow : Window
                             string? app, bool enabled, bool isGlobal)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
-        // col1=*:   chain stack — chain items + control row (app/enable/delay/+chain all live here)
+        // col1=*:   chain block border (different shade per global/variant) containing the chain stack
         // col2=Auto: variant add (+) or delete (×) button — top-aligned
-        var grid = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+        // Global rows have a slightly lighter card; app-scoped variants use a brighter shade so the
+        // grouping boundary is immediately visible without a hard separator line.
+        var topMargin = isGlobal ? 0 : 6;
+        var grid = new Grid { Margin = new Thickness(0, topMargin, 0, 4) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         if (isGlobal)
         {
-            var lbl = new TextBlock { Text = def.Label, Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 5, 0, 0) };
+            var lbl = new TextBlock { Text = def.Label, Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 8, 0, 0) };
             Grid.SetColumn(lbl, 0);
             grid.Children.Add(lbl);
         }
         else
         {
-            var arrow = new TextBlock { Text = "↳", Foreground = Br("#3A3A3A"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 5, 0, 0) };
+            var arrow = new TextBlock { Text = "↳", Foreground = Br("#555555"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 8, 0, 0) };
             Grid.SetColumn(arrow, 0);
             grid.Children.Add(arrow);
         }
 
-        var chainStack = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
-        Grid.SetColumn(chainStack, 1);
-        grid.Children.Add(chainStack);
+        // Each variant gets its own rounded card so chain items are visually grouped.
+        var chainBorder = new Border
+        {
+            Background      = Br(isGlobal ? "#1A1A1A" : "#222222"),
+            BorderBrush     = Br(isGlobal ? "#2A2A2A" : "#333333"),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(7),
+            Padding         = new Thickness(10, 8, 10, 8),
+            Margin          = new Thickness(6, 0, 4, 0),
+        };
+        var chainStack = new StackPanel();
+        chainBorder.Child = chainStack;
+        Grid.SetColumn(chainBorder, 1);
+        grid.Children.Add(chainBorder);
 
         var variantBtn = new Button
         {
@@ -609,7 +623,7 @@ public partial class MainWindow : Window
             Height   = 26,
             Width    = 26,
             Padding  = new Thickness(0),
-            Margin   = new Thickness(4, 1, 0, 0),
+            Margin   = new Thickness(2, 6, 0, 0),
             FontSize = isGlobal ? 15 : 12,
             ToolTip  = isGlobal ? "Add an app-specific variant for this gesture" : "Remove this variant",
             VerticalAlignment = VerticalAlignment.Top,
@@ -670,7 +684,7 @@ public partial class MainWindow : Window
         var action = DetectAction(output);
 
         // Item grid: [ActionCombo 120][OutputPanel *][chain-× Auto]
-        var itemGrid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+        var itemGrid = new Grid { Margin = new Thickness(0, 0, 0, 5) };
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -749,7 +763,7 @@ public partial class MainWindow : Window
     // The app combo and enable toggle live here so they always align with the full chain block.
     Grid BuildChainControlRow(Row row, string? app, bool enabled)
     {
-        var footer = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+        var footer = new Grid { Margin = new Thickness(0, 6, 0, 0) };
         // col 0: + add-chain button
         // col 1: "delay:" label  (hidden when chain = 1)
         // col 2: delay textbox   (hidden when chain = 1)
@@ -1001,14 +1015,27 @@ public partial class MainWindow : Window
 
     Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, string? app, bool enabled)
     {
-        // col0=*: chain stack (chain items + control row with app/enable/delay/+chain all inside)
-        // col1=Auto: delete-variant button (top-aligned to card header)
-        var grid = new Grid { Margin = new Thickness(0, 3, 0, 0) };
+        // col0=*: chain block border containing chain items + control row
+        // col1=Auto: delete-variant button — top-aligned
+        // First variant uses a slightly darker shade; extra app-scoped variants use a lighter shade
+        // so each grouping is visually distinct within the keyboard trigger card.
+        bool isFirstKbd = card.Variants.Count == 0;
+        var topGap = isFirstKbd ? 0 : 6;
+        var grid = new Grid { Margin = new Thickness(0, topGap, 0, 0) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
+        var chainBorder = new Border
+        {
+            Background      = Br(isFirstKbd ? "#1E1E1E" : "#262626"),
+            BorderBrush     = Br(isFirstKbd ? "#2D2D2D" : "#363636"),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(6),
+            Padding         = new Thickness(10, 8, 10, 8),
+        };
         var chainStack = new StackPanel();
-        Grid.SetColumn(chainStack, 0);
+        chainBorder.Child = chainStack;
+        Grid.SetColumn(chainBorder, 0);
 
         var delBtn = new Button
         {
@@ -1017,14 +1044,14 @@ public partial class MainWindow : Window
             Height  = 26,
             Width   = 26,
             Padding = new Thickness(0),
-            Margin  = new Thickness(4, 1, 0, 0),
+            Margin  = new Thickness(4, 6, 0, 0),
             FontSize = 11,
             ToolTip  = "Remove this variant",
             VerticalAlignment = VerticalAlignment.Top,
         };
         Grid.SetColumn(delBtn, 1);
 
-        grid.Children.Add(chainStack);
+        grid.Children.Add(chainBorder);
         grid.Children.Add(delBtn);
 
         var row = new Row
