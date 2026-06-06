@@ -107,6 +107,8 @@ public class ShortcutHook {
     [DllImport("gdi32.dll", SetLastError = true)]  static extern IntPtr CopyEnhMetaFile(IntPtr hemfSrc, string lpszFile);
     [DllImport("gdi32.dll", SetLastError = true)]  static extern bool DeleteEnhMetaFile(IntPtr hemf);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool   GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
@@ -137,6 +139,18 @@ public class ShortcutHook {
         public uint mouseData; public uint flags;
         public uint time;      public IntPtr dwExtraInfo;
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CURSORINFO {
+        public int    cbSize;
+        public uint   flags;
+        public IntPtr hCursor;
+        public int    ptX, ptY;
+    }
+
+    // IDC_HAND — standard system hand cursor (hovering over a hyperlink).
+    static readonly IntPtr IDC_HAND     = new IntPtr(32649);
+    static readonly IntPtr HandCursorH  = LoadCursor(IntPtr.Zero, IDC_HAND);
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate IntPtr LLProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -767,6 +781,13 @@ public class ShortcutHook {
                 }
             }
             else if (msg == WM_MBUTTONDOWN) {
+                // Capture cursor shape now, before the timer fires, to detect link hovers.
+                // Browsers set IDC_HAND when the cursor is over a hyperlink; we reinject
+                // the native click in that case so the link opens instead of the binding firing.
+                CURSORINFO ci = new CURSORINFO(); ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+                GetCursorInfo(ref ci);
+                bool onLink = (ci.hCursor == HandCursorH);
+
                 lock (MLock) {
                     int myGen = ++wGeneration;
                     wheelHeld = true; wheelUpSeen = false;
@@ -784,7 +805,8 @@ public class ShortcutHook {
                             int count = wheelClickCount; wheelClickCount = 0;
                             if (count == 1) {
                                 Binding bSingle = ResolveMouseBinding(BSingleWheel);
-                                if (bSingle != null) ExecuteBinding(bSingle);
+                                // Reinject if the cursor was over a link at click time OR no binding is set.
+                                if (bSingle != null && !onLink) ExecuteBinding(bSingle);
                                 else ReinjectWheel(!wheelHeld || wheelUpSeen);
                             }
                             else if (count == 2) ExecuteBinding(ResolveMouseBinding(BDoubleWheel));
