@@ -568,15 +568,15 @@ public partial class MainWindow : Window
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=120: action combo
         // col2=*:   output panel
-        // col3=100: app combo / "All apps" label
+        // col3=100: app combo
         // col4=Auto: enable toggle
-        // col5=Auto: add (+) or delete (×) button
+        // col5=Auto: add (+) or delete (×) button — Auto so margin doesn't overflow a fixed column
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         // col0: label or indent
         if (isGlobal)
@@ -809,12 +809,13 @@ public partial class MainWindow : Window
         var initAction = DetectAction(output);
 
         var grid = new Grid { Margin = new Thickness(0, 3, 0, 0) };
-        // col0=120: action combo  col1=*: output  col2=100: app combo  col3=Auto: enable  col4=26: delete
+        // col0=120: action combo  col1=*: output  col2=100: app combo  col3=Auto: enable  col4=Auto: delete
+        // col4 is Auto (not fixed) so the button's left margin doesn't overflow the column width.
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var actionCB = NewActionCombo(initAction);
         Grid.SetColumn(actionCB, 0);

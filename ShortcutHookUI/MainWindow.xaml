@@ -393,7 +393,7 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="100"/>
                                     <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="28"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="GESTURE" Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold"/>
                                 <TextBlock Text="ACTION"  Foreground="#4A4A4A" FontSize="10" FontWeight="SemiBold" Grid.Column="1" Margin="8,0,0,0"/>
