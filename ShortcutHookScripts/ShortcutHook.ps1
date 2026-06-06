@@ -876,13 +876,21 @@ public class ShortcutHook {
         } catch { return ""; }
     }
 
+    // Case-insensitive search — avoids lambdas so ref parameters can safely call this.
+    static bool AppsContain(string[] apps, string fgApp) {
+        if (apps == null) return false;
+        for (int i = 0; i < apps.Length; i++)
+            if (string.Equals(apps[i], fgApp, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
     // Picks the right binding for the current foreground process: app-scoped first, global fallback.
     static Binding ResolveMouseBinding(List<Binding> list) {
         if (list == null || list.Count == 0) return null;
         if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) return list[0]; // fast path: single global
         string fgApp = GetForegroundProcessName();
         foreach (Binding b in list) {
-            if (b.Apps != null && b.Apps.Length > 0 && Array.Exists(b.Apps, a => string.Equals(a, fgApp, StringComparison.OrdinalIgnoreCase))) return b;
+            if (b.Apps != null && b.Apps.Length > 0 && AppsContain(b.Apps, fgApp)) return b;
         }
         foreach (Binding b in list) { if (b.Apps == null || b.Apps.Length == 0) return b; }
         return null;
@@ -899,7 +907,7 @@ public class ShortcutHook {
         // Scoped bindings are at the front; check them first
         foreach (Binding b in candidates) {
             if (b.Apps == null || b.Apps.Length == 0) continue;
-            if (Array.Exists(b.Apps, a => string.Equals(a, fgApp, StringComparison.OrdinalIgnoreCase))) return b;
+            if (AppsContain(b.Apps, fgApp)) return b;
         }
         // Fall back to global binding
         foreach (Binding b in candidates) {
@@ -914,7 +922,7 @@ public class ShortcutHook {
             if (b.Mods != mods || b.Keys.Length <= keys.Count) continue;
             if (b.Apps != null && b.Apps.Length > 0) {
                 if (fgApp == null) fgApp = GetForegroundProcessName();
-                if (Array.IndexOf(b.Apps, fgApp) < 0) continue;
+                if (!AppsContain(b.Apps, fgApp)) continue;
             }
             bool ok = true;
             foreach (byte k in keys) {
