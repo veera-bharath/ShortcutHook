@@ -945,26 +945,41 @@ public partial class MainWindow : Window
             var sep = new Rectangle { Height = 1, Fill = Br("#444444"), Margin = new Thickness(0, 2, 0, 2) };
             popupStack.Children.Add(sep);
 
-            // App entries from _apps
+            // App entries: running processes (same source as old single-select combo).
+            // Process.GetProcesses() returns process names without extension; add .exe to match
+            // what GetForegroundProcessName() returns in the daemon (Path.GetFileName of full exe path).
             var selectedSet = new HashSet<string>(row.Apps, StringComparer.OrdinalIgnoreCase);
-            foreach (var app in _apps)
+            var runningNames = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in Process.GetProcesses())
             {
+                using (p)
+                {
+                    try { if (!string.IsNullOrEmpty(p.ProcessName)) runningNames.Add(p.ProcessName + ".exe"); }
+                    catch { }
+                }
+            }
+            // Include any stored names that aren't currently running so they remain selectable.
+            foreach (var stored in row.Apps)
+                runningNames.Add(stored);
+
+            foreach (var procName in runningNames)
+            {
+                var name = procName; // capture for closure
                 var cb = new CheckBox
                 {
-                    Content    = app.Name,
-                    Tag        = app.Name,
+                    Content    = name,
                     Foreground = Br("#CCCCCC"),
-                    IsChecked  = selectedSet.Contains(app.Name),
+                    IsChecked  = selectedSet.Contains(name),
                     IsEnabled  = !row.IsGlobal,
                     Opacity    = row.IsGlobal ? 0.4 : 1.0,
                     Margin     = new Thickness(4, 2, 4, 2),
                     FontFamily = new FontFamily("Consolas"),
                     FontSize   = 11,
                 };
-                cb.Checked   += (_, __) => { if (!row.Apps.Contains(app.Name, StringComparer.OrdinalIgnoreCase)) row.Apps.Add(app.Name); UpdateAppScopeBtnLabel(row); };
-                cb.Unchecked += (_, __) => { row.Apps.RemoveAll(a => string.Equals(a, app.Name, StringComparison.OrdinalIgnoreCase)); UpdateAppScopeBtnLabel(row); };
+                cb.Checked   += (_, __) => { if (!row.Apps.Contains(name, StringComparer.OrdinalIgnoreCase)) row.Apps.Add(name); UpdateAppScopeBtnLabel(row); };
+                cb.Unchecked += (_, __) => { row.Apps.RemoveAll(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase)); UpdateAppScopeBtnLabel(row); };
                 popupStack.Children.Add(cb);
-                row.AppCheckBoxes.Add((cb, app.Name));
+                row.AppCheckBoxes.Add((cb, name));
             }
 
             globalCb.Checked += (_, __) =>

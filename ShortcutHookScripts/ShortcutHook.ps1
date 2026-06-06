@@ -882,7 +882,7 @@ public class ShortcutHook {
         if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) return list[0]; // fast path: single global
         string fgApp = GetForegroundProcessName();
         foreach (Binding b in list) {
-            if (b.Apps != null && b.Apps.Length > 0 && Array.IndexOf(b.Apps, fgApp) >= 0) return b;
+            if (b.Apps != null && b.Apps.Length > 0 && Array.Exists(b.Apps, a => string.Equals(a, fgApp, StringComparison.OrdinalIgnoreCase))) return b;
         }
         foreach (Binding b in list) { if (b.Apps == null || b.Apps.Length == 0) return b; }
         return null;
@@ -899,7 +899,7 @@ public class ShortcutHook {
         // Scoped bindings are at the front; check them first
         foreach (Binding b in candidates) {
             if (b.Apps == null || b.Apps.Length == 0) continue;
-            if (Array.IndexOf(b.Apps, fgApp) >= 0) return b;
+            if (Array.Exists(b.Apps, a => string.Equals(a, fgApp, StringComparison.OrdinalIgnoreCase))) return b;
         }
         // Fall back to global binding
         foreach (Binding b in candidates) {
