@@ -599,32 +599,22 @@ public partial class MainWindow : Window
         var outPanel = new Grid { Margin = new Thickness(8, 0, 0, 0) };
         Grid.SetColumn(outPanel, 2);
 
-        // col3: "All apps" static label for global row, editable combo for variant rows
-        ComboBox? appCB = null;
-        if (isGlobal)
+        // col3: editable app combo for all rows; global row defaults to "All apps"
+        var appCB = new ComboBox
         {
-            var allAppsLbl = new TextBlock { Text = "All apps", Foreground = Br("#3A3A3A"), FontSize = 11, FontFamily = new FontFamily("Consolas"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0) };
-            Grid.SetColumn(allAppsLbl, 3);
-            grid.Children.Add(allAppsLbl);
-        }
-        else
-        {
-            appCB = new ComboBox
-            {
-                Style      = (Style)FindResource("DarkCB"),
-                Height     = 28,
-                Margin     = new Thickness(6, 0, 0, 0),
-                FontFamily = new FontFamily("Consolas"),
-                FontSize   = 11,
-                ToolTip    = "Target app — open the app first, then pick it here",
-            };
-            PopulateAppCombo(appCB, app);
-            UpdateAppComboStyle(appCB);
-            appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
-            appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
-            Grid.SetColumn(appCB, 3);
-            grid.Children.Add(appCB);
-        }
+            Style      = (Style)FindResource("DarkCB"),
+            Height     = 28,
+            Margin     = new Thickness(6, 0, 0, 0),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+            ToolTip    = "App scope — 'All apps' fires everywhere; pick a specific app to scope this gesture",
+        };
+        PopulateAppCombo(appCB, app);
+        UpdateAppComboStyle(appCB);
+        appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
+        appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
+        Grid.SetColumn(appCB, 3);
+        grid.Children.Add(appCB);
 
         var enableToggle = new CheckBox { Style = (Style)FindResource("Toggle"), IsChecked = enabled, Margin = new Thickness(6, 0, 0, 0), ToolTip = "Enable this binding" };
         Grid.SetColumn(enableToggle, 4);
@@ -1414,7 +1404,7 @@ public partial class MainWindow : Window
             {
                 var outp   = GetRowOutput(row);
                 if (string.IsNullOrEmpty(outp)) continue;
-                var appStr = row.AppCombo == null ? "" : (GetAppComboValue(row.AppCombo) ?? "");
+                var appStr = GetAppComboValue(row.AppCombo) ?? "";
 
                 if (row.Enabled && row.Action == ActionKind.Shortcut)
                 {
