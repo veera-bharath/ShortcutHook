@@ -160,12 +160,16 @@ public class ShortcutHook {
 
     public static bool altScrollEnabled = false;
 
-    // One Binding ref per mouse gesture (null = not configured)
-    public static Binding BLeftRight, BDoubleRight, BTripleRight;
-    public static Binding BRightScrollDown, BRightScrollUp;
-    public static Binding BDoubleWheel, BTripleWheel;
-    public static Binding BLeftRightDouble;
-    public static Binding BDoubleRightSel;
+    // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
+    public static List<Binding> BLeftRight       = new List<Binding>();
+    public static List<Binding> BDoubleRight     = new List<Binding>();
+    public static List<Binding> BTripleRight     = new List<Binding>();
+    public static List<Binding> BRightScrollDown = new List<Binding>();
+    public static List<Binding> BRightScrollUp   = new List<Binding>();
+    public static List<Binding> BDoubleWheel     = new List<Binding>();
+    public static List<Binding> BTripleWheel     = new List<Binding>();
+    public static List<Binding> BLeftRightDouble = new List<Binding>();
+    public static List<Binding> BDoubleRightSel  = new List<Binding>();
 
     public static string MakeSignature(int mods, byte[] sortedKeys) {
         string[] parts = new string[sortedKeys.Length];
@@ -175,34 +179,44 @@ public class ShortcutHook {
 
     public static void LoadBindings(Binding[] bindings) {
         MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear();
-        BLeftRight = BDoubleRight = BTripleRight = null;
-        BRightScrollDown = BRightScrollUp = null;
-        BDoubleWheel = BTripleWheel = null;
-        BLeftRightDouble = null;
-        BDoubleRightSel = null;
+        BLeftRight.Clear(); BDoubleRight.Clear(); BTripleRight.Clear();
+        BRightScrollDown.Clear(); BRightScrollUp.Clear();
+        BDoubleWheel.Clear(); BTripleWheel.Clear();
+        BLeftRightDouble.Clear(); BDoubleRightSel.Clear();
         lrPending = false; lrCount = 0;
-        var scopedKbd = new List<Binding>();
-        var globalKbd = new List<Binding>();
+        // Separate app-scoped and global mouse bindings so scoped are tried first per gesture.
+        var scopedMouse = new Dictionary<string, List<Binding>>();
+        var globalMouse = new Dictionary<string, List<Binding>>();
+        var scopedKbd   = new List<Binding>();
+        var globalKbd   = new List<Binding>();
         foreach (Binding b in bindings) {
             if (b.Kind == "mouse") {
                 MouseBindings.Add(b);
-                switch (b.MouseGesture) {
-                    case "left+right":        BLeftRight       = b; break;
-                    case "left+rightx2":      BLeftRightDouble = b; break;
-                    case "double-right":      BDoubleRight     = b; break;
-                    case "double-right-sel":  BDoubleRightSel  = b; break;
-                    case "triple-right":      BTripleRight     = b; break;
-                    case "right-scroll-down": BRightScrollDown = b; break;
-                    case "right-scroll-up":   BRightScrollUp   = b; break;
-                    case "double-wheel":      BDoubleWheel     = b; break;
-                    case "triple-wheel":      BTripleWheel     = b; break;
-                }
+                var dict = b.App != null ? scopedMouse : globalMouse;
+                List<Binding> mlist;
+                if (!dict.TryGetValue(b.MouseGesture, out mlist)) { mlist = new List<Binding>(); dict[b.MouseGesture] = mlist; }
+                mlist.Add(b);
             } else if (b.Kind == "key") {
                 KeyBindings.Add(b);
                 if (b.App != null) scopedKbd.Add(b); else globalKbd.Add(b);
             }
         }
-        // Index scoped bindings first so FindExact checks them before global ones.
+        // Populate gesture lists: scoped first so ResolveMouseBinding checks them before global.
+        System.Action<string, List<Binding>> addGesture = (gesture, list) => {
+            List<Binding> tmp;
+            if (scopedMouse.TryGetValue(gesture, out tmp)) list.AddRange(tmp);
+            if (globalMouse.TryGetValue(gesture, out tmp)) list.AddRange(tmp);
+        };
+        addGesture("left+right",        BLeftRight);
+        addGesture("left+rightx2",      BLeftRightDouble);
+        addGesture("double-right",      BDoubleRight);
+        addGesture("double-right-sel",  BDoubleRightSel);
+        addGesture("triple-right",      BTripleRight);
+        addGesture("right-scroll-down", BRightScrollDown);
+        addGesture("right-scroll-up",   BRightScrollUp);
+        addGesture("double-wheel",      BDoubleWheel);
+        addGesture("triple-wheel",      BTripleWheel);
+        // Index keyboard bindings: scoped first so FindExact checks them before global ones.
         foreach (Binding b in scopedKbd) {
             List<Binding> list;
             if (!KeySigIndex.TryGetValue(b.Signature, out list)) { list = new List<Binding>(); KeySigIndex[b.Signature] = list; }
@@ -488,9 +502,9 @@ public class ShortcutHook {
         return hasSel;
     }
     static void ExecuteDoubleRight() {
-        if (BDoubleRightSel == null) { ExecuteBinding(BDoubleRight); return; }
+        if (BDoubleRightSel.Count == 0) { ExecuteBinding(ResolveMouseBinding(BDoubleRight)); return; }
         bool hasSel = DetectTextSelection();
-        ExecuteBinding(hasSel ? BDoubleRightSel : BDoubleRight);
+        ExecuteBinding(ResolveMouseBinding(hasSel ? BDoubleRightSel : BDoubleRight));
     }
 
     // ---------- Output dispatch ----------
@@ -622,7 +636,7 @@ public class ShortcutHook {
                     if (rightPending) {
                         rightPending = false; rightClickCount = 0;
                         suppressRightUp = true; leftDown = false;
-                        ExecuteBinding(BLeftRight);
+                        ExecuteBinding(ResolveMouseBinding(BLeftRight));
                     }
                 }
             }
@@ -637,14 +651,14 @@ public class ShortcutHook {
                         rightClickCount = 0; rightPending = false; rightUpSeen = false;
                         suppressRightUp = true; leftDown = false;
                         if (!lrPending) lrCount = 1; else lrCount++;
-                        if (lrCount >= 2 && BLeftRightDouble != null) {
+                        if (lrCount >= 2 && BLeftRightDouble.Count > 0) {
                             lrPending = false; lrCount = 0;
-                            ExecuteBinding(BLeftRightDouble);
+                            ExecuteBinding(ResolveMouseBinding(BLeftRightDouble));
                             return new IntPtr(1);
                         }
-                        if (BLeftRightDouble == null) {
+                        if (BLeftRightDouble.Count == 0) {
                             lrPending = false; lrCount = 0;
-                            ExecuteBinding(BLeftRight);
+                            ExecuteBinding(ResolveMouseBinding(BLeftRight));
                             return new IntPtr(1);
                         }
                         lrPending = true;
@@ -653,7 +667,7 @@ public class ShortcutHook {
                             lock (MLock) {
                                 if (capturedLrGen != lrGen || !lrPending) return;
                                 lrPending = false; lrCount = 0;
-                                ExecuteBinding(BLeftRight);
+                                ExecuteBinding(ResolveMouseBinding(BLeftRight));
                             }
                         }) { IsBackground = true }.Start();
                         return new IntPtr(1);
@@ -674,7 +688,7 @@ public class ShortcutHook {
                             int count = rightClickCount; rightClickCount = 0;
                             if      (count == 1) Reinject(!rightHeld || rightUpSeen);
                             else if (count == 2) { if (rightHeld) suppressRightUp = true; ExecuteDoubleRight(); }
-                            else                 { if (rightHeld) suppressRightUp = true; ExecuteBinding(BTripleRight); }
+                            else                 { if (rightHeld) suppressRightUp = true; ExecuteBinding(ResolveMouseBinding(BTripleRight)); }
                         }
                     }) { IsBackground = true }.Start();
                 }
@@ -692,7 +706,7 @@ public class ShortcutHook {
                     if (rightHeld) {
                         MSLLHOOKSTRUCT ms = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                         short delta = (short)((ms.mouseData >> 16) & 0xFFFF);
-                        Binding b = delta < 0 ? BRightScrollDown : BRightScrollUp;
+                        Binding b = ResolveMouseBinding(delta < 0 ? BRightScrollDown : BRightScrollUp);
                         if (b != null) {
                             mGeneration++; rightPending = false; suppressRightUp = true;
                             ExecuteBinding(b);
@@ -727,8 +741,8 @@ public class ShortcutHook {
                             wheelPending = false;
                             int count = wheelClickCount; wheelClickCount = 0;
                             if      (count == 1) ReinjectWheel(!wheelHeld || wheelUpSeen);
-                            else if (count == 2) ExecuteBinding(BDoubleWheel);
-                            else                 ExecuteBinding(BTripleWheel);
+                            else if (count == 2) ExecuteBinding(ResolveMouseBinding(BDoubleWheel));
+                            else                 ExecuteBinding(ResolveMouseBinding(BTripleWheel));
                         }
                     }) { IsBackground = true }.Start();
                 }
@@ -791,6 +805,18 @@ public class ShortcutHook {
                 return System.IO.Path.GetFileName(sb.ToString(0, (int)size));
             } finally { CloseHandle(hProc); }
         } catch { return ""; }
+    }
+
+    // Picks the right binding for the current foreground process: app-scoped first, global fallback.
+    static Binding ResolveMouseBinding(List<Binding> list) {
+        if (list == null || list.Count == 0) return null;
+        if (list.Count == 1 && list[0].App == null) return list[0]; // fast path: single global
+        string fgApp = GetForegroundProcessName();
+        foreach (Binding b in list) {
+            if (b.App != null && string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) return b;
+        }
+        foreach (Binding b in list) { if (b.App == null) return b; }
+        return null;
     }
 
     // fgApp is passed by ref so FindExact and HasStrictSuperset share the same lazy lookup per keydown.
