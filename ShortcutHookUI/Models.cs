@@ -13,11 +13,20 @@ public sealed class AppEntry
 public sealed class BindingEntry
 {
     public string trigger { get; set; } = "";
-    public string output  { get; set; } = "";
+    // Legacy single-output field — read-only for backward compat with old JSON.
+    // Normalized to outputs on load; never written.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? app    { get; set; }  // null = global; process name (e.g. "Code.exe") for app-scoped
+    public string? output  { get; set; }
+    // Chain of outputs. Always written.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? enabled  { get; set; }  // null/true = active; false = disabled (preserved but not loaded)
+    public List<string>? outputs { get; set; }
+    // Delay between chained actions (ms). Omitted when 0.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int outputDelay { get; set; } = 0;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? app    { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? enabled  { get; set; }
 }
 
 public sealed class ConfigRoot
