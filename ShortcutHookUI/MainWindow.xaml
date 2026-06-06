@@ -337,8 +337,8 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -370,7 +370,7 @@
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="0,0,-4,0">
+        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" Margin="0,0,-4,0">
             <StackPanel Margin="0,0,4,0">
 
                 <Border Style="{StaticResource Card}">
@@ -434,7 +434,7 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Border Grid.Row="3" Style="{StaticResource Card}">
+        <Border Grid.Row="2" Style="{StaticResource Card}">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
