@@ -23,8 +23,13 @@ public sealed class BindingEntry
     // Delay between chained actions (ms). Omitted when 0.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int outputDelay { get; set; } = 0;
+    // Legacy single-app field — read-only for backward compat with old JSON.
+    // Normalized to apps on load; never written.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? app    { get; set; }
+    // Multi-app scope. Null/empty = global (fires everywhere). Always written when scoped.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? apps { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? enabled  { get; set; }
 }
