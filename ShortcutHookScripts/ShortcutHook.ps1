@@ -2,8 +2,10 @@
 # System-wide low-level hook that maps mouse gestures and keyboard combos to
 # configurable outputs: keyboard chords OR shell-execute (open app/file/folder).
 #
-# Mouse gestures: left+right, left+rightx2, double-right, triple-right,
-#                 right-scroll-down, right-scroll-up, double-wheel, triple-wheel
+# Mouse gestures: left+right, left+rightx2, left+rightx3,
+#                 double-right, double-right-sel, triple-right,
+#                 right-scroll-down, right-scroll-up,
+#                 single-wheel, double-wheel, triple-wheel
 # Key triggers:   key:Ctrl+S  |  key:Ctrl+Alt+F5  |  key:Ctrl+S+L
 #
 # Output formats in shortcuts.json:
@@ -105,6 +107,8 @@ public class ShortcutHook {
     [DllImport("gdi32.dll", SetLastError = true)]  static extern IntPtr CopyEnhMetaFile(IntPtr hemfSrc, string lpszFile);
     [DllImport("gdi32.dll", SetLastError = true)]  static extern bool DeleteEnhMetaFile(IntPtr hemf);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool   GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
@@ -136,6 +140,18 @@ public class ShortcutHook {
         public uint time;      public IntPtr dwExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CURSORINFO {
+        public int    cbSize;
+        public uint   flags;
+        public IntPtr hCursor;
+        public int    ptX, ptY;
+    }
+
+    // IDC_HAND — standard system hand cursor (hovering over a hyperlink).
+    static readonly IntPtr IDC_HAND     = new IntPtr(32649);
+    static readonly IntPtr HandCursorH  = LoadCursor(IntPtr.Zero, IDC_HAND);
+
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate IntPtr LLProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -166,15 +182,17 @@ public class ShortcutHook {
     public static bool altScrollEnabled = false;
 
     // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
-    public static List<Binding> BLeftRight       = new List<Binding>();
-    public static List<Binding> BDoubleRight     = new List<Binding>();
-    public static List<Binding> BTripleRight     = new List<Binding>();
-    public static List<Binding> BRightScrollDown = new List<Binding>();
-    public static List<Binding> BRightScrollUp   = new List<Binding>();
-    public static List<Binding> BDoubleWheel     = new List<Binding>();
-    public static List<Binding> BTripleWheel     = new List<Binding>();
-    public static List<Binding> BLeftRightDouble = new List<Binding>();
-    public static List<Binding> BDoubleRightSel  = new List<Binding>();
+    public static List<Binding> BLeftRight        = new List<Binding>();
+    public static List<Binding> BLeftRightDouble  = new List<Binding>();
+    public static List<Binding> BLeftRightTriple  = new List<Binding>();
+    public static List<Binding> BDoubleRight      = new List<Binding>();
+    public static List<Binding> BDoubleRightSel   = new List<Binding>();
+    public static List<Binding> BTripleRight      = new List<Binding>();
+    public static List<Binding> BRightScrollDown  = new List<Binding>();
+    public static List<Binding> BRightScrollUp    = new List<Binding>();
+    public static List<Binding> BSingleWheel      = new List<Binding>();
+    public static List<Binding> BDoubleWheel      = new List<Binding>();
+    public static List<Binding> BTripleWheel      = new List<Binding>();
 
     public static string MakeSignature(int mods, byte[] sortedKeys) {
         string[] parts = new string[sortedKeys.Length];
@@ -184,10 +202,10 @@ public class ShortcutHook {
 
     public static void LoadBindings(Binding[] bindings) {
         MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear();
-        BLeftRight.Clear(); BDoubleRight.Clear(); BTripleRight.Clear();
+        BLeftRight.Clear(); BLeftRightDouble.Clear(); BLeftRightTriple.Clear();
+        BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
         BRightScrollDown.Clear(); BRightScrollUp.Clear();
-        BDoubleWheel.Clear(); BTripleWheel.Clear();
-        BLeftRightDouble.Clear(); BDoubleRightSel.Clear();
+        BSingleWheel.Clear(); BDoubleWheel.Clear(); BTripleWheel.Clear();
         lrPending = false; lrCount = 0;
         // Separate app-scoped and global mouse bindings so scoped are tried first per gesture.
         var scopedMouse = new Dictionary<string, List<Binding>>();
@@ -214,11 +232,13 @@ public class ShortcutHook {
         };
         addGesture("left+right",        BLeftRight);
         addGesture("left+rightx2",      BLeftRightDouble);
+        addGesture("left+rightx3",      BLeftRightTriple);
         addGesture("double-right",      BDoubleRight);
         addGesture("double-right-sel",  BDoubleRightSel);
         addGesture("triple-right",      BTripleRight);
         addGesture("right-scroll-down", BRightScrollDown);
         addGesture("right-scroll-up",   BRightScrollUp);
+        addGesture("single-wheel",      BSingleWheel);
         addGesture("double-wheel",      BDoubleWheel);
         addGesture("triple-wheel",      BTripleWheel);
         // Index keyboard bindings: scoped first so FindExact checks them before global ones.
@@ -669,23 +689,41 @@ public class ShortcutHook {
                         rightClickCount = 0; rightPending = false; rightUpSeen = false;
                         suppressRightUp = true; leftDown = false;
                         if (!lrPending) lrCount = 1; else lrCount++;
-                        if (lrCount >= 2 && BLeftRightDouble.Count > 0) {
+
+                        bool hasDouble = BLeftRightDouble.Count > 0;
+                        bool hasTriple = BLeftRightTriple.Count > 0;
+
+                        // 3+ presses: fire best matching binding immediately
+                        if (lrCount >= 3) {
+                            lrPending = false; lrCount = 0;
+                            if      (hasTriple) ExecuteBinding(ResolveMouseBinding(BLeftRightTriple));
+                            else if (hasDouble) ExecuteBinding(ResolveMouseBinding(BLeftRightDouble));
+                            else                ExecuteBinding(ResolveMouseBinding(BLeftRight));
+                            return new IntPtr(1);
+                        }
+                        // Exactly 2 and no triple bound: fire double immediately
+                        if (lrCount == 2 && hasDouble && !hasTriple) {
                             lrPending = false; lrCount = 0;
                             ExecuteBinding(ResolveMouseBinding(BLeftRightDouble));
                             return new IntPtr(1);
                         }
-                        if (BLeftRightDouble.Count == 0) {
+                        // No multi-click bindings at all: fire single immediately
+                        if (!hasDouble && !hasTriple) {
                             lrPending = false; lrCount = 0;
                             ExecuteBinding(ResolveMouseBinding(BLeftRight));
                             return new IntPtr(1);
                         }
+                        // Still within a possible longer combo: wait for more presses
                         lrPending = true;
                         new Thread(() => {
                             Thread.Sleep(dblClickMs);
                             lock (MLock) {
                                 if (capturedLrGen != lrGen || !lrPending) return;
-                                lrPending = false; lrCount = 0;
-                                ExecuteBinding(ResolveMouseBinding(BLeftRight));
+                                lrPending = false;
+                                int c = lrCount; lrCount = 0;
+                                if      (c >= 3 && hasTriple) ExecuteBinding(ResolveMouseBinding(BLeftRightTriple));
+                                else if (c >= 2 && hasDouble) ExecuteBinding(ResolveMouseBinding(BLeftRightDouble));
+                                else                          ExecuteBinding(ResolveMouseBinding(BLeftRight));
                             }
                         }) { IsBackground = true }.Start();
                         return new IntPtr(1);
@@ -743,6 +781,13 @@ public class ShortcutHook {
                 }
             }
             else if (msg == WM_MBUTTONDOWN) {
+                // Capture cursor shape now, before the timer fires, to detect link hovers.
+                // Browsers set IDC_HAND when the cursor is over a hyperlink; we reinject
+                // the native click in that case so the link opens instead of the binding firing.
+                CURSORINFO ci = new CURSORINFO(); ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+                GetCursorInfo(ref ci);
+                bool onLink = (ci.hCursor == HandCursorH);
+
                 lock (MLock) {
                     int myGen = ++wGeneration;
                     wheelHeld = true; wheelUpSeen = false;
@@ -758,7 +803,12 @@ public class ShortcutHook {
                             if (myGen != wGeneration || !wheelPending) return;
                             wheelPending = false;
                             int count = wheelClickCount; wheelClickCount = 0;
-                            if      (count == 1) ReinjectWheel(!wheelHeld || wheelUpSeen);
+                            if (count == 1) {
+                                Binding bSingle = ResolveMouseBinding(BSingleWheel);
+                                // Reinject if the cursor was over a link at click time OR no binding is set.
+                                if (bSingle != null && !onLink) ExecuteBinding(bSingle);
+                                else ReinjectWheel(!wheelHeld || wheelUpSeen);
+                            }
                             else if (count == 2) ExecuteBinding(ResolveMouseBinding(BDoubleWheel));
                             else                 ExecuteBinding(ResolveMouseBinding(BTripleWheel));
                         }
@@ -1085,7 +1135,7 @@ if (Test-Path $configPath) {
 # ---------------------------------------------------------------------------
 # Build Binding objects
 # ---------------------------------------------------------------------------
-$validGestures = @('left+right','left+rightx2','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','double-wheel','triple-wheel')
+$validGestures = @('left+right','left+rightx2','left+rightx3','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','single-wheel','double-wheel','triple-wheel')
 $built = New-Object System.Collections.Generic.List[ShortcutHook+Binding]
 
 foreach ($b in $rawBindings) {

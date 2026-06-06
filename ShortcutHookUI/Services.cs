@@ -20,8 +20,10 @@ internal static class TriggerHelpers
     public const int MOD_WIN   = 8;
 
     public static readonly string[] ValidGestures = {
-        "left+right","left+rightx2","double-right","double-right-sel","triple-right",
-        "right-scroll-down","right-scroll-up","double-wheel","triple-wheel"
+        "left+right","left+rightx2","left+rightx3",
+        "double-right","double-right-sel","triple-right",
+        "right-scroll-down","right-scroll-up",
+        "single-wheel","double-wheel","triple-wheel"
     };
 
     public static readonly Dictionary<string,int> VkMap = new(StringComparer.OrdinalIgnoreCase)

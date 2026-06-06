@@ -70,15 +70,17 @@ public partial class MainWindow : Window
     static readonly ActionKind[] ActionOrder = { ActionKind.Shortcut, ActionKind.OpenApp, ActionKind.OpenFile, ActionKind.OpenFolder, ActionKind.Command };
 
     static readonly MouseGestureDef[] MouseDefs = {
-        new("left+right",        "Left + Right click"),
-        new("left+rightx2",      "Left hold + Right x2"),
-        new("double-right",      "Right click twice"),
-        new("double-right-sel",  "Right click twice (text selected)"),
-        new("triple-right",      "Right click thrice"),
-        new("right-scroll-down", "Right hold + Scroll Down"),
-        new("right-scroll-up",   "Right hold + Scroll Up"),
-        new("double-wheel",      "Wheel double click"),
-        new("triple-wheel",      "Wheel triple click"),
+        new("left+right",        "Left Hold + Right click x1"),
+        new("left+rightx2",      "Left Hold + Right click x2"),
+        new("left+rightx3",      "Left Hold + Right click x3"),
+        new("single-wheel",      "Wheel click x1"),
+        new("double-wheel",      "Wheel click x2"),
+        new("triple-wheel",      "Wheel click x3"),
+        new("double-right",      "Right click x2"),
+        new("double-right-sel",  "Right click x2 (text selected)"),
+        new("triple-right",      "Right click x3"),
+        new("right-scroll-down", "Right Hold + Wheel Down"),
+        new("right-scroll-up",   "Right Hold + Wheel Up"),
     };
 
     static readonly Dictionary<Key,string> KeyDisplay = BuildKeyDisplay();
