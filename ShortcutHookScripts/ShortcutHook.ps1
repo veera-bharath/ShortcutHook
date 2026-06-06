@@ -169,7 +169,7 @@ public class ShortcutHook {
         public int         Mods;
         public byte[]      Keys;
         public string      Signature;
-        public string      App;           // null = global; process name for app-scoped
+        public string[]    Apps;          // null/empty = global; list of process names for app-scoped
         public int         OutputDelay;   // ms between chained steps (0 = no delay)
         public ChainStep[] Steps;         // one or more actions to execute in order
     }
@@ -213,15 +213,16 @@ public class ShortcutHook {
         var scopedKbd   = new List<Binding>();
         var globalKbd   = new List<Binding>();
         foreach (Binding b in bindings) {
+            bool isScoped = b.Apps != null && b.Apps.Length > 0;
             if (b.Kind == "mouse") {
                 MouseBindings.Add(b);
-                var dict = b.App != null ? scopedMouse : globalMouse;
+                var dict = isScoped ? scopedMouse : globalMouse;
                 List<Binding> mlist;
                 if (!dict.TryGetValue(b.MouseGesture, out mlist)) { mlist = new List<Binding>(); dict[b.MouseGesture] = mlist; }
                 mlist.Add(b);
             } else if (b.Kind == "key") {
                 KeyBindings.Add(b);
-                if (b.App != null) scopedKbd.Add(b); else globalKbd.Add(b);
+                if (isScoped) scopedKbd.Add(b); else globalKbd.Add(b);
             }
         }
         // Populate gesture lists: scoped first so ResolveMouseBinding checks them before global.
@@ -875,15 +876,23 @@ public class ShortcutHook {
         } catch { return ""; }
     }
 
+    // Case-insensitive search — avoids lambdas so ref parameters can safely call this.
+    static bool AppsContain(string[] apps, string fgApp) {
+        if (apps == null) return false;
+        for (int i = 0; i < apps.Length; i++)
+            if (string.Equals(apps[i], fgApp, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
     // Picks the right binding for the current foreground process: app-scoped first, global fallback.
     static Binding ResolveMouseBinding(List<Binding> list) {
         if (list == null || list.Count == 0) return null;
-        if (list.Count == 1 && list[0].App == null) return list[0]; // fast path: single global
+        if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) return list[0]; // fast path: single global
         string fgApp = GetForegroundProcessName();
         foreach (Binding b in list) {
-            if (b.App != null && string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) return b;
+            if (b.Apps != null && b.Apps.Length > 0 && AppsContain(b.Apps, fgApp)) return b;
         }
-        foreach (Binding b in list) { if (b.App == null) return b; }
+        foreach (Binding b in list) { if (b.Apps == null || b.Apps.Length == 0) return b; }
         return null;
     }
 
@@ -893,16 +902,16 @@ public class ShortcutHook {
         List<Binding> candidates;
         if (!KeySigIndex.TryGetValue(MakeSignature(mods, sk), out candidates)) return null;
         // Fast path: single global binding (the common case)
-        if (candidates.Count == 1 && candidates[0].App == null) return candidates[0];
+        if (candidates.Count == 1 && (candidates[0].Apps == null || candidates[0].Apps.Length == 0)) return candidates[0];
         if (fgApp == null) fgApp = GetForegroundProcessName();
         // Scoped bindings are at the front; check them first
         foreach (Binding b in candidates) {
-            if (b.App == null) continue;
-            if (string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) return b;
+            if (b.Apps == null || b.Apps.Length == 0) continue;
+            if (AppsContain(b.Apps, fgApp)) return b;
         }
         // Fall back to global binding
         foreach (Binding b in candidates) {
-            if (b.App == null) return b;
+            if (b.Apps == null || b.Apps.Length == 0) return b;
         }
         return null;
     }
@@ -911,9 +920,9 @@ public class ShortcutHook {
         if (keys.Count == 0) return false;
         foreach (Binding b in KeyBindings) {
             if (b.Mods != mods || b.Keys.Length <= keys.Count) continue;
-            if (b.App != null) {
+            if (b.Apps != null && b.Apps.Length > 0) {
                 if (fgApp == null) fgApp = GetForegroundProcessName();
-                if (!string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!AppsContain(b.Apps, fgApp)) continue;
             }
             bool ok = true;
             foreach (byte k in keys) {
@@ -1186,8 +1195,11 @@ foreach ($b in $rawBindings) {
         if ($b.PSObject.Properties.Name -contains 'outputDelay' -and $b.outputDelay -gt 0) {
             $nb.OutputDelay = [int]$b.outputDelay
         }
-        if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
-            $nb.App = $b.app.Trim()
+        # apps[] (multi-app) takes precedence; fall back to legacy app string
+        if ($b.PSObject.Properties.Name -contains 'apps' -and $b.apps -and @($b.apps).Count -gt 0) {
+            $nb.Apps = [string[]]@($b.apps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        } elseif ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
+            $nb.Apps = [string[]]@($b.app.Trim())
         }
         $built.Add($nb)
     } catch {
@@ -1210,7 +1222,7 @@ try {
         }
         $dest  = [string]::Join(' -> ', $stepDescs)
         $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }
-        $scope = if ($x.App) { " [app:$($x.App)]" } else { '' }
+        $scope = if ($x.Apps -and $x.Apps.Length -gt 0) { " [apps:$($x.Apps -join ',')]" } else { '' }
         if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}{3}" -f $x.MouseGesture, $dest, $delay, $scope) }
         else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
     }

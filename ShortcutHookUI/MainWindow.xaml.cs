@@ -47,8 +47,14 @@ public sealed class Row
     // keyboard-only
     public Button?    CaptureBtn;
     public string     Trigger = "";
-    public string?    App;
-    public ComboBox?  AppCombo;
+
+    // app scope
+    public bool          IsGlobal  = true;
+    public List<string>  Apps      = new();
+    public Button?       AppScopeBtn;
+    public Popup?        AppScopePopup;
+    public CheckBox?     GlobalCheckBox;
+    public List<(CheckBox Cb, string AppName)> AppCheckBoxes = new();
 
     // enabled state
     public bool      Enabled       = true;
@@ -129,48 +135,58 @@ public partial class MainWindow : Window
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 
-    static string? GetAppComboValue(ComboBox? cb)
-    {
-        var s = cb?.SelectedItem as string;
-        return string.IsNullOrEmpty(s) || s == "All apps" ? null : s;
-    }
+    static (bool isGlobal, List<string> apps) GetRowAppScope(Row row) =>
+        (row.IsGlobal, row.Apps);
 
-    static void PopulateAppCombo(ComboBox cb, string? current)
+    void SetRowAppScope(Row row, bool isGlobal, List<string> apps)
     {
-        cb.Items.Clear();
-        cb.Items.Add("All apps");
+        row.IsGlobal = isGlobal;
+        row.Apps     = apps;
 
-        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var p in Process.GetProcesses())
+        if (row.GlobalCheckBox != null)
+            row.GlobalCheckBox.IsChecked = isGlobal;
+
+        if (row.AppCheckBoxes != null)
         {
-            using (p)
+            var appSet = new HashSet<string>(apps, StringComparer.OrdinalIgnoreCase);
+            foreach (var (cb, name) in row.AppCheckBoxes)
             {
-                try { if (!string.IsNullOrEmpty(p.ProcessName)) names.Add(p.ProcessName + ".exe"); }
-                catch { }
+                cb.IsChecked = appSet.Contains(name);
+                cb.IsEnabled = !isGlobal;
+                cb.Opacity   = isGlobal ? 0.4 : 1.0;
             }
         }
-        foreach (var n in names) cb.Items.Add(n);
 
-        // Keep the stored value selectable even if that process isn't currently running.
-        if (!string.IsNullOrWhiteSpace(current) && !names.Contains(current))
-            cb.Items.Add(current);
-
-        if (string.IsNullOrWhiteSpace(current))
-        {
-            cb.SelectedIndex = 0;
-            return;
-        }
-        for (int i = 1; i < cb.Items.Count; i++)
-            if (string.Equals(cb.Items[i] as string, current, StringComparison.OrdinalIgnoreCase))
-                { cb.SelectedIndex = i; return; }
-        cb.SelectedIndex = 0;
+        UpdateAppScopeBtnLabel(row);
     }
 
-    static void UpdateAppComboStyle(ComboBox cb)
+    static void UpdateAppScopeBtnLabel(Row row)
     {
-        bool scoped = GetAppComboValue(cb) != null;
-        cb.BorderBrush = scoped ? AmberBrush : DarkBorder;
-        cb.Foreground  = scoped ? AmberBrush : LabelBrush;
+        if (row.AppScopeBtn == null) return;
+        if (row.IsGlobal)
+        {
+            row.AppScopeBtn.Content    = "Global";
+            row.AppScopeBtn.Foreground = LabelBrush;
+            row.AppScopeBtn.BorderBrush = DarkBorder;
+        }
+        else if (row.Apps.Count == 0)
+        {
+            row.AppScopeBtn.Content    = "Select apps";
+            row.AppScopeBtn.Foreground = RedBrush;
+            row.AppScopeBtn.BorderBrush = RedBrush;
+        }
+        else if (row.Apps.Count == 1)
+        {
+            row.AppScopeBtn.Content    = row.Apps[0];
+            row.AppScopeBtn.Foreground = AmberBrush;
+            row.AppScopeBtn.BorderBrush = AmberBrush;
+        }
+        else
+        {
+            row.AppScopeBtn.Content    = $"{row.Apps.Count} apps";
+            row.AppScopeBtn.Foreground = AmberBrush;
+            row.AppScopeBtn.BorderBrush = AmberBrush;
+        }
     }
 
     readonly List<AppEntry> _apps;
@@ -395,7 +411,12 @@ public partial class MainWindow : Window
         foreach (var trig in triggerOrder)
         {
             var variants = triggerGroups[trig]
-                .Select(b => (b.outputs ?? new List<string> { "" }, b.outputDelay, b.app, b.enabled != false))
+                .Select(b =>
+                {
+                    bool isGlobal = b.apps == null || b.apps.Count == 0;
+                    var  apps     = b.apps ?? new List<string>();
+                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, b.enabled != false);
+                })
                 .ToList();
             AddKbdTriggerCard(trig, variants);
         }
@@ -533,19 +554,19 @@ public partial class MainWindow : Window
             _mouseGestureStacks[def.Gesture] = gestureSP;
             _mouseRows[def.Gesture] = new List<Row>();
 
-            // Global row
-            var globalEntry = bindings?.FirstOrDefault(b => b.app == null);
+            // Global row: entry with no apps (null or empty list)
+            var globalEntry = bindings?.FirstOrDefault(b => b.apps == null || b.apps.Count == 0);
             AddMouseVariantRow(def, gestureSP,
                 globalEntry?.outputs ?? new List<string> { "" },
                 globalEntry?.outputDelay ?? 0,
-                null, globalEntry?.enabled != false, isGlobal: true);
+                true, new List<string>(), globalEntry?.enabled != false, isGlobal: true);
 
             // App-scoped variant rows
             if (bindings != null)
-                foreach (var b in bindings.Where(b => b.app != null))
+                foreach (var b in bindings.Where(b => b.apps != null && b.apps.Count > 0))
                     AddMouseVariantRow(def, gestureSP,
                         b.outputs ?? new List<string> { "" },
-                        b.outputDelay, b.app, b.enabled != false, isGlobal: false);
+                        b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false);
 
             MouseStack.Children.Add(gestureSP);
         }
@@ -577,7 +598,7 @@ public partial class MainWindow : Window
     }
 
     void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
-                            string? app, bool enabled, bool isGlobal)
+                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=*:   chain block border (different shade per global/variant) containing the chain stack
@@ -642,11 +663,11 @@ public partial class MainWindow : Window
             Label        = def.Label,
         };
 
-        BuildChainStack(row, outputs, app, enabled);
+        BuildChainStack(row, outputs, isGlobal_scope, apps, enabled);
         if (!enabled) grid.Opacity = 0.45;
 
         if (isGlobal)
-            variantBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, null, true, isGlobal: false);
+            variantBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, false, new List<string>(), true, isGlobal: false);
         else
             variantBtn.Click += (_, __) =>
             {
@@ -663,7 +684,7 @@ public partial class MainWindow : Window
     // =========================================================================
 
     // Builds chain items + control row into row.ChainStack.
-    void BuildChainStack(Row row, List<string> outputs, string? app, bool enabled)
+    void BuildChainStack(Row row, List<string> outputs, bool isGlobal, List<string> apps, bool enabled)
     {
         row.ChainStack.Children.Clear();
         row.Chain.Clear();
@@ -672,7 +693,7 @@ public partial class MainWindow : Window
         foreach (var o in effectiveOutputs)
             AddChainItem(row, o, rebuild: false);
 
-        var controlRow = BuildChainControlRow(row, app, enabled);
+        var controlRow = BuildChainControlRow(row, isGlobal, apps, enabled);
         row.ChainFooter = controlRow;
         row.ChainStack.Children.Add(controlRow);
 
@@ -761,24 +782,16 @@ public partial class MainWindow : Window
     }
 
     // Builds the bottom control row for a variant:
-    // [+ chain][delay-lbl][delay-tb][ms][spacer *][AppCombo 95][Enable]
-    // The app combo and enable toggle live here so they always align with the full chain block.
-    Grid BuildChainControlRow(Row row, string? app, bool enabled)
+    // [+ chain][delay-lbl][delay-tb][ms][spacer *][AppScopeBtn][Enable]
+    Grid BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled)
     {
         var footer = new Grid { Margin = new Thickness(0, 6, 0, 0) };
-        // col 0: + add-chain button
-        // col 1: "delay:" label  (hidden when chain = 1)
-        // col 2: delay textbox   (hidden when chain = 1)
-        // col 3: "ms" label      (hidden when chain = 1)
-        // col 4: spacer
-        // col 5: app combo
-        // col 6: enable toggle
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var addBtn = new Button
@@ -831,20 +844,8 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(msLbl, 3);
 
-        var appCB = new ComboBox
-        {
-            Style      = (Style)FindResource("DarkCB"),
-            Height     = 26,
-            Margin     = new Thickness(6, 0, 0, 0),
-            FontFamily = new FontFamily("Consolas"),
-            FontSize   = 11,
-            ToolTip    = "App scope — 'All apps' fires everywhere; pick a specific app to scope this binding",
-        };
-        PopulateAppCombo(appCB, app);
-        UpdateAppComboStyle(appCB);
-        appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
-        appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
-        Grid.SetColumn(appCB, 5);
+        var scopeBtn = BuildAppScopeButton(row, isGlobal, apps);
+        Grid.SetColumn(scopeBtn, 5);
 
         var enableToggle = new CheckBox
         {
@@ -855,7 +856,6 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(enableToggle, 6);
 
-        row.AppCombo      = appCB;
         row.EnabledToggle = enableToggle;
         row.Enabled       = enabled;
         row.DelayBox      = delayTB;
@@ -867,10 +867,143 @@ public partial class MainWindow : Window
         footer.Children.Add(delayLbl);
         footer.Children.Add(delayTB);
         footer.Children.Add(msLbl);
-        footer.Children.Add(appCB);
+        footer.Children.Add(scopeBtn);
         footer.Children.Add(enableToggle);
 
         return footer;
+    }
+
+    // Builds the multi-select app scope button + popup and wires it to row state.
+    Button BuildAppScopeButton(Row row, bool isGlobal, List<string> initialApps)
+    {
+        row.IsGlobal      = isGlobal;
+        row.Apps          = new List<string>(initialApps);
+        row.AppCheckBoxes = new List<(CheckBox, string)>();
+
+        var scopeBtn = new Button
+        {
+            Style      = (Style)FindResource("BtnGhost"),
+            Height     = 26,
+            Margin     = new Thickness(6, 0, 0, 0),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Padding    = new Thickness(6, 0, 6, 0),
+            ToolTip    = "App scope — Global fires everywhere; select specific apps to scope this binding",
+        };
+        row.AppScopeBtn = scopeBtn;
+
+        // Popup panel
+        var popupPanel = new Border
+        {
+            Background      = Br("#222222"),
+            BorderBrush     = Br("#444444"),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(5),
+            Padding         = new Thickness(4),
+            MaxHeight       = 260,
+        };
+        var outerSV = new ScrollViewer
+        {
+            VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        var popupStack = new StackPanel();
+        outerSV.Content  = popupStack;
+        popupPanel.Child = outerSV;
+
+        var popup = new Popup
+        {
+            Child               = popupPanel,
+            StaysOpen           = false,
+            Placement           = PlacementMode.Bottom,
+            PlacementTarget     = scopeBtn,
+            AllowsTransparency  = true,
+            MinWidth            = 160,
+            MaxWidth            = 260,
+        };
+        row.AppScopePopup = popup;
+
+        void RebuildPopupItems()
+        {
+            popupStack.Children.Clear();
+            row.AppCheckBoxes.Clear();
+
+            // Global checkbox
+            var globalCb = new CheckBox
+            {
+                Content    = "Global",
+                Foreground = Br("#E8E8E8"),
+                IsChecked  = row.IsGlobal,
+                Margin     = new Thickness(4, 4, 4, 4),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize   = 11,
+            };
+            row.GlobalCheckBox = globalCb;
+            popupStack.Children.Add(globalCb);
+
+            var sep = new Rectangle { Height = 1, Fill = Br("#444444"), Margin = new Thickness(0, 2, 0, 2) };
+            popupStack.Children.Add(sep);
+
+            // App entries: running processes (same source as old single-select combo).
+            // Process.GetProcesses() returns process names without extension; add .exe to match
+            // what GetForegroundProcessName() returns in the daemon (Path.GetFileName of full exe path).
+            var selectedSet = new HashSet<string>(row.Apps, StringComparer.OrdinalIgnoreCase);
+            var runningNames = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in Process.GetProcesses())
+            {
+                using (p)
+                {
+                    try { if (!string.IsNullOrEmpty(p.ProcessName)) runningNames.Add(p.ProcessName + ".exe"); }
+                    catch { }
+                }
+            }
+            // Include any stored names that aren't currently running so they remain selectable.
+            foreach (var stored in row.Apps)
+                runningNames.Add(stored);
+
+            foreach (var procName in runningNames)
+            {
+                var name = procName; // capture for closure
+                var cb = new CheckBox
+                {
+                    Content    = name,
+                    Foreground = Br("#CCCCCC"),
+                    IsChecked  = selectedSet.Contains(name),
+                    IsEnabled  = !row.IsGlobal,
+                    Opacity    = row.IsGlobal ? 0.4 : 1.0,
+                    Margin     = new Thickness(4, 2, 4, 2),
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize   = 11,
+                };
+                cb.Checked   += (_, __) => { if (!row.Apps.Contains(name, StringComparer.OrdinalIgnoreCase)) row.Apps.Add(name); UpdateAppScopeBtnLabel(row); };
+                cb.Unchecked += (_, __) => { row.Apps.RemoveAll(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase)); UpdateAppScopeBtnLabel(row); };
+                popupStack.Children.Add(cb);
+                row.AppCheckBoxes.Add((cb, name));
+            }
+
+            globalCb.Checked += (_, __) =>
+            {
+                row.IsGlobal = true;
+                foreach (var (cb, _) in row.AppCheckBoxes) { cb.IsEnabled = false; cb.Opacity = 0.4; }
+                UpdateAppScopeBtnLabel(row);
+            };
+            globalCb.Unchecked += (_, __) =>
+            {
+                row.IsGlobal = false;
+                foreach (var (cb, _) in row.AppCheckBoxes) { cb.IsEnabled = true; cb.Opacity = 1.0; }
+                UpdateAppScopeBtnLabel(row);
+            };
+        }
+
+        scopeBtn.Click += (_, __) =>
+        {
+            RebuildPopupItems();
+            popup.IsOpen = !popup.IsOpen;
+        };
+
+        UpdateAppScopeBtnLabel(row);
+        return scopeBtn;
     }
 
     void RefreshChainDeleteButtons(Row row)
@@ -899,7 +1032,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, string? app, bool enabled)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, bool enabled)>? variants)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -995,7 +1128,7 @@ public partial class MainWindow : Window
             },
             onRestore: () => RestoreTriggerButton(capBtn, card.Trigger));
 
-        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, null, true);
+        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), true);
 
         delCardBtn.Click += (_, __) =>
         {
@@ -1008,14 +1141,14 @@ public partial class MainWindow : Window
         _kbdCards.Add(card);
 
         if (variants is { Count: > 0 })
-            foreach (var (o, d, a, e) in variants) AddKbdVariantRow(card, o, d, a, e);
+            foreach (var (o, d, isG, apps, e) in variants) AddKbdVariantRow(card, o, d, isG, apps, e);
         else
-            AddKbdVariantRow(card, new List<string> { "" }, 0, null, true);
+            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), true);
 
         UpdateCardAccentBorder(card);
     }
 
-    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, string? app, bool enabled)
+    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, bool enabled)
     {
         // col0=*: chain block border containing chain items + control row
         // col1=Auto: delete-variant button — top-aligned
@@ -1062,7 +1195,7 @@ public partial class MainWindow : Window
             ChainStack  = chainStack,
             OutputDelay = outputDelay,
         };
-        BuildChainStack(row, outputs, app, enabled);
+        BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled);
         if (!enabled) grid.Opacity = 0.45;
 
         delBtn.Click += (_, __) =>
@@ -1080,7 +1213,7 @@ public partial class MainWindow : Window
 
     void UpdateCardAccentBorder(KbdTriggerCard card)
     {
-        bool hasAppScoped = card.Variants.Any(r => GetAppComboValue(r.AppCombo) != null);
+        bool hasAppScoped = card.Variants.Any(r => !r.IsGlobal && r.Apps.Count > 0);
         card.CardBorder.BorderBrush = hasAppScoped ? AmberBrush : Br("#2A2A2A");
     }
 
@@ -1577,12 +1710,19 @@ public partial class MainWindow : Window
         foreach (var def in MouseDefs)
         {
             var rows = _mouseRows[def.Gesture];
-            var mouseDedupSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool mouseGlobalSeen = false;
+            var  mouseAppSeen    = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in rows)
             {
                 var outputsList = GetRowOutputs(row);
                 if (outputsList.Count == 0) continue;
-                var appStr = GetAppComboValue(row.AppCombo) ?? "";
+
+                // Validate: non-global must have at least one app
+                if (!row.IsGlobal && row.Apps.Count == 0)
+                {
+                    ShowFeedback($"Mouse '{def.Label}': app-scoped variant has no apps selected.", FeedbackKind.Err);
+                    return;
+                }
 
                 if (row.Enabled)
                 {
@@ -1596,12 +1736,17 @@ public partial class MainWindow : Window
                     }
                 }
 
-                var dedupKey = appStr.ToLowerInvariant();
-                if (!mouseDedupSeen.Add(dedupKey))
+                if (row.IsGlobal)
                 {
-                    var scopeDesc = appStr.Length > 0 ? $"for app '{appStr}'" : "global";
-                    ShowFeedback($"Mouse '{def.Label}': duplicate {scopeDesc} binding.", FeedbackKind.Err);
-                    return;
+                    if (mouseGlobalSeen) { ShowFeedback($"Mouse '{def.Label}': duplicate global binding.", FeedbackKind.Err); return; }
+                    mouseGlobalSeen = true;
+                }
+                else
+                {
+                    foreach (var a in row.Apps)
+                    {
+                        if (!mouseAppSeen.Add(a)) { ShowFeedback($"Mouse '{def.Label}': app '{a}' appears in multiple variants.", FeedbackKind.Err); return; }
+                    }
                 }
 
                 var entry = new BindingEntry
@@ -1609,7 +1754,7 @@ public partial class MainWindow : Window
                     trigger     = "mouse:" + def.Gesture,
                     outputs     = outputsList,
                     outputDelay = row.OutputDelay,
-                    app         = appStr.Length > 0 ? appStr : null,
+                    apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                 };
                 if (!row.Enabled) entry.enabled = false;
                 entries.Add(entry);
@@ -1617,8 +1762,9 @@ public partial class MainWindow : Window
         }
 
         // --- Keyboard bindings ---
-        var keyParsed  = new List<(string Trigger, ParsedKey Parsed, int CardIdx, string? App)>();
-        var canonSeen  = new Dictionary<string, (int CardIdx, string? App)>();
+        var keyParsed  = new List<(string Trigger, ParsedKey Parsed, int CardIdx, bool IsGlobal, List<string> Apps)>();
+        // canon+"|global" or canon+"|app:Name" → card index
+        var canonAppSeen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         int cardIdx    = 0;
         foreach (var card in _kbdCards)
         {
@@ -1631,7 +1777,13 @@ public partial class MainWindow : Window
             foreach (var row in card.Variants)
             {
                 var outputsList = GetRowOutputs(row);
-                var appStr = GetAppComboValue(row.AppCombo) ?? "";
+
+                // Validate: non-global must have at least one app
+                if (!row.IsGlobal && row.Apps.Count == 0 && row.Enabled)
+                {
+                    ShowFeedback($"Keyboard trigger {cardIdx}: app-scoped variant has no apps selected.", FeedbackKind.Err);
+                    return;
+                }
 
                 if (!row.Enabled)
                 {
@@ -1641,7 +1793,7 @@ public partial class MainWindow : Window
                             trigger     = trig,
                             outputs     = outputsList.Count > 0 ? outputsList : new List<string> { "" },
                             outputDelay = row.OutputDelay,
-                            app         = appStr.Length > 0 ? appStr : null,
+                            apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                             enabled     = false,
                         });
                     continue;
@@ -1663,43 +1815,60 @@ public partial class MainWindow : Window
                     catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
                 }
 
-                var dedupKey = canon + "|" + appStr.ToLowerInvariant();
-                if (canonSeen.TryGetValue(dedupKey, out var prevInfo))
+                // Dedup check
+                if (row.IsGlobal)
                 {
-                    var scopeDesc = appStr.Length > 0 ? $"for app '{appStr}'" : "global";
-                    ShowFeedback($"Keyboard trigger {cardIdx}: duplicate {scopeDesc} binding (also at trigger {prevInfo.CardIdx}).", FeedbackKind.Err);
-                    return;
+                    var dedupKey = canon + "|global";
+                    if (canonAppSeen.TryGetValue(dedupKey, out var prevCard))
+                    {
+                        ShowFeedback($"Keyboard trigger {cardIdx}: duplicate global binding (also at trigger {prevCard}).", FeedbackKind.Err);
+                        return;
+                    }
+                    canonAppSeen[dedupKey] = cardIdx;
                 }
-                canonSeen[dedupKey] = (cardIdx, appStr.Length > 0 ? appStr : null);
+                else
+                {
+                    foreach (var a in row.Apps)
+                    {
+                        var dedupKey = canon + "|app:" + a;
+                        if (canonAppSeen.TryGetValue(dedupKey, out var prevCard))
+                        {
+                            ShowFeedback($"Keyboard trigger {cardIdx}: app '{a}' already used in trigger {prevCard}.", FeedbackKind.Err);
+                            return;
+                        }
+                        canonAppSeen[dedupKey] = cardIdx;
+                    }
+                }
 
                 var parsed = TriggerHelpers.ParseKeyTrigger(trig.Substring(4));
-                keyParsed.Add((trig, parsed, cardIdx, appStr.Length > 0 ? appStr : null));
+                keyParsed.Add((trig, parsed, cardIdx, row.IsGlobal, new List<string>(row.Apps)));
                 entries.Add(new BindingEntry
                 {
                     trigger     = trig,
                     outputs     = outputsList,
                     outputDelay = row.OutputDelay,
-                    app         = appStr.Length > 0 ? appStr : null,
+                    apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                 });
             }
         }
 
         if (entries.Count == 0) { ShowFeedback("Add at least one binding before saving.", FeedbackKind.Err); return; }
 
-        // Prefix-pair warnings
+        // Prefix-pair warnings: warn when two triggers with overlapping scope form a prefix pair
         var prefixPairs = new List<string>();
         for (int i = 0; i < keyParsed.Count; i++)
             for (int j = 0; j < keyParsed.Count; j++)
             {
                 if (i == j || !TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed)) continue;
-                var appI = keyParsed[i].App; var appJ = keyParsed[j].App;
-                if (appI != null && appJ != null && !string.Equals(appI, appJ, StringComparison.OrdinalIgnoreCase)) continue;
+                // Skip if both scoped but share no app
+                bool iGlobal = keyParsed[i].IsGlobal, jGlobal = keyParsed[j].IsGlobal;
+                if (!iGlobal && !jGlobal && !keyParsed[i].Apps.Intersect(keyParsed[j].Apps, StringComparer.OrdinalIgnoreCase).Any()) continue;
                 prefixPairs.Add($"{keyParsed[i].Trigger} → {keyParsed[j].Trigger}");
             }
 
         // Windows hotkey conflict probe
         var conflicts = new List<string>();
-        foreach (var (trig, parsed, _, _) in keyParsed)
+        foreach (var (trig, parsed, _, _, _) in keyParsed)
             if (HotkeyProbe.IsConflicted(parsed.Mods, parsed.Keys[0]))
                 conflicts.Add(trig.Substring(4));
 

@@ -141,6 +141,11 @@ internal static class ConfigService
             b.output = null;
             if (b.outputs == null || b.outputs.Count == 0)
                 b.outputs = new List<string> { "" };
+
+            // Normalize legacy `app` → `apps`
+            if ((b.apps == null || b.apps.Count == 0) && !string.IsNullOrWhiteSpace(b.app))
+                b.apps = new List<string> { b.app };
+            b.app = null;
         }
     }
 
