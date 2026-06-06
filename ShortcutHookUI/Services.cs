@@ -123,12 +123,24 @@ internal static class ConfigService
 
     public static readonly List<BindingEntry> Defaults = new()
     {
-        new() { trigger = "mouse:left+right",   output = "Win+Shift+S" },
-        new() { trigger = "mouse:double-right", output = "Ctrl+C" },
-        new() { trigger = "mouse:triple-right", output = "Ctrl+V" },
+        new() { trigger = "mouse:left+right",   outputs = new List<string> { "Win+Shift+S" } },
+        new() { trigger = "mouse:double-right", outputs = new List<string> { "Ctrl+C" } },
+        new() { trigger = "mouse:triple-right", outputs = new List<string> { "Ctrl+V" } },
     };
 
     public static string ConfigPath(string root) => Path.Combine(root, "shortcuts.json");
+
+    static void NormalizeOutputs(List<BindingEntry> bindings)
+    {
+        foreach (var b in bindings)
+        {
+            if ((b.outputs == null || b.outputs.Count == 0) && b.output != null)
+                b.outputs = new List<string> { b.output };
+            b.output = null;
+            if (b.outputs == null || b.outputs.Count == 0)
+                b.outputs = new List<string> { "" };
+        }
+    }
 
     public static ConfigRoot ReadConfig(string root)
     {
@@ -143,6 +155,8 @@ internal static class ConfigService
                 {
                     if (doc.bindings is not { Count: > 0 })
                         doc.bindings = new List<BindingEntry>(Defaults);
+                    else
+                        NormalizeOutputs(doc.bindings);
                     return doc;
                 }
             }

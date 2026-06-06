@@ -17,14 +17,28 @@ namespace ShortcutHookUI;
 
 public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command }
 
+// One action in a chained binding. Multiple ChainedActions make up one Row's output.
+public sealed class ChainedAction
+{
+    public ActionKind Action             = ActionKind.Shortcut;
+    public string     OutputValue        = "";
+    public object?    OutputCtrl;
+    public bool       ShortcutRecordMode = true;
+    public CheckBox?  CmdShowCheckBox;
+    public Grid       ItemContainer      = null!;  // the row grid for this chain item
+    public ComboBox   ActionCombo        = null!;
+    public Grid       OutputPanel        = null!;
+    public Button?    DeleteBtn;
+}
+
 public sealed class Row
 {
     public Grid       Container   = null!;
-    public Grid       OutputPanel = null!;
-    public ActionKind Action;
-    public string     OutputValue = "";      // shortcut (record mode), open-file, open-folder
-    public object?    OutputCtrl;            // TextBox / ComboBox / TextBlock / Button, depends on action+mode
-    public bool       ShortcutRecordMode = true;
+    public StackPanel ChainStack  = null!;   // vertical list: chain items + footer
+    public List<ChainedAction> Chain = new();
+    public int        OutputDelay = 0;       // ms between chained actions
+    public TextBox?   DelayBox;
+    public Grid       ChainFooter = null!;   // footer row: [+ Add action] [delay spinner]
 
     // mouse-only
     public string?    MouseGesture;
@@ -32,12 +46,9 @@ public sealed class Row
 
     // keyboard-only
     public Button?    CaptureBtn;
-    public string     Trigger = "";          // "" or "key:..."
-    public string?    App;                   // null = global; process name for app-scoped
+    public string     Trigger = "";
+    public string?    App;
     public ComboBox?  AppCombo;
-
-    // command-only
-    public CheckBox?  CmdShowCheckBox;
 
     // enabled state
     public bool      Enabled       = true;
@@ -171,8 +182,8 @@ public partial class MainWindow : Window
     // Capture state — plain C# fields, no scoping issues.
     bool            _captureActive;
     Button?         _captureBtn;
-    Action<string>? _captureOnCommit;   // called with composed combo (e.g. "Ctrl+S+L")
-    Action?         _captureOnRestore;  // restore button's pre-capture appearance
+    Action<string>? _captureOnCommit;
+    Action?         _captureOnRestore;
     int             _captureMods;
     readonly List<Key> _captureNonMods = new();
 
@@ -382,7 +393,7 @@ public partial class MainWindow : Window
         foreach (var trig in triggerOrder)
         {
             var variants = triggerGroups[trig]
-                .Select(b => (b.output, b.app, b.enabled != false))
+                .Select(b => (b.outputs ?? new List<string> { "" }, b.outputDelay, b.app, b.enabled != false))
                 .ToList();
             AddKbdTriggerCard(trig, variants);
         }
@@ -503,7 +514,6 @@ public partial class MainWindow : Window
 
         var configRoot = ConfigService.ReadConfig(InstallService.ScriptRoot);
 
-        // Group mouse bindings by gesture; sort each group: global first, then app-scoped.
         var gestureGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.OrdinalIgnoreCase);
         foreach (var b in configRoot.bindings)
         {
@@ -521,20 +531,24 @@ public partial class MainWindow : Window
             _mouseGestureStacks[def.Gesture] = gestureSP;
             _mouseRows[def.Gesture] = new List<Row>();
 
-            // Global row (app == null).
+            // Global row
             var globalEntry = bindings?.FirstOrDefault(b => b.app == null);
-            AddMouseVariantRow(def, gestureSP, globalEntry?.output ?? "", null, globalEntry?.enabled != false, isGlobal: true);
+            AddMouseVariantRow(def, gestureSP,
+                globalEntry?.outputs ?? new List<string> { "" },
+                globalEntry?.outputDelay ?? 0,
+                null, globalEntry?.enabled != false, isGlobal: true);
 
-            // App-scoped variant rows.
+            // App-scoped variant rows
             if (bindings != null)
                 foreach (var b in bindings.Where(b => b.app != null))
-                    AddMouseVariantRow(def, gestureSP, b.output, b.app, b.enabled != false, isGlobal: false);
+                    AddMouseVariantRow(def, gestureSP,
+                        b.outputs ?? new List<string> { "" },
+                        b.outputDelay, b.app, b.enabled != false, isGlobal: false);
 
             MouseStack.Children.Add(gestureSP);
         }
 
-        // Separator
-        MouseStack.Children.Add(new System.Windows.Shapes.Rectangle
+        MouseStack.Children.Add(new Rectangle
         {
             Height = 1, Fill = Br("#333333"), Margin = new Thickness(0, 8, 0, 8)
         });
@@ -560,25 +574,21 @@ public partial class MainWindow : Window
         MouseStack.Children.Add(altRow);
     }
 
-    void AddMouseVariantRow(MouseGestureDef def, StackPanel container, string output, string? app, bool enabled, bool isGlobal)
+    void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
+                            string? app, bool enabled, bool isGlobal)
     {
-        var action = DetectAction(output);
-
-        var grid = new Grid { Margin = new Thickness(0, 0, 0, 3) };
         // col0=175: gesture label (global) or indent arrow (variant)
-        // col1=120: action combo
-        // col2=*:   output panel
-        // col3=100: app combo
-        // col4=Auto: enable toggle
-        // col5=Auto: add (+) or delete (×) button — Auto so margin doesn't overflow a fixed column
+        // col1=*:   chain stack
+        // col2=100: app combo
+        // col3=Auto: enable toggle
+        // col4=Auto: add (+) or delete (×) button
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, 3) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // col0: label or indent
         if (isGlobal)
         {
             var lbl = new TextBlock { Text = def.Label, Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
@@ -592,14 +602,10 @@ public partial class MainWindow : Window
             grid.Children.Add(arrow);
         }
 
-        var actionCB = NewActionCombo(action);
-        actionCB.Margin = new Thickness(8, 0, 0, 0);
-        Grid.SetColumn(actionCB, 1);
+        var chainStack = new StackPanel { Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Top };
+        Grid.SetColumn(chainStack, 1);
+        grid.Children.Add(chainStack);
 
-        var outPanel = new Grid { Margin = new Thickness(8, 0, 0, 0) };
-        Grid.SetColumn(outPanel, 2);
-
-        // col3: editable app combo for all rows; global row defaults to "All apps"
         var appCB = new ComboBox
         {
             Style      = (Style)FindResource("DarkCB"),
@@ -608,18 +614,18 @@ public partial class MainWindow : Window
             FontFamily = new FontFamily("Consolas"),
             FontSize   = 11,
             ToolTip    = "App scope — 'All apps' fires everywhere; pick a specific app to scope this gesture",
+            VerticalAlignment = VerticalAlignment.Top,
         };
         PopulateAppCombo(appCB, app);
         UpdateAppComboStyle(appCB);
         appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
         appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
-        Grid.SetColumn(appCB, 3);
+        Grid.SetColumn(appCB, 2);
         grid.Children.Add(appCB);
 
-        var enableToggle = new CheckBox { Style = (Style)FindResource("Toggle"), IsChecked = enabled, Margin = new Thickness(6, 0, 0, 0), ToolTip = "Enable this binding" };
-        Grid.SetColumn(enableToggle, 4);
+        var enableToggle = new CheckBox { Style = (Style)FindResource("Toggle"), IsChecked = enabled, Margin = new Thickness(6, 0, 0, 0), ToolTip = "Enable this binding", VerticalAlignment = VerticalAlignment.Top };
+        Grid.SetColumn(enableToggle, 3);
 
-        // col5: "+" for global row, "×" for variant rows
         var actionBtn = new Button
         {
             Style   = (Style)FindResource("BtnGhost"),
@@ -630,42 +636,35 @@ public partial class MainWindow : Window
             Margin  = new Thickness(4, 0, 0, 0),
             FontSize = isGlobal ? 15 : 12,
             ToolTip  = isGlobal ? "Add an app-specific variant for this gesture" : "Remove this variant",
+            VerticalAlignment = VerticalAlignment.Top,
         };
-        Grid.SetColumn(actionBtn, 5);
+        Grid.SetColumn(actionBtn, 4);
 
-        grid.Children.Add(actionCB);
-        grid.Children.Add(outPanel);
         grid.Children.Add(enableToggle);
         grid.Children.Add(actionBtn);
 
         var row = new Row
         {
-            Container     = grid,
-            OutputPanel   = outPanel,
-            Action        = action,
-            OutputValue   = output,
-            MouseGesture  = def.Gesture,
-            Label         = def.Label,
-            App           = app,
-            AppCombo      = appCB,
-            Enabled       = enabled,
+            Container    = grid,
+            ChainStack   = chainStack,
+            OutputDelay  = outputDelay,
+            MouseGesture = def.Gesture,
+            Label        = def.Label,
+            App          = app,
+            AppCombo     = appCB,
+            Enabled      = enabled,
             EnabledToggle = enableToggle,
         };
-        SetRowOutput(row, action);
+
+        BuildChainStack(row, outputs);
         if (!enabled) grid.Opacity = 0.45;
 
         enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
         enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
 
-        actionCB.SelectionChanged += (_, __) =>
-        {
-            var idx = actionCB.SelectedIndex;
-            if (idx >= 0 && idx < ActionOrder.Length) SetRowOutput(row, ActionOrder[idx]);
-        };
-
         if (isGlobal)
         {
-            actionBtn.Click += (_, __) => AddMouseVariantRow(def, container, "", null, true, isGlobal: false);
+            actionBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, null, true, isGlobal: false);
         }
         else
         {
@@ -681,11 +680,211 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
+    // Chain stack builder
+    // =========================================================================
+
+    // Builds the chain stack UI (all chain items + footer) into row.ChainStack.
+    void BuildChainStack(Row row, List<string> outputs)
+    {
+        row.ChainStack.Children.Clear();
+        row.Chain.Clear();
+
+        var effectiveOutputs = outputs.Count > 0 ? outputs : new List<string> { "" };
+        foreach (var o in effectiveOutputs)
+            AddChainItem(row, o, rebuild: false);
+
+        var footer = BuildChainFooter(row);
+        row.ChainFooter = footer;
+        row.ChainStack.Children.Add(footer);
+
+        RefreshChainDeleteButtons(row);
+        RefreshChainFooter(row);
+    }
+
+    // Adds one action item to the chain (appends before footer if already built).
+    ChainedAction AddChainItem(Row row, string output, bool rebuild = true)
+    {
+        var action = DetectAction(output);
+
+        // Item grid: [ActionCombo 120][OutputPanel *][× Auto]
+        var itemGrid = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+        itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+        itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var actionCB = NewActionCombo(action);
+        Grid.SetColumn(actionCB, 0);
+
+        var outPanel = new Grid { Margin = new Thickness(8, 0, 0, 0) };
+        Grid.SetColumn(outPanel, 1);
+
+        var delBtn = new Button
+        {
+            Style   = (Style)FindResource("BtnGhost"),
+            Content = "✕",
+            Height  = 26,
+            Width   = 26,
+            Padding = new Thickness(0),
+            Margin  = new Thickness(4, 0, 0, 0),
+            FontSize = 11,
+            ToolTip  = "Remove this action from the chain",
+        };
+        Grid.SetColumn(delBtn, 2);
+
+        itemGrid.Children.Add(actionCB);
+        itemGrid.Children.Add(outPanel);
+        itemGrid.Children.Add(delBtn);
+
+        var item = new ChainedAction
+        {
+            Action       = action,
+            OutputValue  = output,
+            ItemContainer = itemGrid,
+            ActionCombo  = actionCB,
+            OutputPanel  = outPanel,
+            DeleteBtn    = delBtn,
+        };
+        SetChainItemOutput(row, item, action);
+
+        actionCB.SelectionChanged += (_, __) =>
+        {
+            var idx = actionCB.SelectedIndex;
+            if (idx >= 0 && idx < ActionOrder.Length) SetChainItemOutput(row, item, ActionOrder[idx]);
+        };
+
+        delBtn.Click += (_, __) =>
+        {
+            if (row.Chain.Count <= 1) return;
+            row.Chain.Remove(item);
+            // Remove item from ChainStack (before footer, so just remove by reference)
+            row.ChainStack.Children.Remove(itemGrid);
+            RefreshChainDeleteButtons(row);
+            RefreshChainFooter(row);
+        };
+
+        row.Chain.Add(item);
+
+        if (rebuild && row.ChainFooter != null)
+        {
+            // Insert before footer
+            int footerIdx = row.ChainStack.Children.IndexOf(row.ChainFooter);
+            if (footerIdx >= 0)
+                row.ChainStack.Children.Insert(footerIdx, itemGrid);
+            else
+                row.ChainStack.Children.Add(itemGrid);
+            RefreshChainDeleteButtons(row);
+            RefreshChainFooter(row);
+        }
+        else
+        {
+            row.ChainStack.Children.Add(itemGrid);
+        }
+
+        return item;
+    }
+
+    // Builds the footer row: [+ Add action]  [delay: [tb] ms]
+    Grid BuildChainFooter(Row row)
+    {
+        var footer = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var addBtn = new Button
+        {
+            Style   = (Style)FindResource("BtnGhost"),
+            Content = "+ Add action",
+            Height  = 24,
+            Padding = new Thickness(8, 0, 8, 0),
+            FontSize = 11,
+            ToolTip  = "Add another action to the chain",
+        };
+        Grid.SetColumn(addBtn, 0);
+        addBtn.Click += (_, __) =>
+        {
+            AddChainItem(row, "", rebuild: true);
+        };
+
+        var delayLbl = new TextBlock
+        {
+            Text = "delay:",
+            Foreground = DimBrush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 4, 0),
+        };
+        Grid.SetColumn(delayLbl, 2);
+
+        var delayTB = new TextBox
+        {
+            Style      = (Style)FindResource("DarkTB"),
+            Height     = 24,
+            Width      = 52,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+            Text       = row.OutputDelay > 0 ? row.OutputDelay.ToString() : "0",
+            ToolTip    = "Delay between chained actions (ms)",
+        };
+        delayTB.TextChanged += (_, __) =>
+        {
+            if (int.TryParse(delayTB.Text, out var ms) && ms >= 0)
+                row.OutputDelay = ms;
+        };
+        Grid.SetColumn(delayTB, 3);
+
+        var msLbl = new TextBlock
+        {
+            Text = " ms",
+            Foreground = DimBrush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        // Appended inline after delayTB — use a WrapPanel or just another column
+        // We'll use a second text column after the TB
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(msLbl, 4);
+
+        footer.Children.Add(addBtn);
+        footer.Children.Add(delayLbl);
+        footer.Children.Add(delayTB);
+        footer.Children.Add(msLbl);
+
+        row.DelayBox = delayTB;
+        return footer;
+    }
+
+    void RefreshChainDeleteButtons(Row row)
+    {
+        bool moreThanOne = row.Chain.Count > 1;
+        foreach (var item in row.Chain)
+            if (item.DeleteBtn != null)
+                item.DeleteBtn.Visibility = moreThanOne ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    void RefreshChainFooter(Row row)
+    {
+        // Show delay controls only when chain has multiple actions
+        if (row.ChainFooter == null) return;
+        bool multi = row.Chain.Count > 1;
+        // cols 2,3,4 are the delay controls
+        foreach (UIElement child in row.ChainFooter.Children)
+        {
+            int col = Grid.GetColumn(child);
+            if (col >= 2)
+                child.Visibility = multi ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    // =========================================================================
     // Keyboard trigger cards
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
 
-    void AddKbdTriggerCard(string trigger, List<(string output, string? app, bool enabled)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, string? app, bool enabled)>? variants)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -702,7 +901,6 @@ public partial class MainWindow : Window
 
         var cardContent = new StackPanel();
 
-        // Header: trigger capture button + "+ App" + "×" delete card
         var header = new Grid { Margin = new Thickness(0, 0, 0, 6) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -758,7 +956,6 @@ public partial class MainWindow : Window
         cardContent.Children.Add(variantStack);
         cardBorder.Child = cardContent;
 
-        // Wire up trigger capture
         var displayTrig = !string.IsNullOrEmpty(trigger) && trigger.StartsWith("key:", StringComparison.Ordinal)
             ? trigger.Substring(4) : "Click to record trigger...";
         capBtn.Content    = displayTrig;
@@ -783,7 +980,7 @@ public partial class MainWindow : Window
             },
             onRestore: () => RestoreTriggerButton(capBtn, card.Trigger));
 
-        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, "", null, true);
+        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, null, true);
 
         delCardBtn.Click += (_, __) =>
         {
@@ -795,33 +992,25 @@ public partial class MainWindow : Window
         KbdStack.Children.Add(cardBorder);
         _kbdCards.Add(card);
 
-        // Populate variants; if none provided, add one blank global row.
         if (variants is { Count: > 0 })
-            foreach (var (o, a, e) in variants) AddKbdVariantRow(card, o, a, e);
+            foreach (var (o, d, a, e) in variants) AddKbdVariantRow(card, o, d, a, e);
         else
-            AddKbdVariantRow(card, "", null, true);
+            AddKbdVariantRow(card, new List<string> { "" }, 0, null, true);
 
         UpdateCardAccentBorder(card);
     }
 
-    Row AddKbdVariantRow(KbdTriggerCard card, string output, string? app, bool enabled)
+    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, string? app, bool enabled)
     {
-        var initAction = DetectAction(output);
-
+        // col0=*: chain stack   col1=100: app combo  col2=Auto: enable  col3=Auto: delete
         var grid = new Grid { Margin = new Thickness(0, 3, 0, 0) };
-        // col0=120: action combo  col1=*: output  col2=100: app combo  col3=Auto: enable  col4=Auto: delete
-        // col4 is Auto (not fixed) so the button's left margin doesn't overflow the column width.
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var actionCB = NewActionCombo(initAction);
-        Grid.SetColumn(actionCB, 0);
-
-        var outPanel = new Grid { Margin = new Thickness(8, 0, 0, 0) };
-        Grid.SetColumn(outPanel, 1);
+        var chainStack = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
+        Grid.SetColumn(chainStack, 0);
 
         var appCB = new ComboBox
         {
@@ -831,12 +1020,13 @@ public partial class MainWindow : Window
             FontFamily = new FontFamily("Consolas"),
             FontSize   = 11,
             ToolTip    = "App scope — 'All apps' fires everywhere; pick a specific app to override per-app",
+            VerticalAlignment = VerticalAlignment.Top,
         };
         PopulateAppCombo(appCB, app);
         UpdateAppComboStyle(appCB);
         appCB.SelectionChanged += (_, __) => UpdateAppComboStyle(appCB);
         appCB.DropDownOpened   += (_, __) => { var cur = GetAppComboValue(appCB); PopulateAppCombo(appCB, cur); };
-        Grid.SetColumn(appCB, 2);
+        Grid.SetColumn(appCB, 1);
 
         var enableToggle = new CheckBox
         {
@@ -844,8 +1034,9 @@ public partial class MainWindow : Window
             IsChecked = enabled,
             Margin    = new Thickness(6, 0, 0, 0),
             ToolTip   = "Enable this binding",
+            VerticalAlignment = VerticalAlignment.Top,
         };
-        Grid.SetColumn(enableToggle, 3);
+        Grid.SetColumn(enableToggle, 2);
 
         var delBtn = new Button
         {
@@ -856,11 +1047,11 @@ public partial class MainWindow : Window
             Padding = new Thickness(0),
             Margin  = new Thickness(4, 0, 0, 0),
             FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Top,
         };
-        Grid.SetColumn(delBtn, 4);
+        Grid.SetColumn(delBtn, 3);
 
-        grid.Children.Add(actionCB);
-        grid.Children.Add(outPanel);
+        grid.Children.Add(chainStack);
         grid.Children.Add(appCB);
         grid.Children.Add(enableToggle);
         grid.Children.Add(delBtn);
@@ -868,25 +1059,18 @@ public partial class MainWindow : Window
         var row = new Row
         {
             Container     = grid,
-            OutputPanel   = outPanel,
-            Action        = initAction,
-            OutputValue   = output,
+            ChainStack    = chainStack,
+            OutputDelay   = outputDelay,
             App           = app,
             AppCombo      = appCB,
             Enabled       = enabled,
             EnabledToggle = enableToggle,
         };
-        SetRowOutput(row, initAction);
+        BuildChainStack(row, outputs);
         if (!enabled) grid.Opacity = 0.45;
 
         enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
         enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
-
-        actionCB.SelectionChanged += (_, __) =>
-        {
-            var idx = actionCB.SelectedIndex;
-            if (idx >= 0 && idx < ActionOrder.Length) SetRowOutput(row, ActionOrder[idx]);
-        };
 
         delBtn.Click += (_, __) =>
         {
@@ -998,8 +1182,6 @@ public partial class MainWindow : Window
         _captureHookId = HookApi.SetWindowsHookEx(
             HookApi.WH_KEYBOARD_LL, _captureHookProc,
             HookApi.GetModuleHandle(null), 0);
-        // If hook install fails, fall back to WPF PreviewKeyDown handlers (which can't
-        // swallow system hotkeys, but at least handle non-hotkey combos).
     }
 
     void UninstallCaptureHook()
@@ -1104,7 +1286,7 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
-    // Action selection + output panel swap
+    // Action selection + output panel swap (per ChainedAction)
     // =========================================================================
     ComboBox NewActionCombo(ActionKind initial)
     {
@@ -1112,7 +1294,6 @@ public partial class MainWindow : Window
         {
             Style  = (Style)FindResource("DarkCB"),
             Height = 28,
-            Margin = new Thickness(8,0,0,0),
         };
         foreach (var label in ActionLabels) cb.Items.Add(label);
         cb.SelectedIndex = Array.IndexOf(ActionOrder, initial);
@@ -1132,26 +1313,25 @@ public partial class MainWindow : Window
         return ActionKind.OpenFile;
     }
 
-    void SetRowOutput(Row row, ActionKind action)
+    void SetChainItemOutput(Row row, ChainedAction item, ActionKind action)
     {
-        // Snapshot current shortcut-text / command value into row.OutputValue before tearing down.
-        if (row.Action == ActionKind.Shortcut && row.OutputCtrl is TextBox prevTB)
-            row.OutputValue = prevTB.Text.Trim();
-        if (row.Action == ActionKind.Command && row.OutputCtrl is TextBox prevCmd && !string.IsNullOrWhiteSpace(prevCmd.Text))
-            row.OutputValue = (row.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + prevCmd.Text.Trim();
+        // Snapshot current text into OutputValue before tearing down controls.
+        if (item.Action == ActionKind.Shortcut && item.OutputCtrl is TextBox prevTB)
+            item.OutputValue = prevTB.Text.Trim();
+        if (item.Action == ActionKind.Command && item.OutputCtrl is TextBox prevCmd && !string.IsNullOrWhiteSpace(prevCmd.Text))
+            item.OutputValue = (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + prevCmd.Text.Trim();
 
-        // If we're in mid-capture on a button belonging to this row's output, cancel it.
-        if (_captureActive && ReferenceEquals(_captureBtn, row.OutputCtrl)) EndCapture();
+        if (_captureActive && ReferenceEquals(_captureBtn, item.OutputCtrl)) EndCapture();
 
-        row.OutputPanel.Children.Clear();
-        row.Action          = action;
-        row.OutputCtrl      = null;
-        row.CmdShowCheckBox = null;
+        item.OutputPanel.Children.Clear();
+        item.Action          = action;
+        item.OutputCtrl      = null;
+        item.CmdShowCheckBox = null;
 
         switch (action)
         {
             case ActionKind.Shortcut:
-                BuildShortcutOutput(row);
+                BuildShortcutOutput(row, item);
                 break;
             case ActionKind.OpenApp:
             {
@@ -1161,29 +1341,29 @@ public partial class MainWindow : Window
                     Height      = 28,
                     ItemsSource = _apps,
                 };
-                var curPath = row.OutputValue.StartsWith("open:", StringComparison.Ordinal)
-                    ? row.OutputValue.Substring(5) : "";
+                var curPath = item.OutputValue.StartsWith("open:", StringComparison.Ordinal)
+                    ? item.OutputValue.Substring(5) : "";
                 if (!string.IsNullOrEmpty(curPath))
                 {
                     var match = _apps.FirstOrDefault(a => string.Equals(a.Path, curPath, StringComparison.OrdinalIgnoreCase));
                     if (match is not null) cb.SelectedItem = match;
                 }
-                row.OutputPanel.Children.Add(cb);
-                row.OutputCtrl = cb;
+                item.OutputPanel.Children.Add(cb);
+                item.OutputCtrl = cb;
                 break;
             }
             case ActionKind.OpenFile:
-                AddBrowsePanel(row, isFolder: false);
+                AddBrowsePanel(item, isFolder: false);
                 break;
             case ActionKind.OpenFolder:
-                AddBrowsePanel(row, isFolder: true);
+                AddBrowsePanel(item, isFolder: true);
                 break;
             case ActionKind.Command:
             {
-                bool isShow = row.OutputValue.StartsWith("cmdw:", StringComparison.Ordinal);
-                string cmdText = isShow ? row.OutputValue.Substring(5)
-                               : row.OutputValue.StartsWith("cmd:", StringComparison.Ordinal)
-                                     ? row.OutputValue.Substring(4) : "";
+                bool isShow = item.OutputValue.StartsWith("cmdw:", StringComparison.Ordinal);
+                string cmdText = isShow ? item.OutputValue.Substring(5)
+                               : item.OutputValue.StartsWith("cmd:", StringComparison.Ordinal)
+                                     ? item.OutputValue.Substring(4) : "";
 
                 var g = new Grid();
                 g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1224,22 +1404,22 @@ public partial class MainWindow : Window
                 g.Children.Add(lbl);
                 g.Children.Add(tb);
                 g.Children.Add(showCb);
-                row.OutputPanel.Children.Add(g);
-                row.OutputCtrl      = tb;
-                row.CmdShowCheckBox = showCb;
+                item.OutputPanel.Children.Add(g);
+                item.OutputCtrl      = tb;
+                item.CmdShowCheckBox = showCb;
                 break;
             }
         }
     }
 
-    void BuildShortcutOutput(Row row)
+    void BuildShortcutOutput(Row row, ChainedAction item)
     {
         var g = new Grid();
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
 
         FrameworkElement main;
-        if (row.ShortcutRecordMode)
+        if (item.ShortcutRecordMode)
         {
             var recBtn = new Button
             {
@@ -1250,28 +1430,28 @@ public partial class MainWindow : Window
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = 11,
             };
-            RestoreOutputRecordButton(recBtn, row.OutputValue);
+            RestoreOutputRecordButton(recBtn, item.OutputValue);
 
             recBtn.Click += (_, __) => BeginCapture(
                 btn: recBtn,
                 onCommit: combo =>
                 {
-                    row.OutputValue = combo;
-                    RestoreOutputRecordButton(recBtn, row.OutputValue);
+                    item.OutputValue = combo;
+                    RestoreOutputRecordButton(recBtn, item.OutputValue);
                 },
-                onRestore: () => RestoreOutputRecordButton(recBtn, row.OutputValue));
+                onRestore: () => RestoreOutputRecordButton(recBtn, item.OutputValue));
 
             main = recBtn;
-            row.OutputCtrl = recBtn;
+            item.OutputCtrl = recBtn;
         }
         else
         {
             var tb = new TextBox { Style = (Style)FindResource("DarkTB"), Height = 28 };
-            tb.Text = !string.IsNullOrEmpty(row.OutputValue) &&
-                      !row.OutputValue.StartsWith("open:", StringComparison.Ordinal)
-                ? row.OutputValue : "";
+            tb.Text = !string.IsNullOrEmpty(item.OutputValue) &&
+                      !item.OutputValue.StartsWith("open:", StringComparison.Ordinal)
+                ? item.OutputValue : "";
             main = tb;
-            row.OutputCtrl = tb;
+            item.OutputCtrl = tb;
         }
         Grid.SetColumn(main, 0);
 
@@ -1282,20 +1462,20 @@ public partial class MainWindow : Window
             Margin  = new Thickness(6,0,0,0),
             Padding = new Thickness(0),
             FontSize = 13,
-            Content  = row.ShortcutRecordMode ? "Aa" : "⌨",   // ⌨
-            ToolTip  = row.ShortcutRecordMode ? "Switch to typing" : "Switch to recording",
+            Content  = item.ShortcutRecordMode ? "Aa" : "⌨",
+            ToolTip  = item.ShortcutRecordMode ? "Switch to typing" : "Switch to recording",
         };
         Grid.SetColumn(toggle, 1);
 
         toggle.Click += (_, __) =>
         {
-            row.ShortcutRecordMode = !row.ShortcutRecordMode;
-            SetRowOutput(row, ActionKind.Shortcut);
+            item.ShortcutRecordMode = !item.ShortcutRecordMode;
+            SetChainItemOutput(row, item, ActionKind.Shortcut);
         };
 
         g.Children.Add(main);
         g.Children.Add(toggle);
-        row.OutputPanel.Children.Add(g);
+        item.OutputPanel.Children.Add(g);
     }
 
     void RestoreOutputRecordButton(Button btn, string value)
@@ -1307,7 +1487,7 @@ public partial class MainWindow : Window
         btn.BorderBrush = DarkBorder;
     }
 
-    void AddBrowsePanel(Row row, bool isFolder)
+    void AddBrowsePanel(ChainedAction item, bool isFolder)
     {
         var g = new Grid();
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -1321,8 +1501,8 @@ public partial class MainWindow : Window
             FontSize          = 11,
             Margin            = new Thickness(0,0,6,0),
         };
-        var curPath = row.OutputValue.StartsWith("open:", StringComparison.Ordinal)
-            ? row.OutputValue.Substring(5) : "";
+        var curPath = item.OutputValue.StartsWith("open:", StringComparison.Ordinal)
+            ? item.OutputValue.Substring(5) : "";
         if (!string.IsNullOrEmpty(curPath))
         {
             pathTB.Text       = curPath;
@@ -1351,7 +1531,7 @@ public partial class MainWindow : Window
                 var ofd = new Microsoft.Win32.OpenFileDialog { Title = "Select a file", Filter = "All files (*.*)|*.*" };
                 if (ofd.ShowDialog(this) == true)
                 {
-                    row.OutputValue  = "open:" + ofd.FileName;
+                    item.OutputValue  = "open:" + ofd.FileName;
                     pathTB.Text      = ofd.FileName;
                     pathTB.Foreground = Br("#CCCCCC");
                 }
@@ -1361,7 +1541,7 @@ public partial class MainWindow : Window
                 using var fbd = new System.Windows.Forms.FolderBrowserDialog { Description = "Select a folder" };
                 if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
                 {
-                    row.OutputValue  = "open:" + fbd.SelectedPath;
+                    item.OutputValue  = "open:" + fbd.SelectedPath;
                     pathTB.Text      = fbd.SelectedPath;
                     pathTB.Foreground = Br("#CCCCCC");
                 }
@@ -1370,22 +1550,26 @@ public partial class MainWindow : Window
 
         g.Children.Add(pathTB);
         g.Children.Add(browseBtn);
-        row.OutputPanel.Children.Add(g);
-        row.OutputCtrl = pathTB;
+        item.OutputPanel.Children.Add(g);
+        item.OutputCtrl = pathTB;
     }
 
-    string GetRowOutput(Row row) => row.Action switch
+    string GetChainItemOutput(ChainedAction item) => item.Action switch
     {
-        ActionKind.Shortcut   => row.ShortcutRecordMode
-                                    ? row.OutputValue
-                                    : (row.OutputCtrl as TextBox)?.Text.Trim() ?? "",
-        ActionKind.OpenApp    => (row.OutputCtrl is ComboBox cb && cb.SelectedItem is AppEntry a) ? "open:" + a.Path : "",
-        ActionKind.OpenFile   => row.OutputValue,
-        ActionKind.OpenFolder => row.OutputValue,
-        ActionKind.Command    => (row.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
-                                    ? (row.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
+        ActionKind.Shortcut   => item.ShortcutRecordMode
+                                    ? item.OutputValue
+                                    : (item.OutputCtrl as TextBox)?.Text.Trim() ?? "",
+        ActionKind.OpenApp    => (item.OutputCtrl is ComboBox cb && cb.SelectedItem is AppEntry a) ? "open:" + a.Path : "",
+        ActionKind.OpenFile   => item.OutputValue,
+        ActionKind.OpenFolder => item.OutputValue,
+        ActionKind.Command    => (item.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
+                                    ? (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
         _                     => "",
     };
+
+    // Returns non-empty outputs only.
+    List<string> GetRowOutputs(Row row) =>
+        row.Chain.Select(GetChainItemOutput).Where(s => !string.IsNullOrEmpty(s)).ToList();
 
     // =========================================================================
     // Save
@@ -1403,14 +1587,20 @@ public partial class MainWindow : Window
             var mouseDedupSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in rows)
             {
-                var outp   = GetRowOutput(row);
-                if (string.IsNullOrEmpty(outp)) continue;
+                var outputsList = GetRowOutputs(row);
+                if (outputsList.Count == 0) continue;
                 var appStr = GetAppComboValue(row.AppCombo) ?? "";
 
-                if (row.Enabled && row.Action == ActionKind.Shortcut)
+                if (row.Enabled)
                 {
-                    try { TriggerHelpers.ValidateShortcutOutput(outp); }
-                    catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
+                    foreach (var outp in outputsList)
+                    {
+                        if (outp.StartsWith("open:", StringComparison.Ordinal) ||
+                            outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
+                            outp.StartsWith("cmdw:", StringComparison.Ordinal)) continue;
+                        try { TriggerHelpers.ValidateShortcutOutput(outp); }
+                        catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
+                    }
                 }
 
                 var dedupKey = appStr.ToLowerInvariant();
@@ -1421,7 +1611,13 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                var entry = new BindingEntry { trigger = "mouse:" + def.Gesture, output = outp, app = appStr.Length > 0 ? appStr : null };
+                var entry = new BindingEntry
+                {
+                    trigger     = "mouse:" + def.Gesture,
+                    outputs     = outputsList,
+                    outputDelay = row.OutputDelay,
+                    app         = appStr.Length > 0 ? appStr : null,
+                };
                 if (!row.Enabled) entry.enabled = false;
                 entries.Add(entry);
             }
@@ -1436,30 +1632,40 @@ public partial class MainWindow : Window
             cardIdx++;
             if (card.Variants.Count == 0) continue;
             var trig = card.Trigger;
-            bool anyContent = card.Variants.Any(r => !string.IsNullOrEmpty(GetRowOutput(r)));
+            bool anyContent = card.Variants.Any(r => GetRowOutputs(r).Count > 0);
             if (string.IsNullOrEmpty(trig) && !anyContent) continue;
 
             foreach (var row in card.Variants)
             {
-                var outp   = GetRowOutput(row);
+                var outputsList = GetRowOutputs(row);
                 var appStr = GetAppComboValue(row.AppCombo) ?? "";
 
                 if (!row.Enabled)
                 {
                     if (!string.IsNullOrEmpty(trig))
-                        entries.Add(new BindingEntry { trigger = trig, output = outp, app = appStr.Length > 0 ? appStr : null, enabled = false });
+                        entries.Add(new BindingEntry
+                        {
+                            trigger     = trig,
+                            outputs     = outputsList.Count > 0 ? outputsList : new List<string> { "" },
+                            outputDelay = row.OutputDelay,
+                            app         = appStr.Length > 0 ? appStr : null,
+                            enabled     = false,
+                        });
                     continue;
                 }
 
                 if (string.IsNullOrEmpty(trig)) { ShowFeedback($"Keyboard trigger {cardIdx}: no trigger recorded.", FeedbackKind.Err); return; }
-                if (string.IsNullOrEmpty(outp)) { ShowFeedback($"Keyboard trigger {cardIdx}: no output configured.", FeedbackKind.Err); return; }
+                if (outputsList.Count == 0) { ShowFeedback($"Keyboard trigger {cardIdx}: no output configured.", FeedbackKind.Err); return; }
 
                 string canon;
                 try { canon = TriggerHelpers.CanonicalizeTrigger(trig); }
                 catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
 
-                if (row.Action == ActionKind.Shortcut)
+                foreach (var outp in outputsList)
                 {
+                    if (outp.StartsWith("open:", StringComparison.Ordinal) ||
+                        outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
+                        outp.StartsWith("cmdw:", StringComparison.Ordinal)) continue;
                     try { TriggerHelpers.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
                 }
@@ -1475,13 +1681,19 @@ public partial class MainWindow : Window
 
                 var parsed = TriggerHelpers.ParseKeyTrigger(trig.Substring(4));
                 keyParsed.Add((trig, parsed, cardIdx, appStr.Length > 0 ? appStr : null));
-                entries.Add(new BindingEntry { trigger = trig, output = outp, app = appStr.Length > 0 ? appStr : null });
+                entries.Add(new BindingEntry
+                {
+                    trigger     = trig,
+                    outputs     = outputsList,
+                    outputDelay = row.OutputDelay,
+                    app         = appStr.Length > 0 ? appStr : null,
+                });
             }
         }
 
         if (entries.Count == 0) { ShowFeedback("Add at least one binding before saving.", FeedbackKind.Err); return; }
 
-        // Prefix-pair warnings (only between bindings that share app scope)
+        // Prefix-pair warnings
         var prefixPairs = new List<string>();
         for (int i = 0; i < keyParsed.Count; i++)
             for (int j = 0; j < keyParsed.Count; j++)

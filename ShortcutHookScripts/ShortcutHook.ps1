@@ -140,17 +140,22 @@ public class ShortcutHook {
     private delegate IntPtr LLProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     // ---------- Binding ----------
+    public class ChainStep {
+        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine is set
+        public string OpenPath;  // shell-execute target; null when Output/CmdLine is set
+        public string CmdLine;   // cmd.exe command; null when Output/OpenPath is set
+        public bool   CmdShow;   // true = visible cmd window (/k), false = hidden (/c)
+    }
+
     public class Binding {
-        public string Kind;          // "mouse" | "key"
-        public string MouseGesture;
-        public int    Mods;
-        public byte[] Keys;
-        public byte[] Output;        // keyboard chord; null when OpenPath/CmdLine is set
-        public string OpenPath;      // shell-execute target; null when Output/CmdLine is set
-        public string CmdLine;       // cmd.exe command; null when Output/OpenPath is set
-        public bool   CmdShow;       // true = visible cmd window (/k), false = hidden (/c)
-        public string Signature;
-        public string App;           // null = global; process name (case-insensitive) for app-scoped
+        public string      Kind;          // "mouse" | "key"
+        public string      MouseGesture;
+        public int         Mods;
+        public byte[]      Keys;
+        public string      Signature;
+        public string      App;           // null = global; process name for app-scoped
+        public int         OutputDelay;   // ms between chained steps (0 = no delay)
+        public ChainStep[] Steps;         // one or more actions to execute in order
     }
 
     public static List<Binding> MouseBindings = new List<Binding>();
@@ -508,45 +513,58 @@ public class ShortcutHook {
     }
 
     // ---------- Output dispatch ----------
-    static void ExecuteBinding(Binding b) {
-        if (b == null) return;
-        if (b.OpenPath != null) {
+    static void ExecuteStep(ChainStep step) {
+        if (step == null) return;
+        if (step.OpenPath != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
             // Don't inject a synthetic Win-up here — that itself triggers Start Menu.
             // Instead mark that we need to release Win at physical Win-up time, where
             // we can sandwich it between Ctrl events to break the clean-tap sequence.
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
-            string path = b.OpenPath;
-            new Thread(() => {
-                try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-                catch { }
-            }) { IsBackground = true }.Start();
-        } else if (b.CmdLine != null) {
+            string path = step.OpenPath;
+            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
+        } else if (step.CmdLine != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
-            string cmd = b.CmdLine;
-            bool show = b.CmdShow;
-            new Thread(() => {
-                try {
-                    if (show) {
-                        Process.Start(new ProcessStartInfo("cmd.exe") {
-                            Arguments = "/k " + cmd,
-                            UseShellExecute = true,
-                        });
-                    } else {
-                        Process.Start(new ProcessStartInfo("cmd.exe") {
-                            Arguments = "/c " + cmd,
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                        });
-                    }
-                } catch { }
-            }) { IsBackground = true }.Start();
+            string cmd = step.CmdLine;
+            bool show = step.CmdShow;
+            try {
+                if (show) {
+                    Process.Start(new ProcessStartInfo("cmd.exe") {
+                        Arguments = "/k " + cmd,
+                        UseShellExecute = true,
+                    });
+                } else {
+                    Process.Start(new ProcessStartInfo("cmd.exe") {
+                        Arguments = "/c " + cmd,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    });
+                }
+            } catch { }
         } else {
-            FireOutput(b.Output);
+            FireOutput(step.Output);
         }
+    }
+
+    static void ExecuteBinding(Binding b) {
+        if (b == null || b.Steps == null || b.Steps.Length == 0) return;
+        // Single-action with no delay: fast path — run inline (FireOutput is safe in hook callback).
+        if (b.Steps.Length == 1 && b.OutputDelay == 0 && b.Steps[0].Output != null) {
+            FireOutput(b.Steps[0].Output);
+            return;
+        }
+        // Chain or open/cmd step: run on background thread so the callback returns quickly.
+        ChainStep[] steps = b.Steps;
+        int delay = b.OutputDelay;
+        new Thread(() => {
+            for (int i = 0; i < steps.Length; i++) {
+                if (i > 0 && delay > 0) Thread.Sleep(delay);
+                ExecuteStep(steps[i]);
+            }
+        }) { IsBackground = true }.Start();
     }
 
     static void FireOutput(byte[] chord) {
@@ -1088,23 +1106,43 @@ foreach ($b in $rawBindings) {
             Write-Log "Skip unknown trigger prefix: $($b.trigger)"; continue
         }
 
-        if ($b.output -match '^open:(.+)$') {
-            $nb.OpenPath = $Matches[1].Trim()
-        } elseif ($b.output -match '^cmdw:(.+)$') {
-            $nb.CmdLine = $Matches[1].Trim(); $nb.CmdShow = $true
-        } elseif ($b.output -match '^cmd:(.+)$') {
-            $cmdVal = $Matches[1].Trim()
-            if ($cmdVal -match '^cmd:(.+)$') { $cmdVal = $Matches[1].Trim() }
-            $nb.CmdLine = $cmdVal; $nb.CmdShow = $false
-        } else {
-            $nb.Output = Resolve-OutputChord $b.output
+        # Resolve outputs: prefer 'outputs' array, fall back to legacy 'output' string.
+        $outputsList = $null
+        if ($b.PSObject.Properties.Name -contains 'outputs' -and $b.outputs -and @($b.outputs).Count -gt 0) {
+            $outputsList = @($b.outputs)
+        } elseif ($b.PSObject.Properties.Name -contains 'output' -and $b.output) {
+            $outputsList = @($b.output)
+        }
+        if (-not $outputsList -or $outputsList.Count -eq 0) { Write-Log "Skip no-output binding: $($b.trigger)"; continue }
+
+        $steps = New-Object System.Collections.Generic.List[ShortcutHook+ChainStep]
+        foreach ($outStr in $outputsList) {
+            $step = [ShortcutHook+ChainStep]::new()
+            if ($outStr -match '^open:(.+)$') {
+                $step.OpenPath = $Matches[1].Trim()
+            } elseif ($outStr -match '^cmdw:(.+)$') {
+                $step.CmdLine = $Matches[1].Trim(); $step.CmdShow = $true
+            } elseif ($outStr -match '^cmd:(.+)$') {
+                $cmdVal = $Matches[1].Trim()
+                if ($cmdVal -match '^cmd:(.+)$') { $cmdVal = $Matches[1].Trim() }
+                $step.CmdLine = $cmdVal; $step.CmdShow = $false
+            } else {
+                $step.Output = Resolve-OutputChord $outStr
+            }
+            $steps.Add($step)
+        }
+        $nb.Steps = $steps.ToArray()
+
+        if ($b.PSObject.Properties.Name -contains 'outputDelay' -and $b.outputDelay -gt 0) {
+            $nb.OutputDelay = [int]$b.outputDelay
         }
         if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
             $nb.App = $b.app.Trim()
         }
         $built.Add($nb)
     } catch {
-        Write-Log "Skip '$($b.trigger)' -> '$($b.output)': $_"
+        $outRef = if ($b.PSObject.Properties.Name -contains 'outputs') { ($b.outputs -join ', ') } else { $b.output }
+        Write-Log "Skip '$($b.trigger)' -> '$outRef': $_"
     }
 }
 
@@ -1112,10 +1150,19 @@ try {
     [ShortcutHook]::LoadBindings($built.ToArray())
     Write-Log ("Loaded {0} binding(s)." -f $built.Count)
     foreach ($x in $built) {
-        $dest  = if ($x.OpenPath) { "open:$($x.OpenPath)" } elseif ($x.CmdLine) { if ($x.CmdShow) { "cmdw:$($x.CmdLine)" } else { "cmd:$($x.CmdLine)" } } else { "[{0}]" -f ($x.Output -join ',') }
-        $scope = if ($x.App) { " [app:$($x.App)]" } else { "" }
-        if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}" -f $x.MouseGesture, $dest, $scope) }
-        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}" -f $x.Mods, ($x.Keys -join ','), $dest, $scope) }
+        $stepDescs = @()
+        foreach ($s in $x.Steps) {
+            if ($s.OpenPath) { $stepDescs += "open:$($s.OpenPath)" }
+            elseif ($s.CmdLine) {
+                if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
+                else { $stepDescs += "cmd:$($s.CmdLine)" }
+            } else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
+        }
+        $dest  = [string]::Join(' -> ', $stepDescs)
+        $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }
+        $scope = if ($x.App) { " [app:$($x.App)]" } else { '' }
+        if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}{3}" -f $x.MouseGesture, $dest, $delay, $scope) }
+        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
     }
 } catch { Write-Log "LoadBindings failed: $_"; exit 1 }
 
@@ -1131,7 +1178,15 @@ if (-not $mutexCreated) { Write-Log 'Already running.'; exit }
 
 try {
     Write-Host 'ShortcutHook active:' -ForegroundColor Green
-    foreach ($b in $rawBindings) { Write-Host ("  {0,-28} ->  {1}{2}" -f $b.trigger, $b.output, $(if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) { "  [app:$($b.app)]" } else { "" })) -ForegroundColor Cyan }
+    foreach ($b in $rawBindings) {
+        $outDisplay = $b.output
+        if ($b.PSObject.Properties.Name -contains 'outputs' -and $b.outputs) {
+            $outDisplay = [string]::Join(' -> ', @($b.outputs))
+        }
+        $appDisplay = ''
+        if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) { $appDisplay = "  [app:$($b.app)]" }
+        Write-Host ("  {0,-28} ->  {1}{2}" -f $b.trigger, $outDisplay, $appDisplay) -ForegroundColor Cyan
+    }
     Write-Host 'Ctrl+C to stop.' -ForegroundColor DarkGray
     [ShortcutHook]::Start()
     Write-Log 'Message loop exited normally.'
