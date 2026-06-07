@@ -174,10 +174,13 @@ public class ShortcutHook {
         public string[]    Apps;          // null/empty = global; list of process names for app-scoped
         public int         OutputDelay;   // ms between chained steps (0 = no delay)
         public ChainStep[] Steps;         // one or more actions to execute in order
+        public bool        Debounce;      // ignore repeated scroll fires within SCROLL_DEBOUNCE_MS
     }
 
     public static List<Binding> MouseBindings = new List<Binding>();
     public static List<Binding> KeyBindings   = new List<Binding>();
+    static readonly Dictionary<Binding, int> ScrollDebounce = new Dictionary<Binding, int>();
+    const int SCROLL_DEBOUNCE_MS = 200;
     // Each signature maps to an ordered list: app-scoped bindings first, global last.
     public static Dictionary<string, List<Binding>> KeySigIndex = new Dictionary<string, List<Binding>>();
 
@@ -207,7 +210,7 @@ public class ShortcutHook {
     }
 
     public static void LoadBindings(Binding[] bindings) {
-        MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear();
+        MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear(); ScrollDebounce.Clear();
         BLeftRight.Clear(); BLeftRightDouble.Clear(); BLeftRightTriple.Clear();
         BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
         BRightScrollDown.Clear(); BRightScrollUp.Clear();
@@ -809,7 +812,13 @@ public class ShortcutHook {
                         Binding b = ResolveMouseBinding(delta < 0 ? BRightScrollDown : BRightScrollUp);
                         if (b != null) {
                             mGeneration++; rightPending = false; suppressRightUp = true;
-                            ExecuteBinding(b);
+                            bool shouldFire = true;
+                            if (b.Debounce) {
+                                int now = Environment.TickCount; int last;
+                                if (ScrollDebounce.TryGetValue(b, out last) && (now - last) < SCROLL_DEBOUNCE_MS) shouldFire = false;
+                                else ScrollDebounce[b] = now;
+                            }
+                            if (shouldFire) ExecuteBinding(b);
                             return new IntPtr(1);
                         }
                     } else {
@@ -822,7 +831,16 @@ public class ShortcutHook {
                         if      (ctrlHeld && shiftHeld) b = ResolveMouseBinding(delta < 0 ? BCtrlShiftScrollDown : BCtrlShiftScrollUp);
                         else if (shiftHeld)             b = ResolveMouseBinding(delta < 0 ? BShiftScrollDown     : BShiftScrollUp);
                         else if (altHeld)               b = ResolveMouseBinding(delta < 0 ? BAltScrollDown       : BAltScrollUp);
-                        if (b != null) { ExecuteBinding(b); return new IntPtr(1); }
+                        if (b != null) {
+                            bool shouldFire = true;
+                            if (b.Debounce) {
+                                int now = Environment.TickCount; int last;
+                                if (ScrollDebounce.TryGetValue(b, out last) && (now - last) < SCROLL_DEBOUNCE_MS) shouldFire = false;
+                                else ScrollDebounce[b] = now;
+                            }
+                            if (shouldFire) ExecuteBinding(b);
+                            return new IntPtr(1);
+                        }
                     }
                 }
             }
@@ -1246,6 +1264,9 @@ foreach ($b in $rawBindings) {
             $nb.Apps = [string[]]@($b.apps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         } elseif ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
             $nb.Apps = [string[]]@($b.app.Trim())
+        }
+        if ($b.PSObject.Properties.Name -contains 'debounce' -and $b.debounce -eq $true) {
+            $nb.Debounce = $true
         }
         $built.Add($nb)
     } catch {

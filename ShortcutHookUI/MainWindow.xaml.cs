@@ -60,6 +60,10 @@ public sealed class Row
     public bool      Enabled          = true;
     public CheckBox? EnabledToggle;
 
+    // debounce (scroll gestures only): ignore repeats within 200 ms
+    public bool      Debounce         = false;
+    public CheckBox? DebounceToggle;
+
     // gesture-specific action options (null → StandardActions)
     public ActionDef[]? AvailableActions;
 }
@@ -581,14 +585,16 @@ public partial class MainWindow : Window
             AddMouseVariantRow(def, gestureSP,
                 globalEntry?.outputs ?? new List<string> { "" },
                 globalEntry?.outputDelay ?? 0,
-                true, new List<string>(), globalEntry?.enabled != false, isGlobal: true);
+                true, new List<string>(), globalEntry?.enabled != false, isGlobal: true,
+                debounce: globalEntry?.debounce ?? false);
 
             // App-scoped variant rows
             if (bindings != null)
                 foreach (var b in bindings.Where(b => b.apps != null && b.apps.Count > 0))
                     AddMouseVariantRow(def, gestureSP,
                         b.outputs ?? new List<string> { "" },
-                        b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false);
+                        b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false,
+                        debounce: b.debounce);
 
             MouseStack.Children.Add(gestureSP);
         }
@@ -596,7 +602,7 @@ public partial class MainWindow : Window
     }
 
     void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
-                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal)
+                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=*:   chain block border (different shade per global/variant) containing the chain stack
@@ -660,6 +666,7 @@ public partial class MainWindow : Window
             MouseGesture     = def.Gesture,
             Label            = def.Label,
             AvailableActions = BuildActionsForGesture(def),
+            Debounce         = debounce,
         };
 
         BuildChainStack(row, outputs, isGlobal_scope, apps, enabled);
@@ -870,6 +877,40 @@ public partial class MainWindow : Window
         footer.Children.Add(msLbl);
         footer.Children.Add(scopeBtn);
         footer.Children.Add(enableToggle);
+
+        if (row.MouseGesture?.Contains("scroll") == true)
+        {
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var debounceLbl = new TextBlock
+            {
+                Text = "debounce",
+                Foreground = DimBrush,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 3, 0),
+                ToolTip = "Ignore repeated scroll firings within 200 ms",
+            };
+            Grid.SetColumn(debounceLbl, 7);
+
+            var debounceToggle = new CheckBox
+            {
+                Style     = (Style)FindResource("Toggle"),
+                IsChecked = row.Debounce,
+                Margin    = new Thickness(0, 0, 0, 0),
+                ToolTip   = "Ignore repeated scroll firings within 200 ms",
+            };
+            Grid.SetColumn(debounceToggle, 8);
+
+            row.DebounceToggle = debounceToggle;
+            debounceToggle.Checked   += (_, __) => row.Debounce = true;
+            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
+
+            footer.Children.Add(debounceLbl);
+            footer.Children.Add(debounceToggle);
+        }
 
         return footer;
     }
@@ -1800,6 +1841,7 @@ public partial class MainWindow : Window
                     apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                 };
                 if (!row.Enabled) entry.enabled = false;
+                if (row.Debounce)  entry.debounce = true;
                 entries.Add(entry);
             }
         }
