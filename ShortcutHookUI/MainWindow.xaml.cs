@@ -1440,10 +1440,10 @@ public partial class MainWindow : Window
             output.StartsWith("cmdw:", StringComparison.Ordinal)) return ActionKind.Command;
         if (output == "hscroll:left"   && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
         if (output == "hscroll:right"  && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
-        if (output == "Home"           && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
-        if (output == "End"            && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
-        if (output == "Ctrl+Left"      && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
-        if (output == "Ctrl+Right"     && Has(ActionKind.CtrlShiftRight)) return ActionKind.CtrlShiftRight;
+        if (output == "Shift+Home"         && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
+        if (output == "Shift+End"          && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
+        if (output == "Ctrl+Shift+Left"    && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
+        if (output == "Ctrl+Shift+Right"   && Has(ActionKind.CtrlShiftRight)) return ActionKind.CtrlShiftRight;
         if (string.IsNullOrEmpty(output) || !output.StartsWith("open:", StringComparison.Ordinal))
             return ActionKind.Shortcut;
         var p = output.Substring(5);
@@ -1730,10 +1730,10 @@ public partial class MainWindow : Window
         ActionKind.OpenFolder      => item.OutputValue,
         ActionKind.Command         => (item.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
                                          ? (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
-        ActionKind.ShiftHome       => "Home",
-        ActionKind.ShiftEnd        => "End",
-        ActionKind.CtrlShiftLeft   => "Ctrl+Left",
-        ActionKind.CtrlShiftRight  => "Ctrl+Right",
+        ActionKind.ShiftHome       => "Shift+Home",
+        ActionKind.ShiftEnd        => "Shift+End",
+        ActionKind.CtrlShiftLeft   => "Ctrl+Shift+Left",
+        ActionKind.CtrlShiftRight  => "Ctrl+Shift+Right",
         ActionKind.HScrollLeft     => "hscroll:left",
         ActionKind.HScrollRight    => "hscroll:right",
         _                          => "",
