@@ -104,13 +104,13 @@ public partial class MainWindow : Window
         new("right-scroll-down", "Right Hold + Wheel Down"),
         new("right-scroll-up",   "Right Hold + Wheel Up"),
         new("shift-scroll-up",   "Shift + Wheel Up",
-            new("Move to line start (Home)",                ActionKind.ShiftHome)),
+            new("Select to line start (Shift+Home)",        ActionKind.ShiftHome)),
         new("shift-scroll-down", "Shift + Wheel Down",
-            new("Move to line end (End)",                   ActionKind.ShiftEnd)),
+            new("Select to line end (Shift+End)",           ActionKind.ShiftEnd)),
         new("ctrl-shift-scroll-up",   "Ctrl+Shift + Wheel Up",
-            new("Move word left (Ctrl+Left)",               ActionKind.CtrlShiftLeft)),
+            new("Select word left (Ctrl+Shift+Left)",       ActionKind.CtrlShiftLeft)),
         new("ctrl-shift-scroll-down", "Ctrl+Shift + Wheel Down",
-            new("Move word right (Ctrl+Right)",             ActionKind.CtrlShiftRight)),
+            new("Select word right (Ctrl+Shift+Right)",     ActionKind.CtrlShiftRight)),
         new("alt-scroll-up",   "Alt + Wheel Up",
             new("Scroll left (horizontal)",                 ActionKind.HScrollLeft)),
         new("alt-scroll-down", "Alt + Wheel Down",
@@ -1505,10 +1505,10 @@ public partial class MainWindow : Window
             case ActionKind.HScrollRight:
             {
                 var desc = action switch {
-                    ActionKind.ShiftHome      => "Home — move to line start",
-                    ActionKind.ShiftEnd       => "End — move to line end",
-                    ActionKind.CtrlShiftLeft  => "Ctrl+Left — move word left",
-                    ActionKind.CtrlShiftRight => "Ctrl+Right — move word right",
+                    ActionKind.ShiftHome      => "Shift+Home — select to line start",
+                    ActionKind.ShiftEnd       => "Shift+End — select to line end",
+                    ActionKind.CtrlShiftLeft  => "Ctrl+Shift+Left — select word left",
+                    ActionKind.CtrlShiftRight => "Ctrl+Shift+Right — select word right",
                     ActionKind.HScrollLeft    => "Horizontal scroll left",
                     ActionKind.HScrollRight   => "Horizontal scroll right",
                     _                         => ""
