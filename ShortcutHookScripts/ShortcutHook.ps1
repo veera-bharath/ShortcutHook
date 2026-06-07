@@ -190,6 +190,8 @@ public class ShortcutHook {
     public static List<Binding> BTripleRight      = new List<Binding>();
     public static List<Binding> BRightScrollDown  = new List<Binding>();
     public static List<Binding> BRightScrollUp    = new List<Binding>();
+    public static List<Binding> BShiftScrollDown  = new List<Binding>();
+    public static List<Binding> BShiftScrollUp    = new List<Binding>();
     public static List<Binding> BSingleWheel      = new List<Binding>();
     public static List<Binding> BDoubleWheel      = new List<Binding>();
     public static List<Binding> BTripleWheel      = new List<Binding>();
@@ -205,6 +207,7 @@ public class ShortcutHook {
         BLeftRight.Clear(); BLeftRightDouble.Clear(); BLeftRightTriple.Clear();
         BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
         BRightScrollDown.Clear(); BRightScrollUp.Clear();
+        BShiftScrollDown.Clear(); BShiftScrollUp.Clear();
         BSingleWheel.Clear(); BDoubleWheel.Clear(); BTripleWheel.Clear();
         lrPending = false; lrCount = 0;
         // Separate app-scoped and global mouse bindings so scoped are tried first per gesture.
@@ -237,9 +240,11 @@ public class ShortcutHook {
         addGesture("double-right",      BDoubleRight);
         addGesture("double-right-sel",  BDoubleRightSel);
         addGesture("triple-right",      BTripleRight);
-        addGesture("right-scroll-down", BRightScrollDown);
-        addGesture("right-scroll-up",   BRightScrollUp);
-        addGesture("single-wheel",      BSingleWheel);
+        addGesture("right-scroll-down",  BRightScrollDown);
+        addGesture("right-scroll-up",    BRightScrollUp);
+        addGesture("shift-scroll-down",  BShiftScrollDown);
+        addGesture("shift-scroll-up",    BShiftScrollUp);
+        addGesture("single-wheel",       BSingleWheel);
         addGesture("double-wheel",      BDoubleWheel);
         addGesture("triple-wheel",      BTripleWheel);
         // Index keyboard bindings: scoped first so FindExact checks them before global ones.
@@ -778,6 +783,11 @@ public class ShortcutHook {
                             catch { }
                         }) { IsBackground = true }.Start();
                         return new IntPtr(1);
+                    } else if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
+                        MSLLHOOKSTRUCT ms = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+                        short delta = (short)((ms.mouseData >> 16) & 0xFFFF);
+                        Binding b = ResolveMouseBinding(delta < 0 ? BShiftScrollDown : BShiftScrollUp);
+                        if (b != null) { ExecuteBinding(b); return new IntPtr(1); }
                     }
                 }
             }
@@ -1144,7 +1154,7 @@ if (Test-Path $configPath) {
 # ---------------------------------------------------------------------------
 # Build Binding objects
 # ---------------------------------------------------------------------------
-$validGestures = @('left+right','left+rightx2','left+rightx3','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','single-wheel','double-wheel','triple-wheel')
+$validGestures = @('left+right','left+rightx2','left+rightx3','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','shift-scroll-down','shift-scroll-up','single-wheel','double-wheel','triple-wheel')
 $built = New-Object System.Collections.Generic.List[ShortcutHook+Binding]
 
 foreach ($b in $rawBindings) {

@@ -87,6 +87,8 @@ public partial class MainWindow : Window
         new("triple-right",      "Right click x3"),
         new("right-scroll-down", "Right Hold + Wheel Down"),
         new("right-scroll-up",   "Right Hold + Wheel Up"),
+        new("shift-scroll-down", "Shift + Wheel Down"),
+        new("shift-scroll-up",   "Shift + Wheel Up"),
     };
 
     static readonly Dictionary<Key,string> KeyDisplay = BuildKeyDisplay();
