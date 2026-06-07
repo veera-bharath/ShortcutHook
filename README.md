@@ -10,7 +10,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 ## Features
 
-- **Mouse gestures** — Left+Right, Left+Right×2, Double/Triple Right-click, Right-hold+Scroll, Double/Triple Wheel-click
+- **Mouse gestures** — Left+Right, Left+Right×2, Double/Triple Right-click, Right-hold+Scroll, Shift/Ctrl+Shift/Alt+Scroll, Double/Triple Wheel-click
 - **Selection-aware double-right** — configure separate triggers for selected vs. unselected states. Works seamlessly for text, files, folders, and images in Explorer, web browsers, and other applications
 - **Keyboard chords** — multi-key combos like `Ctrl+S+L` with smart defer logic for prefix pairs
 - **Open anything** — launch apps, files, or folders via `open:` bindings
@@ -18,6 +18,8 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 - **Per-application bindings** — scope any keyboard binding to a specific app (e.g. only fires when VS Code is the foreground window)
 - **Per-binding enable/disable** — toggle individual bindings on/off without deleting them; disabled bindings are preserved in config and can be re-enabled any time
 - **Hotkey conflict detection** — on save, keyboard combos are probed against Windows-registered hotkeys; an amber warning is shown if a combo is already claimed by another app
+- **Modifier-scroll gestures** — Shift+Wheel, Ctrl+Shift+Wheel, and Alt+Wheel (up/down) as configurable triggers; Alt+Wheel defaults to horizontal scroll
+- **Debounce toggle for scroll bindings** — opt-in per-binding cooldown (200 ms) to suppress rapid repeated scroll firings
 - **Alt+Scroll → Horizontal Scroll** — optional toggle; holding Alt while scrolling fires a horizontal scroll event
 - **First-run setup wizard** — choose where to install the app; daemon script always goes to `C:\Tools\ShortcutHook`
 - **Startup on login** — optional toggle to launch the daemon automatically
@@ -31,7 +33,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
 
-- 🚀 [Download v1.4 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.4/ShortcutHookUI.exe)
+- 🚀 [Download v1.5 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.5/ShortcutHookUI.exe)
 - 📦 [Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)
 
 1. Run `ShortcutHookUI.exe`
@@ -69,7 +71,7 @@ That's it. The daemon starts automatically whenever you save.
 ```
 
 **Trigger prefixes**
-- `mouse:` — `left+right`, `left+rightx2`, `double-right`, `double-right-sel`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`
+- `mouse:` — `left+right`, `left+rightx2`, `double-right`, `double-right-sel`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `shift-scroll-down`, `shift-scroll-up`, `ctrl-shift-scroll-down`, `ctrl-shift-scroll-up`, `alt-scroll-down`, `alt-scroll-up`, `double-wheel`, `triple-wheel`
 - `key:` — any `Mod+Key` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`
   > [!IMPORTANT]
   > To prevent hijacking standard operating system and application shortcuts, global single-letter `Ctrl` triggers (e.g. `Ctrl+A` through `Ctrl+Z`) are restricted and blocked. However, you can freely use:
@@ -83,6 +85,7 @@ That's it. The daemon starts automatically whenever you save.
 **Per-binding optional fields**
 - `app` — process name (e.g. `"Code.exe"`) to scope the binding to a specific foreground application; omit or set to `null` for global. See [Per-application bindings](#per-application-bindings).
 - `enabled` — set to `false` to disable a binding without deleting it; omit or set to `true` (or `null`) to keep it active. Disabled bindings are preserved in config and shown dimmed in the UI.
+- `debounce` — set to `true` on scroll gesture bindings to ignore repeated firings within 200 ms. Useful when a single wheel tick registers multiple events. Omit or set to `false` (default) for normal behavior.
 
 **Outputs**
 - Keyboard chord — `Mod+Key` syntax (e.g. `Win+Shift+S`)
