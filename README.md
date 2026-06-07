@@ -27,7 +27,21 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 ## Preview
 
-![ShortcutHook UI](ShortcutHookUI/Assets/ShortcutHook%20UI%20window.png)
+![ShortcutHook Main Window](ShortcutHookUI/Assets/ShortcutHookMainWindow.png)
+
+<details>
+<summary>Mouse gestures section</summary>
+
+![Mouse Section](ShortcutHookUI/Assets/ShortcutHookMouseSection.png)
+
+</details>
+
+<details>
+<summary>Keyboard bindings section</summary>
+
+![Keyboard Section](ShortcutHookUI/Assets/ShortcutHookKeyboardSection.png)
+
+</details>
 
 ## Download
 
