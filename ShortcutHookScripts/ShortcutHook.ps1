@@ -157,10 +157,12 @@ public class ShortcutHook {
 
     // ---------- Binding ----------
     public class ChainStep {
-        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine is set
-        public string OpenPath;  // shell-execute target; null when Output/CmdLine is set
-        public string CmdLine;   // cmd.exe command; null when Output/OpenPath is set
+        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/IsHScroll is set
+        public string OpenPath;  // shell-execute target; null when Output/CmdLine/IsHScroll is set
+        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/IsHScroll is set
         public bool   CmdShow;   // true = visible cmd window (/k), false = hidden (/c)
+        public bool   IsHScroll; // horizontal scroll; negative HScrollDelta = left, positive = right
+        public int    HScrollDelta;
     }
 
     public class Binding {
@@ -179,8 +181,6 @@ public class ShortcutHook {
     // Each signature maps to an ordered list: app-scoped bindings first, global last.
     public static Dictionary<string, List<Binding>> KeySigIndex = new Dictionary<string, List<Binding>>();
 
-    public static bool altScrollEnabled = false;
-
     // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
     public static List<Binding> BLeftRight        = new List<Binding>();
     public static List<Binding> BLeftRightDouble  = new List<Binding>();
@@ -190,9 +190,13 @@ public class ShortcutHook {
     public static List<Binding> BTripleRight      = new List<Binding>();
     public static List<Binding> BRightScrollDown  = new List<Binding>();
     public static List<Binding> BRightScrollUp    = new List<Binding>();
-    public static List<Binding> BShiftScrollDown  = new List<Binding>();
-    public static List<Binding> BShiftScrollUp    = new List<Binding>();
-    public static List<Binding> BSingleWheel      = new List<Binding>();
+    public static List<Binding> BShiftScrollDown       = new List<Binding>();
+    public static List<Binding> BShiftScrollUp         = new List<Binding>();
+    public static List<Binding> BCtrlShiftScrollDown   = new List<Binding>();
+    public static List<Binding> BCtrlShiftScrollUp     = new List<Binding>();
+    public static List<Binding> BAltScrollDown         = new List<Binding>();
+    public static List<Binding> BAltScrollUp           = new List<Binding>();
+    public static List<Binding> BSingleWheel           = new List<Binding>();
     public static List<Binding> BDoubleWheel      = new List<Binding>();
     public static List<Binding> BTripleWheel      = new List<Binding>();
 
@@ -208,6 +212,8 @@ public class ShortcutHook {
         BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
         BRightScrollDown.Clear(); BRightScrollUp.Clear();
         BShiftScrollDown.Clear(); BShiftScrollUp.Clear();
+        BCtrlShiftScrollDown.Clear(); BCtrlShiftScrollUp.Clear();
+        BAltScrollDown.Clear(); BAltScrollUp.Clear();
         BSingleWheel.Clear(); BDoubleWheel.Clear(); BTripleWheel.Clear();
         lrPending = false; lrCount = 0;
         // Separate app-scoped and global mouse bindings so scoped are tried first per gesture.
@@ -242,9 +248,13 @@ public class ShortcutHook {
         addGesture("triple-right",      BTripleRight);
         addGesture("right-scroll-down",  BRightScrollDown);
         addGesture("right-scroll-up",    BRightScrollUp);
-        addGesture("shift-scroll-down",  BShiftScrollDown);
-        addGesture("shift-scroll-up",    BShiftScrollUp);
-        addGesture("single-wheel",       BSingleWheel);
+        addGesture("shift-scroll-down",       BShiftScrollDown);
+        addGesture("shift-scroll-up",         BShiftScrollUp);
+        addGesture("ctrl-shift-scroll-down",  BCtrlShiftScrollDown);
+        addGesture("ctrl-shift-scroll-up",    BCtrlShiftScrollUp);
+        addGesture("alt-scroll-down",         BAltScrollDown);
+        addGesture("alt-scroll-up",           BAltScrollUp);
+        addGesture("single-wheel",            BSingleWheel);
         addGesture("double-wheel",      BDoubleWheel);
         addGesture("triple-wheel",      BTripleWheel);
         // Index keyboard bindings: scoped first so FindExact checks them before global ones.
@@ -541,6 +551,14 @@ public class ShortcutHook {
     // ---------- Output dispatch ----------
     static void ExecuteStep(ChainStep step) {
         if (step == null) return;
+        if (step.IsHScroll) {
+            int d = step.HScrollDelta;
+            new Thread(() => {
+                try { mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)d, UIntPtr.Zero); }
+                catch { }
+            }) { IsBackground = true }.Start();
+            return;
+        }
         if (step.OpenPath != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
@@ -774,19 +792,16 @@ public class ShortcutHook {
                             ExecuteBinding(b);
                             return new IntPtr(1);
                         }
-                    } else if (altScrollEnabled && (GetAsyncKeyState(VK_MENU) & 0x8000) != 0) {
+                    } else {
                         MSLLHOOKSTRUCT ms = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                         short delta = (short)((ms.mouseData >> 16) & 0xFFFF);
-                        int d = (int)delta;
-                        new Thread(() => {
-                            try { mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)d, UIntPtr.Zero); }
-                            catch { }
-                        }) { IsBackground = true }.Start();
-                        return new IntPtr(1);
-                    } else if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
-                        MSLLHOOKSTRUCT ms = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
-                        short delta = (short)((ms.mouseData >> 16) & 0xFFFF);
-                        Binding b = ResolveMouseBinding(delta < 0 ? BShiftScrollDown : BShiftScrollUp);
+                        bool shiftHeld = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+                        bool ctrlHeld  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                        bool altHeld   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+                        Binding b = null;
+                        if      (ctrlHeld && shiftHeld) b = ResolveMouseBinding(delta < 0 ? BCtrlShiftScrollDown : BCtrlShiftScrollUp);
+                        else if (shiftHeld)             b = ResolveMouseBinding(delta < 0 ? BShiftScrollDown     : BShiftScrollUp);
+                        else if (altHeld)               b = ResolveMouseBinding(delta < 0 ? BAltScrollDown       : BAltScrollUp);
                         if (b != null) { ExecuteBinding(b); return new IntPtr(1); }
                     }
                 }
@@ -1138,13 +1153,11 @@ $defaults = @(
 )
 
 $configPath = Join-Path $PSScriptRoot 'shortcuts.json'
-$altHScroll = $false
 if (Test-Path $configPath) {
     try {
         $json = Get-Content $configPath -Raw | ConvertFrom-Json
         $rawBindings = @($json.bindings)
         if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
-        if ($json.PSObject.Properties.Name -contains 'altHScroll') { $altHScroll = [bool]$json.altHScroll }
     } catch { Write-Log "Bad shortcuts.json -- using defaults. ($_)"; $rawBindings = $defaults }
 } else {
     Write-Log 'shortcuts.json not found -- using defaults.'
@@ -1154,7 +1167,7 @@ if (Test-Path $configPath) {
 # ---------------------------------------------------------------------------
 # Build Binding objects
 # ---------------------------------------------------------------------------
-$validGestures = @('left+right','left+rightx2','left+rightx3','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','shift-scroll-down','shift-scroll-up','single-wheel','double-wheel','triple-wheel')
+$validGestures = @('left+right','left+rightx2','left+rightx3','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','shift-scroll-down','shift-scroll-up','ctrl-shift-scroll-down','ctrl-shift-scroll-up','alt-scroll-down','alt-scroll-up','single-wheel','double-wheel','triple-wheel')
 $built = New-Object System.Collections.Generic.List[ShortcutHook+Binding]
 
 foreach ($b in $rawBindings) {
@@ -1195,6 +1208,9 @@ foreach ($b in $rawBindings) {
                 $cmdVal = $Matches[1].Trim()
                 if ($cmdVal -match '^cmd:(.+)$') { $cmdVal = $Matches[1].Trim() }
                 $step.CmdLine = $cmdVal; $step.CmdShow = $false
+            } elseif ($outStr -match '^hscroll:(left|right)$') {
+                $step.IsHScroll = $true
+                $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
             } else {
                 $step.Output = Resolve-OutputChord $outStr
             }
@@ -1237,9 +1253,6 @@ try {
         else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
     }
 } catch { Write-Log "LoadBindings failed: $_"; exit 1 }
-
-[ShortcutHook]::altScrollEnabled = $altHScroll
-Write-Log ("Alt+Scroll horizontal: {0}" -f $altHScroll)
 
 # ---------------------------------------------------------------------------
 # Single-instance guard

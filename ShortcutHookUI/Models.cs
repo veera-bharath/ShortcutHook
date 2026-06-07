@@ -40,11 +40,15 @@ public sealed class ConfigRoot
     public List<BindingEntry> bindings { get; set; } = new();
 }
 
+public record ActionDef(string Label, ActionKind Kind);
+
 public sealed class MouseGestureDef
 {
-    public string Gesture { get; }
-    public string Label { get; }
-    public MouseGestureDef(string g, string l) { Gesture = g; Label = l; }
+    public string     Gesture        { get; }
+    public string     Label          { get; }
+    public ActionDef? GestureDefault { get; }
+    public MouseGestureDef(string g, string l, ActionDef? gestureDefault = null)
+    { Gesture = g; Label = l; GestureDefault = gestureDefault; }
 }
 
 public sealed class ParsedKey
