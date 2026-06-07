@@ -619,9 +619,7 @@ public class ShortcutHook {
         bool uWinL  = (GetAsyncKeyState(VK_LWIN)    & 0x8000) != 0;
         bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
 
-        // If the chord explicitly includes a modifier that is already physically held,
-        // leave it down — releasing and re-firing it breaks selection (the app sees the
-        // modifier lifted around the keypress and treats it as unmodified).
+        // Which modifiers does the chord explicitly include?
         bool cShift = false; bool cCtrl = false; bool cAlt = false;
         foreach (byte k in chord) {
             if      (k == VK_SHIFT   || k == VK_LSHIFT || k == VK_RSHIFT) cShift = true;
@@ -629,29 +627,33 @@ public class ShortcutHook {
             else if (k == VK_MENU    || k == VK_LMENU  || k == VK_RMENU)  cAlt   = true;
         }
 
+        // Release held modifiers that the chord does NOT want (prevent interference).
+        // For modifiers that the chord DOES include, skip the pre-release — the chord
+        // re-fires them itself and the app must see the modifier held continuously.
         if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uShift && !cShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
-        foreach (byte k in chord) {
-            if ((k == VK_SHIFT   || k == VK_LSHIFT || k == VK_RSHIFT) && uShift) continue;
-            if ((k == VK_CONTROL || k == VK_LCTRL  || k == VK_RCTRL)  && uCtrl)  continue;
-            if ((k == VK_MENU    || k == VK_LMENU  || k == VK_RMENU)  && uAlt)   continue;
-            keybd_event(k, 0, 0, UIntPtr.Zero);
-        }
-        for (int i = chord.Length - 1; i >= 0; i--) {
-            byte k = chord[i];
-            if ((k == VK_SHIFT   || k == VK_LSHIFT || k == VK_RSHIFT) && uShift) continue;
-            if ((k == VK_CONTROL || k == VK_LCTRL  || k == VK_RCTRL)  && uCtrl)  continue;
-            if ((k == VK_MENU    || k == VK_LMENU  || k == VK_RMENU)  && uAlt)   continue;
-            keybd_event(k, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        }
+        // Fire the full chord — including any modifier keys it contains.
+        // If a modifier was already physically held, injecting its key-down again fires
+        // it as a synthetic repeat (WM_KEYDOWN with repeat count), which the target app
+        // processes as "modifier still held" — guaranteeing it sees the modifier when
+        // the action key arrives, regardless of any physical-key timing.
+        foreach (byte k in chord)                    keybd_event(k, 0, 0, UIntPtr.Zero);
+        for (int i = chord.Length - 1; i >= 0; i--) keybd_event(chord[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
+        // Re-press non-Win modifiers so the user's held keys remain active.
+        // Group 1: modifiers that were released in the pre-release step above.
         if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
         if (uShift && !cShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
         if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        // Group 2: chord modifiers that were physically held — the chord's own key-up
+        // released them, so re-press to restore the user's hold state.
+        if (uAlt   && cAlt)    keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
+        if (uShift && cShift)  keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
+        if (uCtrl  && cCtrl)   keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
 
         if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
         else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
