@@ -15,7 +15,7 @@ using System.Windows.Threading;
 
 namespace ShortcutHookUI;
 
-public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command }
+public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight }
 
 // One action in a chained binding. Multiple ChainedActions make up one Row's output.
 public sealed class ChainedAction
@@ -57,8 +57,15 @@ public sealed class Row
     public List<(CheckBox Cb, string AppName)> AppCheckBoxes = new();
 
     // enabled state
-    public bool      Enabled       = true;
+    public bool      Enabled          = true;
     public CheckBox? EnabledToggle;
+
+    // debounce (scroll gestures only): ignore repeats within 200 ms
+    public bool      Debounce         = false;
+    public CheckBox? DebounceToggle;
+
+    // gesture-specific action options (null → StandardActions)
+    public ActionDef[]? AvailableActions;
 }
 
 public sealed class KbdTriggerCard
@@ -72,8 +79,21 @@ public sealed class KbdTriggerCard
 
 public partial class MainWindow : Window
 {
-    static readonly string[] ActionLabels = { "Trigger shortcut", "Open app", "Open file", "Open folder", "Run command" };
-    static readonly ActionKind[] ActionOrder = { ActionKind.Shortcut, ActionKind.OpenApp, ActionKind.OpenFile, ActionKind.OpenFolder, ActionKind.Command };
+    static readonly ActionDef[] StandardActions = {
+        new("Trigger shortcut", ActionKind.Shortcut),
+        new("Open app",         ActionKind.OpenApp),
+        new("Open file",        ActionKind.OpenFile),
+        new("Open folder",      ActionKind.OpenFolder),
+        new("Run command",      ActionKind.Command),
+    };
+
+    static ActionDef[] BuildActionsForGesture(MouseGestureDef def)
+    {
+        if (def.GestureDefault == null) return StandardActions;
+        var list = new List<ActionDef> { def.GestureDefault };
+        list.AddRange(StandardActions);
+        return list.ToArray();
+    }
 
     static readonly MouseGestureDef[] MouseDefs = {
         new("left+right",        "Left Hold + Right click x1"),
@@ -87,6 +107,14 @@ public partial class MainWindow : Window
         new("triple-right",      "Right click x3"),
         new("right-scroll-down", "Right Hold + Wheel Down"),
         new("right-scroll-up",   "Right Hold + Wheel Up"),
+        new("shift-scroll-up",        "Shift + Wheel Up"),
+        new("shift-scroll-down",      "Shift + Wheel Down"),
+        new("ctrl-shift-scroll-up",   "Ctrl+Shift + Wheel Up"),
+        new("ctrl-shift-scroll-down", "Ctrl+Shift + Wheel Down"),
+        new("alt-scroll-up",   "Alt + Wheel Up",
+            new("Scroll left (horizontal)",                 ActionKind.HScrollLeft)),
+        new("alt-scroll-down", "Alt + Wheel Down",
+            new("Scroll right (horizontal)",                ActionKind.HScrollRight)),
     };
 
     static readonly Dictionary<Key,string> KeyDisplay = BuildKeyDisplay();
@@ -195,7 +223,6 @@ public partial class MainWindow : Window
     readonly List<KbdTriggerCard> _kbdCards = new();
     string _appRoot;
     bool _setupComplete;
-    CheckBox? _altHScrollToggle;
 
     // Capture state — plain C# fields, no scoping issues.
     bool            _captureActive;
@@ -533,7 +560,6 @@ public partial class MainWindow : Window
         MouseStack.Children.Clear();
         _mouseRows.Clear();
         _mouseGestureStacks.Clear();
-        _altHScrollToggle = null;
 
         var configRoot = ConfigService.ReadConfig(InstallService.ScriptRoot);
 
@@ -559,46 +585,24 @@ public partial class MainWindow : Window
             AddMouseVariantRow(def, gestureSP,
                 globalEntry?.outputs ?? new List<string> { "" },
                 globalEntry?.outputDelay ?? 0,
-                true, new List<string>(), globalEntry?.enabled != false, isGlobal: true);
+                true, new List<string>(), globalEntry?.enabled != false, isGlobal: true,
+                debounce: globalEntry?.debounce ?? false);
 
             // App-scoped variant rows
             if (bindings != null)
                 foreach (var b in bindings.Where(b => b.apps != null && b.apps.Count > 0))
                     AddMouseVariantRow(def, gestureSP,
                         b.outputs ?? new List<string> { "" },
-                        b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false);
+                        b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false,
+                        debounce: b.debounce);
 
             MouseStack.Children.Add(gestureSP);
         }
 
-        MouseStack.Children.Add(new Rectangle
-        {
-            Height = 1, Fill = Br("#333333"), Margin = new Thickness(0, 8, 0, 8)
-        });
-
-        // Alt + Scroll Wheel → Horizontal Scroll
-        var altRow = new Grid { Margin = new Thickness(0, 0, 0, 5) };
-        altRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(175) });
-        altRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        altRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var altLbl = new TextBlock { Text = "Alt + Scroll Wheel", Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(altLbl, 0);
-
-        var altDesc = new TextBlock { Text = "→ Horizontal Scroll", Foreground = Br("#888888"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(altDesc, 1);
-
-        _altHScrollToggle = new CheckBox { Style = (Style)FindResource("Toggle"), IsChecked = configRoot.altHScroll, Margin = new Thickness(8, 0, 0, 0) };
-        Grid.SetColumn(_altHScrollToggle, 2);
-
-        altRow.Children.Add(altLbl);
-        altRow.Children.Add(altDesc);
-        altRow.Children.Add(_altHScrollToggle);
-        MouseStack.Children.Add(altRow);
     }
 
     void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
-                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal)
+                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=*:   chain block border (different shade per global/variant) containing the chain stack
@@ -656,11 +660,13 @@ public partial class MainWindow : Window
 
         var row = new Row
         {
-            Container    = grid,
-            ChainStack   = chainStack,
-            OutputDelay  = outputDelay,
-            MouseGesture = def.Gesture,
-            Label        = def.Label,
+            Container        = grid,
+            ChainStack       = chainStack,
+            OutputDelay      = outputDelay,
+            MouseGesture     = def.Gesture,
+            Label            = def.Label,
+            AvailableActions = BuildActionsForGesture(def),
+            Debounce         = debounce,
         };
 
         BuildChainStack(row, outputs, isGlobal_scope, apps, enabled);
@@ -704,7 +710,8 @@ public partial class MainWindow : Window
     // Adds one action item to the chain (appends before the control row if already built).
     ChainedAction AddChainItem(Row row, string output, bool rebuild = true)
     {
-        var action = DetectAction(output);
+        var rowActions = row.AvailableActions ?? StandardActions;
+        var action = DetectAction(output, rowActions);
 
         // Item grid: [ActionCombo 120][OutputPanel *][chain-× Auto]
         var itemGrid = new Grid { Margin = new Thickness(0, 0, 0, 5) };
@@ -712,7 +719,7 @@ public partial class MainWindow : Window
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var actionCB = NewActionCombo(action);
+        var actionCB = NewActionCombo(rowActions, action);
         Grid.SetColumn(actionCB, 0);
 
         var outPanel = new Grid { Margin = new Thickness(8, 0, 0, 0) };
@@ -746,10 +753,11 @@ public partial class MainWindow : Window
         };
         SetChainItemOutput(row, item, action);
 
+        var capturedActions = rowActions;
         actionCB.SelectionChanged += (_, __) =>
         {
             var idx = actionCB.SelectedIndex;
-            if (idx >= 0 && idx < ActionOrder.Length) SetChainItemOutput(row, item, ActionOrder[idx]);
+            if (idx >= 0 && idx < capturedActions.Length) SetChainItemOutput(row, item, capturedActions[idx].Kind);
         };
 
         delBtn.Click += (_, __) =>
@@ -869,6 +877,40 @@ public partial class MainWindow : Window
         footer.Children.Add(msLbl);
         footer.Children.Add(scopeBtn);
         footer.Children.Add(enableToggle);
+
+        if (row.MouseGesture?.Contains("scroll") == true)
+        {
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var debounceLbl = new TextBlock
+            {
+                Text = "debounce",
+                Foreground = DimBrush,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 3, 0),
+                ToolTip = "Ignore repeated scroll firings within 200 ms",
+            };
+            Grid.SetColumn(debounceLbl, 7);
+
+            var debounceToggle = new CheckBox
+            {
+                Style     = (Style)FindResource("Toggle"),
+                IsChecked = row.Debounce,
+                Margin    = new Thickness(0, 0, 0, 0),
+                ToolTip   = "Ignore repeated scroll firings within 200 ms",
+            };
+            Grid.SetColumn(debounceToggle, 8);
+
+            row.DebounceToggle = debounceToggle;
+            debounceToggle.Checked   += (_, __) => row.Debounce = true;
+            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
+
+            footer.Children.Add(debounceLbl);
+            footer.Children.Add(debounceToggle);
+        }
 
         return footer;
     }
@@ -1414,23 +1456,31 @@ public partial class MainWindow : Window
     // =========================================================================
     // Action selection + output panel swap (per ChainedAction)
     // =========================================================================
-    ComboBox NewActionCombo(ActionKind initial)
+    ComboBox NewActionCombo(ActionDef[] actions, ActionKind initial)
     {
         var cb = new ComboBox
         {
             Style  = (Style)FindResource("DarkCB"),
             Height = 28,
         };
-        foreach (var label in ActionLabels) cb.Items.Add(label);
-        cb.SelectedIndex = Array.IndexOf(ActionOrder, initial);
+        foreach (var def in actions) cb.Items.Add(def.Label);
+        cb.SelectedIndex = Array.FindIndex(actions, d => d.Kind == initial);
         if (cb.SelectedIndex < 0) cb.SelectedIndex = 0;
         return cb;
     }
 
-    ActionKind DetectAction(string output)
+    ActionKind DetectAction(string output, ActionDef[]? available = null)
     {
+        bool Has(ActionKind k) => available == null || Array.FindIndex(available, d => d.Kind == k) >= 0;
+
         if (output.StartsWith("cmd:", StringComparison.Ordinal) ||
             output.StartsWith("cmdw:", StringComparison.Ordinal)) return ActionKind.Command;
+        if (output == "hscroll:left"   && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
+        if (output == "hscroll:right"  && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
+        if (output == "Shift+Home"         && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
+        if (output == "Shift+End"          && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
+        if (output == "Ctrl+Shift+Left"    && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
+        if (output == "Ctrl+Shift+Right"   && Has(ActionKind.CtrlShiftRight)) return ActionKind.CtrlShiftRight;
         if (string.IsNullOrEmpty(output) || !output.StartsWith("open:", StringComparison.Ordinal))
             return ActionKind.Shortcut;
         var p = output.Substring(5);
@@ -1484,6 +1534,33 @@ public partial class MainWindow : Window
             case ActionKind.OpenFolder:
                 AddBrowsePanel(item, isFolder: true);
                 break;
+            case ActionKind.ShiftHome:
+            case ActionKind.ShiftEnd:
+            case ActionKind.CtrlShiftLeft:
+            case ActionKind.CtrlShiftRight:
+            case ActionKind.HScrollLeft:
+            case ActionKind.HScrollRight:
+            {
+                var desc = action switch {
+                    ActionKind.ShiftHome      => "Shift+Home — select to line start",
+                    ActionKind.ShiftEnd       => "Shift+End — select to line end",
+                    ActionKind.CtrlShiftLeft  => "Ctrl+Shift+Left — select word left",
+                    ActionKind.CtrlShiftRight => "Ctrl+Shift+Right — select word right",
+                    ActionKind.HScrollLeft    => "Horizontal scroll left",
+                    ActionKind.HScrollRight   => "Horizontal scroll right",
+                    _                         => ""
+                };
+                item.OutputPanel.Children.Add(new TextBlock
+                {
+                    Text              = desc,
+                    Foreground        = DimBrush,
+                    FontFamily        = new FontFamily("Consolas"),
+                    FontSize          = 11,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                item.OutputCtrl = null;
+                break;
+            }
             case ActionKind.Command:
             {
                 bool isShow = item.OutputValue.StartsWith("cmdw:", StringComparison.Ordinal);
@@ -1682,15 +1759,21 @@ public partial class MainWindow : Window
 
     string GetChainItemOutput(ChainedAction item) => item.Action switch
     {
-        ActionKind.Shortcut   => item.ShortcutRecordMode
-                                    ? item.OutputValue
-                                    : (item.OutputCtrl as TextBox)?.Text.Trim() ?? "",
-        ActionKind.OpenApp    => (item.OutputCtrl is ComboBox cb && cb.SelectedItem is AppEntry a) ? "open:" + a.Path : "",
-        ActionKind.OpenFile   => item.OutputValue,
-        ActionKind.OpenFolder => item.OutputValue,
-        ActionKind.Command    => (item.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
-                                    ? (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
-        _                     => "",
+        ActionKind.Shortcut        => item.ShortcutRecordMode
+                                         ? item.OutputValue
+                                         : (item.OutputCtrl as TextBox)?.Text.Trim() ?? "",
+        ActionKind.OpenApp         => (item.OutputCtrl is ComboBox cb && cb.SelectedItem is AppEntry a) ? "open:" + a.Path : "",
+        ActionKind.OpenFile        => item.OutputValue,
+        ActionKind.OpenFolder      => item.OutputValue,
+        ActionKind.Command         => (item.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
+                                         ? (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
+        ActionKind.ShiftHome       => "Shift+Home",
+        ActionKind.ShiftEnd        => "Shift+End",
+        ActionKind.CtrlShiftLeft   => "Ctrl+Shift+Left",
+        ActionKind.CtrlShiftRight  => "Ctrl+Shift+Right",
+        ActionKind.HScrollLeft     => "hscroll:left",
+        ActionKind.HScrollRight    => "hscroll:right",
+        _                          => "",
     };
 
     // Returns non-empty outputs only.
@@ -1730,7 +1813,8 @@ public partial class MainWindow : Window
                     {
                         if (outp.StartsWith("open:", StringComparison.Ordinal) ||
                             outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
-                            outp.StartsWith("cmdw:", StringComparison.Ordinal)) continue;
+                            outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
+                            outp.StartsWith("hscroll:", StringComparison.Ordinal)) continue;
                         try { TriggerHelpers.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
                     }
@@ -1757,6 +1841,7 @@ public partial class MainWindow : Window
                     apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                 };
                 if (!row.Enabled) entry.enabled = false;
+                if (row.Debounce)  entry.debounce = true;
                 entries.Add(entry);
             }
         }
@@ -1872,7 +1957,7 @@ public partial class MainWindow : Window
             if (HotkeyProbe.IsConflicted(parsed.Mods, parsed.Keys[0]))
                 conflicts.Add(trig.Substring(4));
 
-        var configToSave = new ConfigRoot { altHScroll = _altHScrollToggle?.IsChecked == true, bindings = entries };
+        var configToSave = new ConfigRoot { bindings = entries };
         try { ConfigService.Save(InstallService.ScriptRoot, configToSave); }
         catch (Exception ex) { ShowFeedback($"Save failed: {ex.Message}", FeedbackKind.Err); return; }
 

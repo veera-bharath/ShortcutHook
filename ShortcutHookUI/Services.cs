@@ -23,6 +23,7 @@ internal static class TriggerHelpers
         "left+right","left+rightx2","left+rightx3",
         "double-right","double-right-sel","triple-right",
         "right-scroll-down","right-scroll-up",
+        "shift-scroll-down","shift-scroll-up",
         "single-wheel","double-wheel","triple-wheel"
     };
 
