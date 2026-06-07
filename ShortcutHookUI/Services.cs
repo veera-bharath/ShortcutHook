@@ -20,8 +20,11 @@ internal static class TriggerHelpers
     public const int MOD_WIN   = 8;
 
     public static readonly string[] ValidGestures = {
-        "left+right","left+rightx2","double-right","double-right-sel","triple-right",
-        "right-scroll-down","right-scroll-up","double-wheel","triple-wheel"
+        "left+right","left+rightx2","left+rightx3",
+        "double-right","double-right-sel","triple-right",
+        "right-scroll-down","right-scroll-up",
+        "shift-scroll-down","shift-scroll-up",
+        "single-wheel","double-wheel","triple-wheel"
     };
 
     public static readonly Dictionary<string,int> VkMap = new(StringComparer.OrdinalIgnoreCase)
@@ -123,12 +126,29 @@ internal static class ConfigService
 
     public static readonly List<BindingEntry> Defaults = new()
     {
-        new() { trigger = "mouse:left+right",   output = "Win+Shift+S" },
-        new() { trigger = "mouse:double-right", output = "Ctrl+C" },
-        new() { trigger = "mouse:triple-right", output = "Ctrl+V" },
+        new() { trigger = "mouse:left+right",   outputs = new List<string> { "Win+Shift+S" } },
+        new() { trigger = "mouse:double-right", outputs = new List<string> { "Ctrl+C" } },
+        new() { trigger = "mouse:triple-right", outputs = new List<string> { "Ctrl+V" } },
     };
 
     public static string ConfigPath(string root) => Path.Combine(root, "shortcuts.json");
+
+    static void NormalizeOutputs(List<BindingEntry> bindings)
+    {
+        foreach (var b in bindings)
+        {
+            if ((b.outputs == null || b.outputs.Count == 0) && b.output != null)
+                b.outputs = new List<string> { b.output };
+            b.output = null;
+            if (b.outputs == null || b.outputs.Count == 0)
+                b.outputs = new List<string> { "" };
+
+            // Normalize legacy `app` → `apps`
+            if ((b.apps == null || b.apps.Count == 0) && !string.IsNullOrWhiteSpace(b.app))
+                b.apps = new List<string> { b.app };
+            b.app = null;
+        }
+    }
 
     public static ConfigRoot ReadConfig(string root)
     {
@@ -143,6 +163,8 @@ internal static class ConfigService
                 {
                     if (doc.bindings is not { Count: > 0 })
                         doc.bindings = new List<BindingEntry>(Defaults);
+                    else
+                        NormalizeOutputs(doc.bindings);
                     return doc;
                 }
             }

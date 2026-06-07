@@ -2,8 +2,10 @@
 # System-wide low-level hook that maps mouse gestures and keyboard combos to
 # configurable outputs: keyboard chords OR shell-execute (open app/file/folder).
 #
-# Mouse gestures: left+right, left+rightx2, double-right, triple-right,
-#                 right-scroll-down, right-scroll-up, double-wheel, triple-wheel
+# Mouse gestures: left+right, left+rightx2, left+rightx3,
+#                 double-right, double-right-sel, triple-right,
+#                 right-scroll-down, right-scroll-up,
+#                 single-wheel, double-wheel, triple-wheel
 # Key triggers:   key:Ctrl+S  |  key:Ctrl+Alt+F5  |  key:Ctrl+S+L
 #
 # Output formats in shortcuts.json:
@@ -105,6 +107,8 @@ public class ShortcutHook {
     [DllImport("gdi32.dll", SetLastError = true)]  static extern IntPtr CopyEnhMetaFile(IntPtr hemfSrc, string lpszFile);
     [DllImport("gdi32.dll", SetLastError = true)]  static extern bool DeleteEnhMetaFile(IntPtr hemf);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool   GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
@@ -136,36 +140,68 @@ public class ShortcutHook {
         public uint time;      public IntPtr dwExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CURSORINFO {
+        public int    cbSize;
+        public uint   flags;
+        public IntPtr hCursor;
+        public int    ptX, ptY;
+    }
+
+    // IDC_HAND — standard system hand cursor (hovering over a hyperlink).
+    static readonly IntPtr IDC_HAND     = new IntPtr(32649);
+    static readonly IntPtr HandCursorH  = LoadCursor(IntPtr.Zero, IDC_HAND);
+
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate IntPtr LLProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     // ---------- Binding ----------
+    public class ChainStep {
+        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/IsHScroll is set
+        public string OpenPath;  // shell-execute target; null when Output/CmdLine/IsHScroll is set
+        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/IsHScroll is set
+        public bool   CmdShow;   // true = visible cmd window (/k), false = hidden (/c)
+        public bool   IsHScroll; // horizontal scroll; negative HScrollDelta = left, positive = right
+        public int    HScrollDelta;
+    }
+
     public class Binding {
-        public string Kind;          // "mouse" | "key"
-        public string MouseGesture;
-        public int    Mods;
-        public byte[] Keys;
-        public byte[] Output;        // keyboard chord; null when OpenPath/CmdLine is set
-        public string OpenPath;      // shell-execute target; null when Output/CmdLine is set
-        public string CmdLine;       // cmd.exe command; null when Output/OpenPath is set
-        public bool   CmdShow;       // true = visible cmd window (/k), false = hidden (/c)
-        public string Signature;
-        public string App;           // null = global; process name (case-insensitive) for app-scoped
+        public string      Kind;          // "mouse" | "key"
+        public string      MouseGesture;
+        public int         Mods;
+        public byte[]      Keys;
+        public string      Signature;
+        public string[]    Apps;          // null/empty = global; list of process names for app-scoped
+        public int         OutputDelay;   // ms between chained steps (0 = no delay)
+        public ChainStep[] Steps;         // one or more actions to execute in order
+        public bool        Debounce;      // ignore repeated scroll fires within SCROLL_DEBOUNCE_MS
     }
 
     public static List<Binding> MouseBindings = new List<Binding>();
     public static List<Binding> KeyBindings   = new List<Binding>();
+    static readonly Dictionary<Binding, int> ScrollDebounce = new Dictionary<Binding, int>();
+    const int SCROLL_DEBOUNCE_MS = 200;
     // Each signature maps to an ordered list: app-scoped bindings first, global last.
     public static Dictionary<string, List<Binding>> KeySigIndex = new Dictionary<string, List<Binding>>();
 
-    public static bool altScrollEnabled = false;
-
-    // One Binding ref per mouse gesture (null = not configured)
-    public static Binding BLeftRight, BDoubleRight, BTripleRight;
-    public static Binding BRightScrollDown, BRightScrollUp;
-    public static Binding BDoubleWheel, BTripleWheel;
-    public static Binding BLeftRightDouble;
-    public static Binding BDoubleRightSel;
+    // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
+    public static List<Binding> BLeftRight        = new List<Binding>();
+    public static List<Binding> BLeftRightDouble  = new List<Binding>();
+    public static List<Binding> BLeftRightTriple  = new List<Binding>();
+    public static List<Binding> BDoubleRight      = new List<Binding>();
+    public static List<Binding> BDoubleRightSel   = new List<Binding>();
+    public static List<Binding> BTripleRight      = new List<Binding>();
+    public static List<Binding> BRightScrollDown  = new List<Binding>();
+    public static List<Binding> BRightScrollUp    = new List<Binding>();
+    public static List<Binding> BShiftScrollDown       = new List<Binding>();
+    public static List<Binding> BShiftScrollUp         = new List<Binding>();
+    public static List<Binding> BCtrlShiftScrollDown   = new List<Binding>();
+    public static List<Binding> BCtrlShiftScrollUp     = new List<Binding>();
+    public static List<Binding> BAltScrollDown         = new List<Binding>();
+    public static List<Binding> BAltScrollUp           = new List<Binding>();
+    public static List<Binding> BSingleWheel           = new List<Binding>();
+    public static List<Binding> BDoubleWheel      = new List<Binding>();
+    public static List<Binding> BTripleWheel      = new List<Binding>();
 
     public static string MakeSignature(int mods, byte[] sortedKeys) {
         string[] parts = new string[sortedKeys.Length];
@@ -174,35 +210,57 @@ public class ShortcutHook {
     }
 
     public static void LoadBindings(Binding[] bindings) {
-        MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear();
-        BLeftRight = BDoubleRight = BTripleRight = null;
-        BRightScrollDown = BRightScrollUp = null;
-        BDoubleWheel = BTripleWheel = null;
-        BLeftRightDouble = null;
-        BDoubleRightSel = null;
+        MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear(); ScrollDebounce.Clear();
+        BLeftRight.Clear(); BLeftRightDouble.Clear(); BLeftRightTriple.Clear();
+        BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
+        BRightScrollDown.Clear(); BRightScrollUp.Clear();
+        BShiftScrollDown.Clear(); BShiftScrollUp.Clear();
+        BCtrlShiftScrollDown.Clear(); BCtrlShiftScrollUp.Clear();
+        BAltScrollDown.Clear(); BAltScrollUp.Clear();
+        BSingleWheel.Clear(); BDoubleWheel.Clear(); BTripleWheel.Clear();
         lrPending = false; lrCount = 0;
-        var scopedKbd = new List<Binding>();
-        var globalKbd = new List<Binding>();
+        // Separate app-scoped and global mouse bindings so scoped are tried first per gesture.
+        var scopedMouse = new Dictionary<string, List<Binding>>();
+        var globalMouse = new Dictionary<string, List<Binding>>();
+        var scopedKbd   = new List<Binding>();
+        var globalKbd   = new List<Binding>();
         foreach (Binding b in bindings) {
+            bool isScoped = b.Apps != null && b.Apps.Length > 0;
             if (b.Kind == "mouse") {
                 MouseBindings.Add(b);
-                switch (b.MouseGesture) {
-                    case "left+right":        BLeftRight       = b; break;
-                    case "left+rightx2":      BLeftRightDouble = b; break;
-                    case "double-right":      BDoubleRight     = b; break;
-                    case "double-right-sel":  BDoubleRightSel  = b; break;
-                    case "triple-right":      BTripleRight     = b; break;
-                    case "right-scroll-down": BRightScrollDown = b; break;
-                    case "right-scroll-up":   BRightScrollUp   = b; break;
-                    case "double-wheel":      BDoubleWheel     = b; break;
-                    case "triple-wheel":      BTripleWheel     = b; break;
-                }
+                var dict = isScoped ? scopedMouse : globalMouse;
+                List<Binding> mlist;
+                if (!dict.TryGetValue(b.MouseGesture, out mlist)) { mlist = new List<Binding>(); dict[b.MouseGesture] = mlist; }
+                mlist.Add(b);
             } else if (b.Kind == "key") {
                 KeyBindings.Add(b);
-                if (b.App != null) scopedKbd.Add(b); else globalKbd.Add(b);
+                if (isScoped) scopedKbd.Add(b); else globalKbd.Add(b);
             }
         }
-        // Index scoped bindings first so FindExact checks them before global ones.
+        // Populate gesture lists: scoped first so ResolveMouseBinding checks them before global.
+        System.Action<string, List<Binding>> addGesture = (gesture, list) => {
+            List<Binding> tmp;
+            if (scopedMouse.TryGetValue(gesture, out tmp)) list.AddRange(tmp);
+            if (globalMouse.TryGetValue(gesture, out tmp)) list.AddRange(tmp);
+        };
+        addGesture("left+right",        BLeftRight);
+        addGesture("left+rightx2",      BLeftRightDouble);
+        addGesture("left+rightx3",      BLeftRightTriple);
+        addGesture("double-right",      BDoubleRight);
+        addGesture("double-right-sel",  BDoubleRightSel);
+        addGesture("triple-right",      BTripleRight);
+        addGesture("right-scroll-down",  BRightScrollDown);
+        addGesture("right-scroll-up",    BRightScrollUp);
+        addGesture("shift-scroll-down",       BShiftScrollDown);
+        addGesture("shift-scroll-up",         BShiftScrollUp);
+        addGesture("ctrl-shift-scroll-down",  BCtrlShiftScrollDown);
+        addGesture("ctrl-shift-scroll-up",    BCtrlShiftScrollUp);
+        addGesture("alt-scroll-down",         BAltScrollDown);
+        addGesture("alt-scroll-up",           BAltScrollUp);
+        addGesture("single-wheel",            BSingleWheel);
+        addGesture("double-wheel",      BDoubleWheel);
+        addGesture("triple-wheel",      BTripleWheel);
+        // Index keyboard bindings: scoped first so FindExact checks them before global ones.
         foreach (Binding b in scopedKbd) {
             List<Binding> list;
             if (!KeySigIndex.TryGetValue(b.Signature, out list)) { list = new List<Binding>(); KeySigIndex[b.Signature] = list; }
@@ -488,51 +546,72 @@ public class ShortcutHook {
         return hasSel;
     }
     static void ExecuteDoubleRight() {
-        if (BDoubleRightSel == null) { ExecuteBinding(BDoubleRight); return; }
+        if (BDoubleRightSel.Count == 0) { ExecuteBinding(ResolveMouseBinding(BDoubleRight)); return; }
         bool hasSel = DetectTextSelection();
-        ExecuteBinding(hasSel ? BDoubleRightSel : BDoubleRight);
+        ExecuteBinding(ResolveMouseBinding(hasSel ? BDoubleRightSel : BDoubleRight));
     }
 
     // ---------- Output dispatch ----------
-    static void ExecuteBinding(Binding b) {
-        if (b == null) return;
-        if (b.OpenPath != null) {
+    static void ExecuteStep(ChainStep step) {
+        if (step == null) return;
+        if (step.IsHScroll) {
+            int d = step.HScrollDelta;
+            new Thread(() => {
+                try { mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)d, UIntPtr.Zero); }
+                catch { }
+            }) { IsBackground = true }.Start();
+            return;
+        }
+        if (step.OpenPath != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
             // Don't inject a synthetic Win-up here — that itself triggers Start Menu.
             // Instead mark that we need to release Win at physical Win-up time, where
             // we can sandwich it between Ctrl events to break the clean-tap sequence.
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
-            string path = b.OpenPath;
-            new Thread(() => {
-                try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-                catch { }
-            }) { IsBackground = true }.Start();
-        } else if (b.CmdLine != null) {
+            string path = step.OpenPath;
+            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
+        } else if (step.CmdLine != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
-            string cmd = b.CmdLine;
-            bool show = b.CmdShow;
-            new Thread(() => {
-                try {
-                    if (show) {
-                        Process.Start(new ProcessStartInfo("cmd.exe") {
-                            Arguments = "/k " + cmd,
-                            UseShellExecute = true,
-                        });
-                    } else {
-                        Process.Start(new ProcessStartInfo("cmd.exe") {
-                            Arguments = "/c " + cmd,
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                        });
-                    }
-                } catch { }
-            }) { IsBackground = true }.Start();
+            string cmd = step.CmdLine;
+            bool show = step.CmdShow;
+            try {
+                if (show) {
+                    Process.Start(new ProcessStartInfo("cmd.exe") {
+                        Arguments = "/k " + cmd,
+                        UseShellExecute = true,
+                    });
+                } else {
+                    Process.Start(new ProcessStartInfo("cmd.exe") {
+                        Arguments = "/c " + cmd,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    });
+                }
+            } catch { }
         } else {
-            FireOutput(b.Output);
+            FireOutput(step.Output);
         }
+    }
+
+    static void ExecuteBinding(Binding b) {
+        if (b == null || b.Steps == null || b.Steps.Length == 0) return;
+        // Single-action with no delay: fast path — run inline (FireOutput is safe in hook callback).
+        if (b.Steps.Length == 1 && b.OutputDelay == 0 && b.Steps[0].Output != null) {
+            FireOutput(b.Steps[0].Output);
+            return;
+        }
+        // Chain or open/cmd step: run on background thread so the callback returns quickly.
+        ChainStep[] steps = b.Steps;
+        int delay = b.OutputDelay;
+        new Thread(() => {
+            for (int i = 0; i < steps.Length; i++) {
+                if (i > 0 && delay > 0) Thread.Sleep(delay);
+                ExecuteStep(steps[i]);
+            }
+        }) { IsBackground = true }.Start();
     }
 
     static void FireOutput(byte[] chord) {
@@ -543,22 +622,42 @@ public class ShortcutHook {
         bool uWinL  = (GetAsyncKeyState(VK_LWIN)    & 0x8000) != 0;
         bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
 
-        if (uCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        // Which modifiers does the chord explicitly include?
+        bool cShift = false; bool cCtrl = false; bool cAlt = false;
+        foreach (byte k in chord) {
+            if      (k == VK_SHIFT   || k == VK_LSHIFT || k == VK_RSHIFT) cShift = true;
+            else if (k == VK_CONTROL || k == VK_LCTRL  || k == VK_RCTRL)  cCtrl  = true;
+            else if (k == VK_MENU    || k == VK_LMENU  || k == VK_RMENU)  cAlt   = true;
+        }
+
+        // Release held modifiers that the chord does NOT want (prevent interference).
+        // For modifiers that the chord DOES include, skip the pre-release — the chord
+        // re-fires them itself and the app must see the modifier held continuously.
+        if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uShift && !cShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
+        // Fire the full chord — including any modifier keys it contains.
+        // If a modifier was already physically held, injecting its key-down again fires
+        // it as a synthetic repeat (WM_KEYDOWN with repeat count), which the target app
+        // processes as "modifier still held" — guaranteeing it sees the modifier when
+        // the action key arrives, regardless of any physical-key timing.
         foreach (byte k in chord)                    keybd_event(k, 0, 0, UIntPtr.Zero);
         for (int i = chord.Length - 1; i >= 0; i--) keybd_event(chord[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
-        // Re-press non-Win modifiers so the user's held keys remain active
-        if (uAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
-        if (uShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
-        if (uCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        // Re-press non-Win modifiers so the user's held keys remain active.
+        // Group 1: modifiers that were released in the pre-release step above.
+        if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
+        if (uShift && !cShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
+        if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        // Group 2: chord modifiers that were physically held — the chord's own key-up
+        // released them, so re-press to restore the user's hold state.
+        if (uAlt   && cAlt)    keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
+        if (uShift && cShift)  keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
+        if (uCtrl  && cCtrl)   keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
 
-        // Don't re-press Win — instead swallow the physical Win-up in KbdCallback
-        // so Explorer never sees a clean Win tap and the Start Menu stays closed.
         if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
         else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
     }
@@ -622,7 +721,7 @@ public class ShortcutHook {
                     if (rightPending) {
                         rightPending = false; rightClickCount = 0;
                         suppressRightUp = true; leftDown = false;
-                        ExecuteBinding(BLeftRight);
+                        ExecuteBinding(ResolveMouseBinding(BLeftRight));
                     }
                 }
             }
@@ -637,23 +736,41 @@ public class ShortcutHook {
                         rightClickCount = 0; rightPending = false; rightUpSeen = false;
                         suppressRightUp = true; leftDown = false;
                         if (!lrPending) lrCount = 1; else lrCount++;
-                        if (lrCount >= 2 && BLeftRightDouble != null) {
+
+                        bool hasDouble = BLeftRightDouble.Count > 0;
+                        bool hasTriple = BLeftRightTriple.Count > 0;
+
+                        // 3+ presses: fire best matching binding immediately
+                        if (lrCount >= 3) {
                             lrPending = false; lrCount = 0;
-                            ExecuteBinding(BLeftRightDouble);
+                            if      (hasTriple) ExecuteBinding(ResolveMouseBinding(BLeftRightTriple));
+                            else if (hasDouble) ExecuteBinding(ResolveMouseBinding(BLeftRightDouble));
+                            else                ExecuteBinding(ResolveMouseBinding(BLeftRight));
                             return new IntPtr(1);
                         }
-                        if (BLeftRightDouble == null) {
+                        // Exactly 2 and no triple bound: fire double immediately
+                        if (lrCount == 2 && hasDouble && !hasTriple) {
                             lrPending = false; lrCount = 0;
-                            ExecuteBinding(BLeftRight);
+                            ExecuteBinding(ResolveMouseBinding(BLeftRightDouble));
                             return new IntPtr(1);
                         }
+                        // No multi-click bindings at all: fire single immediately
+                        if (!hasDouble && !hasTriple) {
+                            lrPending = false; lrCount = 0;
+                            ExecuteBinding(ResolveMouseBinding(BLeftRight));
+                            return new IntPtr(1);
+                        }
+                        // Still within a possible longer combo: wait for more presses
                         lrPending = true;
                         new Thread(() => {
                             Thread.Sleep(dblClickMs);
                             lock (MLock) {
                                 if (capturedLrGen != lrGen || !lrPending) return;
-                                lrPending = false; lrCount = 0;
-                                ExecuteBinding(BLeftRight);
+                                lrPending = false;
+                                int c = lrCount; lrCount = 0;
+                                if      (c >= 3 && hasTriple) ExecuteBinding(ResolveMouseBinding(BLeftRightTriple));
+                                else if (c >= 2 && hasDouble) ExecuteBinding(ResolveMouseBinding(BLeftRightDouble));
+                                else                          ExecuteBinding(ResolveMouseBinding(BLeftRight));
                             }
                         }) { IsBackground = true }.Start();
                         return new IntPtr(1);
@@ -674,7 +791,7 @@ public class ShortcutHook {
                             int count = rightClickCount; rightClickCount = 0;
                             if      (count == 1) Reinject(!rightHeld || rightUpSeen);
                             else if (count == 2) { if (rightHeld) suppressRightUp = true; ExecuteDoubleRight(); }
-                            else                 { if (rightHeld) suppressRightUp = true; ExecuteBinding(BTripleRight); }
+                            else                 { if (rightHeld) suppressRightUp = true; ExecuteBinding(ResolveMouseBinding(BTripleRight)); }
                         }
                     }) { IsBackground = true }.Start();
                 }
@@ -692,25 +809,49 @@ public class ShortcutHook {
                     if (rightHeld) {
                         MSLLHOOKSTRUCT ms = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                         short delta = (short)((ms.mouseData >> 16) & 0xFFFF);
-                        Binding b = delta < 0 ? BRightScrollDown : BRightScrollUp;
+                        Binding b = ResolveMouseBinding(delta < 0 ? BRightScrollDown : BRightScrollUp);
                         if (b != null) {
                             mGeneration++; rightPending = false; suppressRightUp = true;
-                            ExecuteBinding(b);
+                            bool shouldFire = true;
+                            if (b.Debounce) {
+                                int now = Environment.TickCount; int last;
+                                if (ScrollDebounce.TryGetValue(b, out last) && (now - last) < SCROLL_DEBOUNCE_MS) shouldFire = false;
+                                else ScrollDebounce[b] = now;
+                            }
+                            if (shouldFire) ExecuteBinding(b);
                             return new IntPtr(1);
                         }
-                    } else if (altScrollEnabled && (GetAsyncKeyState(VK_MENU) & 0x8000) != 0) {
+                    } else {
                         MSLLHOOKSTRUCT ms = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                         short delta = (short)((ms.mouseData >> 16) & 0xFFFF);
-                        int d = (int)delta;
-                        new Thread(() => {
-                            try { mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)d, UIntPtr.Zero); }
-                            catch { }
-                        }) { IsBackground = true }.Start();
-                        return new IntPtr(1);
+                        bool shiftHeld = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+                        bool ctrlHeld  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                        bool altHeld   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+                        Binding b = null;
+                        if      (ctrlHeld && shiftHeld) b = ResolveMouseBinding(delta < 0 ? BCtrlShiftScrollDown : BCtrlShiftScrollUp);
+                        else if (shiftHeld)             b = ResolveMouseBinding(delta < 0 ? BShiftScrollDown     : BShiftScrollUp);
+                        else if (altHeld)               b = ResolveMouseBinding(delta < 0 ? BAltScrollDown       : BAltScrollUp);
+                        if (b != null) {
+                            bool shouldFire = true;
+                            if (b.Debounce) {
+                                int now = Environment.TickCount; int last;
+                                if (ScrollDebounce.TryGetValue(b, out last) && (now - last) < SCROLL_DEBOUNCE_MS) shouldFire = false;
+                                else ScrollDebounce[b] = now;
+                            }
+                            if (shouldFire) ExecuteBinding(b);
+                            return new IntPtr(1);
+                        }
                     }
                 }
             }
             else if (msg == WM_MBUTTONDOWN) {
+                // Capture cursor shape now, before the timer fires, to detect link hovers.
+                // Browsers set IDC_HAND when the cursor is over a hyperlink; we reinject
+                // the native click in that case so the link opens instead of the binding firing.
+                CURSORINFO ci = new CURSORINFO(); ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+                GetCursorInfo(ref ci);
+                bool onLink = (ci.hCursor == HandCursorH);
+
                 lock (MLock) {
                     int myGen = ++wGeneration;
                     wheelHeld = true; wheelUpSeen = false;
@@ -726,9 +867,14 @@ public class ShortcutHook {
                             if (myGen != wGeneration || !wheelPending) return;
                             wheelPending = false;
                             int count = wheelClickCount; wheelClickCount = 0;
-                            if      (count == 1) ReinjectWheel(!wheelHeld || wheelUpSeen);
-                            else if (count == 2) ExecuteBinding(BDoubleWheel);
-                            else                 ExecuteBinding(BTripleWheel);
+                            if (count == 1) {
+                                Binding bSingle = ResolveMouseBinding(BSingleWheel);
+                                // Reinject if the cursor was over a link at click time OR no binding is set.
+                                if (bSingle != null && !onLink) ExecuteBinding(bSingle);
+                                else ReinjectWheel(!wheelHeld || wheelUpSeen);
+                            }
+                            else if (count == 2) ExecuteBinding(ResolveMouseBinding(BDoubleWheel));
+                            else                 ExecuteBinding(ResolveMouseBinding(BTripleWheel));
                         }
                     }) { IsBackground = true }.Start();
                 }
@@ -793,22 +939,42 @@ public class ShortcutHook {
         } catch { return ""; }
     }
 
+    // Case-insensitive search — avoids lambdas so ref parameters can safely call this.
+    static bool AppsContain(string[] apps, string fgApp) {
+        if (apps == null) return false;
+        for (int i = 0; i < apps.Length; i++)
+            if (string.Equals(apps[i], fgApp, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Picks the right binding for the current foreground process: app-scoped first, global fallback.
+    static Binding ResolveMouseBinding(List<Binding> list) {
+        if (list == null || list.Count == 0) return null;
+        if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) return list[0]; // fast path: single global
+        string fgApp = GetForegroundProcessName();
+        foreach (Binding b in list) {
+            if (b.Apps != null && b.Apps.Length > 0 && AppsContain(b.Apps, fgApp)) return b;
+        }
+        foreach (Binding b in list) { if (b.Apps == null || b.Apps.Length == 0) return b; }
+        return null;
+    }
+
     // fgApp is passed by ref so FindExact and HasStrictSuperset share the same lazy lookup per keydown.
     static Binding FindExact(int mods, byte[] sk, ref string fgApp) {
         if (sk.Length == 0) return null;
         List<Binding> candidates;
         if (!KeySigIndex.TryGetValue(MakeSignature(mods, sk), out candidates)) return null;
         // Fast path: single global binding (the common case)
-        if (candidates.Count == 1 && candidates[0].App == null) return candidates[0];
+        if (candidates.Count == 1 && (candidates[0].Apps == null || candidates[0].Apps.Length == 0)) return candidates[0];
         if (fgApp == null) fgApp = GetForegroundProcessName();
         // Scoped bindings are at the front; check them first
         foreach (Binding b in candidates) {
-            if (b.App == null) continue;
-            if (string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) return b;
+            if (b.Apps == null || b.Apps.Length == 0) continue;
+            if (AppsContain(b.Apps, fgApp)) return b;
         }
         // Fall back to global binding
         foreach (Binding b in candidates) {
-            if (b.App == null) return b;
+            if (b.Apps == null || b.Apps.Length == 0) return b;
         }
         return null;
     }
@@ -817,9 +983,9 @@ public class ShortcutHook {
         if (keys.Count == 0) return false;
         foreach (Binding b in KeyBindings) {
             if (b.Mods != mods || b.Keys.Length <= keys.Count) continue;
-            if (b.App != null) {
+            if (b.Apps != null && b.Apps.Length > 0) {
                 if (fgApp == null) fgApp = GetForegroundProcessName();
-                if (!string.Equals(b.App, fgApp, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!AppsContain(b.Apps, fgApp)) continue;
             }
             bool ok = true;
             foreach (byte k in keys) {
@@ -1025,13 +1191,11 @@ $defaults = @(
 )
 
 $configPath = Join-Path $PSScriptRoot 'shortcuts.json'
-$altHScroll = $false
 if (Test-Path $configPath) {
     try {
         $json = Get-Content $configPath -Raw | ConvertFrom-Json
         $rawBindings = @($json.bindings)
         if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
-        if ($json.PSObject.Properties.Name -contains 'altHScroll') { $altHScroll = [bool]$json.altHScroll }
     } catch { Write-Log "Bad shortcuts.json -- using defaults. ($_)"; $rawBindings = $defaults }
 } else {
     Write-Log 'shortcuts.json not found -- using defaults.'
@@ -1041,7 +1205,7 @@ if (Test-Path $configPath) {
 # ---------------------------------------------------------------------------
 # Build Binding objects
 # ---------------------------------------------------------------------------
-$validGestures = @('left+right','left+rightx2','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','double-wheel','triple-wheel')
+$validGestures = @('left+right','left+rightx2','left+rightx3','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','shift-scroll-down','shift-scroll-up','ctrl-shift-scroll-down','ctrl-shift-scroll-up','alt-scroll-down','alt-scroll-up','single-wheel','double-wheel','triple-wheel')
 $built = New-Object System.Collections.Generic.List[ShortcutHook+Binding]
 
 foreach ($b in $rawBindings) {
@@ -1062,23 +1226,52 @@ foreach ($b in $rawBindings) {
             Write-Log "Skip unknown trigger prefix: $($b.trigger)"; continue
         }
 
-        if ($b.output -match '^open:(.+)$') {
-            $nb.OpenPath = $Matches[1].Trim()
-        } elseif ($b.output -match '^cmdw:(.+)$') {
-            $nb.CmdLine = $Matches[1].Trim(); $nb.CmdShow = $true
-        } elseif ($b.output -match '^cmd:(.+)$') {
-            $cmdVal = $Matches[1].Trim()
-            if ($cmdVal -match '^cmd:(.+)$') { $cmdVal = $Matches[1].Trim() }
-            $nb.CmdLine = $cmdVal; $nb.CmdShow = $false
-        } else {
-            $nb.Output = Resolve-OutputChord $b.output
+        # Resolve outputs: prefer 'outputs' array, fall back to legacy 'output' string.
+        $outputsList = $null
+        if ($b.PSObject.Properties.Name -contains 'outputs' -and $b.outputs -and @($b.outputs).Count -gt 0) {
+            $outputsList = @($b.outputs)
+        } elseif ($b.PSObject.Properties.Name -contains 'output' -and $b.output) {
+            $outputsList = @($b.output)
         }
-        if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
-            $nb.App = $b.app.Trim()
+        if (-not $outputsList -or $outputsList.Count -eq 0) { Write-Log "Skip no-output binding: $($b.trigger)"; continue }
+
+        $steps = New-Object System.Collections.Generic.List[ShortcutHook+ChainStep]
+        foreach ($outStr in $outputsList) {
+            $step = [ShortcutHook+ChainStep]::new()
+            if ($outStr -match '^open:(.+)$') {
+                $step.OpenPath = $Matches[1].Trim()
+            } elseif ($outStr -match '^cmdw:(.+)$') {
+                $step.CmdLine = $Matches[1].Trim(); $step.CmdShow = $true
+            } elseif ($outStr -match '^cmd:(.+)$') {
+                $cmdVal = $Matches[1].Trim()
+                if ($cmdVal -match '^cmd:(.+)$') { $cmdVal = $Matches[1].Trim() }
+                $step.CmdLine = $cmdVal; $step.CmdShow = $false
+            } elseif ($outStr -match '^hscroll:(left|right)$') {
+                $step.IsHScroll = $true
+                $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
+            } else {
+                $step.Output = Resolve-OutputChord $outStr
+            }
+            $steps.Add($step)
+        }
+        $nb.Steps = $steps.ToArray()
+
+        if ($b.PSObject.Properties.Name -contains 'outputDelay' -and $b.outputDelay -gt 0) {
+            $nb.OutputDelay = [int]$b.outputDelay
+        }
+        # apps[] (multi-app) takes precedence; fall back to legacy app string
+        if ($b.PSObject.Properties.Name -contains 'apps' -and $b.apps -and @($b.apps).Count -gt 0) {
+            $nb.Apps = [string[]]@($b.apps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        } elseif ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
+            $nb.Apps = [string[]]@($b.app.Trim())
+        }
+        if ($b.PSObject.Properties.Name -contains 'debounce' -and $b.debounce -eq $true) {
+            $nb.Debounce = $true
         }
         $built.Add($nb)
     } catch {
-        Write-Log "Skip '$($b.trigger)' -> '$($b.output)': $_"
+        $outRef = if ($b.PSObject.Properties.Name -contains 'outputs') { ($b.outputs -join ', ') } else { $b.output }
+        Write-Log "Skip '$($b.trigger)' -> '$outRef': $_"
     }
 }
 
@@ -1086,15 +1279,21 @@ try {
     [ShortcutHook]::LoadBindings($built.ToArray())
     Write-Log ("Loaded {0} binding(s)." -f $built.Count)
     foreach ($x in $built) {
-        $dest  = if ($x.OpenPath) { "open:$($x.OpenPath)" } elseif ($x.CmdLine) { if ($x.CmdShow) { "cmdw:$($x.CmdLine)" } else { "cmd:$($x.CmdLine)" } } else { "[{0}]" -f ($x.Output -join ',') }
-        $scope = if ($x.App) { " [app:$($x.App)]" } else { "" }
-        if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}" -f $x.MouseGesture, $dest, $scope) }
-        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}" -f $x.Mods, ($x.Keys -join ','), $dest, $scope) }
+        $stepDescs = @()
+        foreach ($s in $x.Steps) {
+            if ($s.OpenPath) { $stepDescs += "open:$($s.OpenPath)" }
+            elseif ($s.CmdLine) {
+                if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
+                else { $stepDescs += "cmd:$($s.CmdLine)" }
+            } else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
+        }
+        $dest  = [string]::Join(' -> ', $stepDescs)
+        $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }
+        $scope = if ($x.Apps -and $x.Apps.Length -gt 0) { " [apps:$($x.Apps -join ',')]" } else { '' }
+        if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}{3}" -f $x.MouseGesture, $dest, $delay, $scope) }
+        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
     }
 } catch { Write-Log "LoadBindings failed: $_"; exit 1 }
-
-[ShortcutHook]::altScrollEnabled = $altHScroll
-Write-Log ("Alt+Scroll horizontal: {0}" -f $altHScroll)
 
 # ---------------------------------------------------------------------------
 # Single-instance guard
@@ -1105,7 +1304,15 @@ if (-not $mutexCreated) { Write-Log 'Already running.'; exit }
 
 try {
     Write-Host 'ShortcutHook active:' -ForegroundColor Green
-    foreach ($b in $rawBindings) { Write-Host ("  {0,-28} ->  {1}{2}" -f $b.trigger, $b.output, $(if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) { "  [app:$($b.app)]" } else { "" })) -ForegroundColor Cyan }
+    foreach ($b in $rawBindings) {
+        $outDisplay = $b.output
+        if ($b.PSObject.Properties.Name -contains 'outputs' -and $b.outputs) {
+            $outDisplay = [string]::Join(' -> ', @($b.outputs))
+        }
+        $appDisplay = ''
+        if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) { $appDisplay = "  [app:$($b.app)]" }
+        Write-Host ("  {0,-28} ->  {1}{2}" -f $b.trigger, $outDisplay, $appDisplay) -ForegroundColor Cyan
+    }
     Write-Host 'Ctrl+C to stop.' -ForegroundColor DarkGray
     [ShortcutHook]::Start()
     Write-Log 'Message loop exited normally.'
