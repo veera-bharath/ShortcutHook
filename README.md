@@ -70,22 +70,25 @@ That's it. The daemon starts automatically whenever you save.
 {
   "altHScroll": false,
   "bindings": [
-    { "trigger": "mouse:left+right",        "output": "Win+Shift+S" },
-    { "trigger": "mouse:left+rightx2",      "output": "Ctrl+Z" },
-    { "trigger": "mouse:double-right",      "output": "Ctrl+C" },
-    { "trigger": "mouse:double-right-sel",  "output": "Win+Shift+S" },
-    { "trigger": "mouse:right-scroll-down", "output": "Win+D" },
-    { "trigger": "key:Ctrl+Alt+C",          "output": "Ctrl+C" },
-    { "trigger": "key:Ctrl+S+L",            "output": "F12",          "app": "Code.exe" },
-    { "trigger": "mouse:double-wheel",      "output": "open:C:\\path\\to\\app.lnk" },
-    { "trigger": "key:Ctrl+Alt+T",          "output": "cmd:start wt.exe" },
-    { "trigger": "key:Ctrl+Alt+L",          "output": "cmdw:tasklist", "enabled": false }
+    { "trigger": "mouse:left+right",        "outputs": ["Win+Shift+S"] },
+    { "trigger": "mouse:left+rightx2",      "outputs": ["Ctrl+Z"] },
+    { "trigger": "mouse:double-right",      "outputs": ["Ctrl+V"] },
+    { "trigger": "mouse:double-right-sel",  "outputs": ["Ctrl+C"] },
+    { "trigger": "mouse:right-scroll-down", "outputs": ["Delete"] },
+    { "trigger": "mouse:alt-scroll-up",     "outputs": ["hscroll:left"] },
+    { "trigger": "mouse:alt-scroll-down",   "outputs": ["hscroll:right"] },
+    { "trigger": "mouse:shift-scroll-up",   "outputs": ["Left"],  "debounce": true },
+    { "trigger": "mouse:double-wheel",      "outputs": ["open:C:\\path\\to\\app.lnk"] },
+    { "trigger": "key:Ctrl+Alt+C",          "outputs": ["Ctrl+C"] },
+    { "trigger": "key:Ctrl+S+L",            "outputs": ["F12"],   "apps": ["Code.exe"] },
+    { "trigger": "key:Ctrl+Alt+T",          "outputs": ["open:C:\\path\\to\\app.lnk", "Win+Shift+S"], "outputDelay": 300 },
+    { "trigger": "key:Ctrl+Alt+L",          "outputs": ["cmdw:tasklist"], "enabled": false }
   ]
 }
 ```
 
 **Trigger prefixes**
-- `mouse:` — `left+right`, `left+rightx2`, `double-right`, `double-right-sel`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `shift-scroll-down`, `shift-scroll-up`, `ctrl-shift-scroll-down`, `ctrl-shift-scroll-up`, `alt-scroll-down`, `alt-scroll-up`, `double-wheel`, `triple-wheel`
+- `mouse:` — `left+right`, `left+rightx2`, `left+rightx3`, `double-right`, `double-right-sel`, `triple-right`, `single-wheel`, `double-wheel`, `triple-wheel`, `right-scroll-down`, `right-scroll-up`, `shift-scroll-down`, `shift-scroll-up`, `ctrl-shift-scroll-down`, `ctrl-shift-scroll-up`, `alt-scroll-down`, `alt-scroll-up`
 - `key:` — any `Mod+Key` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`
   > [!IMPORTANT]
   > To prevent hijacking standard operating system and application shortcuts, global single-letter `Ctrl` triggers (e.g. `Ctrl+A` through `Ctrl+Z`) are restricted and blocked. However, you can freely use:
@@ -97,13 +100,16 @@ That's it. The daemon starts automatically whenever you save.
 - `altHScroll` — when `true`, holding Alt while scrolling fires a horizontal scroll instead of vertical (toggleable from the UI)
 
 **Per-binding optional fields**
-- `app` — process name (e.g. `"Code.exe"`) to scope the binding to a specific foreground application; omit or set to `null` for global. See [Per-application bindings](#per-application-bindings).
-- `enabled` — set to `false` to disable a binding without deleting it; omit or set to `true` (or `null`) to keep it active. Disabled bindings are preserved in config and shown dimmed in the UI.
+- `outputs` — array of one or more actions executed in order (chained). Use `outputDelay` to add a pause between steps.
+- `outputDelay` — milliseconds to wait between chained `outputs` steps (e.g. `300`). Omit or set to `0` for no delay.
+- `apps` — array of process names (e.g. `["Code.exe", "chrome.exe"]`) to scope the binding to specific foreground apps; omit or set to `null` for global. See [Per-application bindings](#per-application-bindings).
+- `enabled` — set to `false` to disable a binding without deleting it; omit or set to `true` to keep it active. Disabled bindings are preserved in config and shown dimmed in the UI.
 - `debounce` — set to `true` on scroll gesture bindings to ignore repeated firings within 200 ms. Useful when a single wheel tick registers multiple events. Omit or set to `false` (default) for normal behavior.
 
 **Outputs**
 - Keyboard chord — `Mod+Key` syntax (e.g. `Win+Shift+S`)
 - Shell execute — `open:<path>` to launch an app, file, or folder
+- Horizontal scroll — `hscroll:left` or `hscroll:right` (fires a `WM_MOUSEHWHEEL` event)
 - Hidden command — `cmd:<command>` runs via `cmd.exe /c`, no window shown
 - Visible command — `cmdw:<command>` opens a `cmd.exe` window and keeps it open after the command finishes
 
@@ -117,13 +123,19 @@ The daemon dynamically uses two advanced detection strategies depending on the a
 
 ## Per-application bindings
 
-Any keyboard binding can be scoped to a specific application by adding an `"app"` field set to the process name of the target application (e.g. `"Code.exe"`, `"chrome.exe"`, `"WINWORD.EXE"`). The daemon checks the foreground window's process name before firing; if it doesn't match, the key event passes through normally.
+Any binding can be scoped to one or more applications by setting the `"apps"` array to the process names of the target applications (e.g. `"Code.exe"`, `"chrome.exe"`, `"WINWORD.EXE"`). The daemon checks the foreground window's process name before firing; if it doesn't match, the event passes through normally.
 
 ```json
-{ "trigger": "key:Ctrl+S+L", "output": "F12", "app": "Code.exe" }
+{ "trigger": "key:Ctrl+S+L", "outputs": ["F12"], "apps": ["Code.exe"] }
 ```
 
-The app filter is configured via the dropdown in each keyboard row of the settings UI. Choosing a specific app from the list populates the process name automatically; choosing "Global" clears it.
+Multiple apps can be listed in the array — the binding fires when any of them is the foreground window:
+
+```json
+{ "trigger": "mouse:double-right", "outputs": ["Alt+V"], "apps": ["WindowsTerminal.exe", "cmd.exe"] }
+```
+
+The app filter is configured via the scope button in each row of the settings UI. Selecting apps from the list populates the process names automatically; choosing "Global" clears it.
 
 ## Building from source
 
