@@ -104,13 +104,13 @@ public partial class MainWindow : Window
         new("right-scroll-down", "Right Hold + Wheel Down"),
         new("right-scroll-up",   "Right Hold + Wheel Up"),
         new("shift-scroll-up",   "Shift + Wheel Up",
-            new("Select to line start (Shift+Home)",       ActionKind.ShiftHome)),
+            new("Move to line start (Home)",                ActionKind.ShiftHome)),
         new("shift-scroll-down", "Shift + Wheel Down",
-            new("Select to line end (Shift+End)",           ActionKind.ShiftEnd)),
+            new("Move to line end (End)",                   ActionKind.ShiftEnd)),
         new("ctrl-shift-scroll-up",   "Ctrl+Shift + Wheel Up",
-            new("Select word left (Ctrl+Shift+Left)",       ActionKind.CtrlShiftLeft)),
+            new("Move word left (Ctrl+Left)",               ActionKind.CtrlShiftLeft)),
         new("ctrl-shift-scroll-down", "Ctrl+Shift + Wheel Down",
-            new("Select word right (Ctrl+Shift+Right)",     ActionKind.CtrlShiftRight)),
+            new("Move word right (Ctrl+Right)",             ActionKind.CtrlShiftRight)),
         new("alt-scroll-up",   "Alt + Wheel Up",
             new("Scroll left (horizontal)",                 ActionKind.HScrollLeft)),
         new("alt-scroll-down", "Alt + Wheel Down",
@@ -1438,12 +1438,12 @@ public partial class MainWindow : Window
 
         if (output.StartsWith("cmd:", StringComparison.Ordinal) ||
             output.StartsWith("cmdw:", StringComparison.Ordinal)) return ActionKind.Command;
-        if (output == "hscroll:left"       && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
-        if (output == "hscroll:right"      && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
-        if (output == "Shift+Home"         && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
-        if (output == "Shift+End"          && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
-        if (output == "Ctrl+Shift+Left"    && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
-        if (output == "Ctrl+Shift+Right"   && Has(ActionKind.CtrlShiftRight)) return ActionKind.CtrlShiftRight;
+        if (output == "hscroll:left"   && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
+        if (output == "hscroll:right"  && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
+        if (output == "Home"           && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
+        if (output == "End"            && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
+        if (output == "Ctrl+Left"      && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
+        if (output == "Ctrl+Right"     && Has(ActionKind.CtrlShiftRight)) return ActionKind.CtrlShiftRight;
         if (string.IsNullOrEmpty(output) || !output.StartsWith("open:", StringComparison.Ordinal))
             return ActionKind.Shortcut;
         var p = output.Substring(5);
@@ -1505,10 +1505,10 @@ public partial class MainWindow : Window
             case ActionKind.HScrollRight:
             {
                 var desc = action switch {
-                    ActionKind.ShiftHome      => "Shift+Home — select to line start",
-                    ActionKind.ShiftEnd       => "Shift+End — select to line end",
-                    ActionKind.CtrlShiftLeft  => "Ctrl+Shift+Left — select word left",
-                    ActionKind.CtrlShiftRight => "Ctrl+Shift+Right — select word right",
+                    ActionKind.ShiftHome      => "Home — move to line start",
+                    ActionKind.ShiftEnd       => "End — move to line end",
+                    ActionKind.CtrlShiftLeft  => "Ctrl+Left — move word left",
+                    ActionKind.CtrlShiftRight => "Ctrl+Right — move word right",
                     ActionKind.HScrollLeft    => "Horizontal scroll left",
                     ActionKind.HScrollRight   => "Horizontal scroll right",
                     _                         => ""
@@ -1730,10 +1730,10 @@ public partial class MainWindow : Window
         ActionKind.OpenFolder      => item.OutputValue,
         ActionKind.Command         => (item.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
                                          ? (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
-        ActionKind.ShiftHome       => "Shift+Home",
-        ActionKind.ShiftEnd        => "Shift+End",
-        ActionKind.CtrlShiftLeft   => "Ctrl+Shift+Left",
-        ActionKind.CtrlShiftRight  => "Ctrl+Shift+Right",
+        ActionKind.ShiftHome       => "Home",
+        ActionKind.ShiftEnd        => "End",
+        ActionKind.CtrlShiftLeft   => "Ctrl+Left",
+        ActionKind.CtrlShiftRight  => "Ctrl+Right",
         ActionKind.HScrollLeft     => "hscroll:left",
         ActionKind.HScrollRight    => "hscroll:right",
         _                          => "",
