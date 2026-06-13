@@ -40,6 +40,18 @@ public sealed class BindingEntry
 public sealed class ConfigRoot
 {
     public bool altHScroll { get; set; } = false;
+    public string activeProfile { get; set; } = "Default";
+    public List<ProfileEntry> profiles { get; set; } = new();
+
+    // Legacy top-level bindings from pre-profile configs. Read-only — used to detect
+    // and migrate old-format files. Never written back.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<BindingEntry>? bindings { get; set; }
+}
+
+public sealed class ProfileEntry
+{
+    public string name { get; set; } = "";
     public List<BindingEntry> bindings { get; set; } = new();
 }
 
