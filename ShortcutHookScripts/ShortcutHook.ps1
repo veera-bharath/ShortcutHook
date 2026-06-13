@@ -1191,16 +1191,28 @@ $defaults = @(
 )
 
 $configPath = Join-Path $PSScriptRoot 'shortcuts.json'
+$activeProfileName = $null
 if (Test-Path $configPath) {
     try {
         $json = Get-Content $configPath -Raw | ConvertFrom-Json
-        $rawBindings = @($json.bindings)
+        $profiles = @($json.profiles)
+        if ($profiles.Count -gt 0) {
+            $activeProfileName = $json.activeProfile
+            $activeProfile = $profiles | Where-Object { $_.name -eq $activeProfileName } | Select-Object -First 1
+            $rawBindings = if ($activeProfile) { @($activeProfile.bindings) } else { @() }
+        } else {
+            # Old format (not yet migrated) -- fall back to top-level bindings.
+            $activeProfileName = 'Default'
+            $rawBindings = @($json.bindings)
+        }
         if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
     } catch { Write-Log "Bad shortcuts.json -- using defaults. ($_)"; $rawBindings = $defaults }
 } else {
     Write-Log 'shortcuts.json not found -- using defaults.'
     $rawBindings = $defaults
 }
+
+if ($activeProfileName) { Write-Log "Active profile: $activeProfileName" }
 
 # ---------------------------------------------------------------------------
 # Build Binding objects
