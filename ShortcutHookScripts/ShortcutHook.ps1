@@ -1199,13 +1199,20 @@ if (Test-Path $configPath) {
         if ($profiles.Count -gt 0) {
             $activeProfileName = $json.activeProfile
             $activeProfile = $profiles | Where-Object { $_.name -eq $activeProfileName } | Select-Object -First 1
-            $rawBindings = if ($activeProfile) { @($activeProfile.bindings) } else { @() }
+            if ($activeProfile) {
+                # Active profile found -- use its bindings as-is, even if empty
+                # (an empty profile intentionally has no shortcuts).
+                $rawBindings = @($activeProfile.bindings)
+            } else {
+                $rawBindings = $defaults
+                Write-Log 'Active profile not found -- using defaults.'
+            }
         } else {
             # Old format (not yet migrated) -- fall back to top-level bindings.
             $activeProfileName = 'Default'
             $rawBindings = @($json.bindings)
+            if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
         }
-        if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
     } catch { Write-Log "Bad shortcuts.json -- using defaults. ($_)"; $rawBindings = $defaults }
 } else {
     Write-Log 'shortcuts.json not found -- using defaults.'
