@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -590,6 +592,9 @@ public partial class MainWindow : Window
     // =========================================================================
     string? _profileFormEditTarget;   // null = adding a new profile, else renaming this profile
     string? _profileDeleteTarget;
+    string? _selectedProfileForExport; // profile highlighted for Export; defaults to the active profile
+    ProfileEntry? _pendingImport;      // import awaiting a rename to resolve a name conflict
+    int _pendingImportSkipped;
 
     void ShowProfilesView()
     {
@@ -605,10 +610,15 @@ public partial class MainWindow : Window
 
         var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
 
+        var selectedName = config.profiles.Any(p => string.Equals(p.name, _selectedProfileForExport, StringComparison.Ordinal))
+            ? _selectedProfileForExport!
+            : config.activeProfile;
+
         foreach (var profile in config.profiles)
         {
-            var name     = profile.name;
-            var isActive = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+            var name       = profile.name;
+            var isActive   = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+            var isSelected = string.Equals(name, selectedName, StringComparison.Ordinal);
 
             var radio = new RadioButton
             {
@@ -662,11 +672,14 @@ public partial class MainWindow : Window
                 Padding      = new Thickness(10, 8, 10, 8),
                 CornerRadius = new CornerRadius(6),
                 Background   = Transparent,
+                BorderBrush  = isSelected ? AccentBrush : Transparent,
+                BorderThickness = new Thickness(1),
                 Margin       = new Thickness(0, 0, 0, 4),
                 Child        = grid,
             };
-            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; row.Background = Br("#1F1F1F"); };
-            row.MouseLeave += (_, __) => { actionsPanel.Visibility = Visibility.Collapsed; row.Background = Transparent; };
+            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; if (!isSelected) row.Background = Br("#1F1F1F"); };
+            row.MouseLeave += (_, __) => { actionsPanel.Visibility = Visibility.Collapsed; if (!isSelected) row.Background = Transparent; };
+            row.MouseLeftButtonDown += (_, __) => { _selectedProfileForExport = name; BuildProfileList(); };
 
             radio.Checked  += (_, __) => SwitchActiveProfile(name);
             editBtn.Click  += (_, __) => ShowProfileForm(name);
@@ -730,6 +743,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_pendingImport != null)
+        {
+            _pendingImport.name = name;
+            FinishImport(_pendingImport, _pendingImportSkipped);
+            _pendingImport = null;
+            return;
+        }
+
         if (_profileFormEditTarget == null)
         {
             if (config.profiles.Count >= ProfileHelpers.MaxProfiles)
@@ -751,7 +772,11 @@ public partial class MainWindow : Window
         ShowProfilesView();
     }
 
-    void ProfileFormCancel_Click(object sender, RoutedEventArgs e) => ShowProfilesView();
+    void ProfileFormCancel_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingImport = null;
+        ShowProfilesView();
+    }
 
     void ShowProfileDelete(string name)
     {
@@ -787,6 +812,109 @@ public partial class MainWindow : Window
     }
 
     void ProfileDeleteCancel_Click(object sender, RoutedEventArgs e) => ShowProfilesView();
+
+    // =========================================================================
+    // Profile import / export
+    // =========================================================================
+    void ExportProfileBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var name = config.profiles.Any(p => string.Equals(p.name, _selectedProfileForExport, StringComparison.Ordinal))
+            ? _selectedProfileForExport!
+            : config.activeProfile;
+        var profile = config.profiles.FirstOrDefault(p => string.Equals(p.name, name, StringComparison.Ordinal));
+        if (profile == null) return;
+
+        var dialog = new SaveFileDialog
+        {
+            Title      = "Export Profile",
+            Filter     = "JSON files (*.json)|*.json",
+            DefaultExt = "json",
+            FileName   = $"{profile.name}.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            ConfigService.ExportProfile(dialog.FileName, profile);
+            ShowFeedback($"Profile '{profile.name}' exported.", FeedbackKind.Ok);
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Export failed: {ex.Message}", FeedbackKind.Err);
+        }
+    }
+
+    void ImportProfileBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title  = "Import Profile",
+            Filter = "JSON files (*.json)|*.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        ProfileEntry imported;
+        try
+        {
+            imported = ConfigService.ImportProfile(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Import failed: {ex.Message}", FeedbackKind.Err);
+            return;
+        }
+
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        if (config.profiles.Count >= ProfileHelpers.MaxProfiles)
+        {
+            ShowFeedback($"Cannot import: maximum of {ProfileHelpers.MaxProfiles} profiles reached.", FeedbackKind.Err);
+            return;
+        }
+
+        imported.bindings = ConfigService.SanitizeImportedBindings(imported.bindings, out var skipped);
+
+        if (config.profiles.Any(p => string.Equals(p.name, imported.name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _pendingImport        = imported;
+            _pendingImportSkipped = skipped;
+            ShowImportRenameForm(imported.name);
+            return;
+        }
+
+        FinishImport(imported, skipped);
+    }
+
+    void ShowImportRenameForm(string conflictName)
+    {
+        _profileFormEditTarget = null;
+        ProfileFormTitle.Text         = "Import Profile";
+        ProfileFormConfirmBtn.Content = "Import";
+        ProfileNameBox.Text            = $"{conflictName} (imported)";
+
+        ProfileFormError.Visibility       = Visibility.Collapsed;
+        SettingsProfilesView.Visibility   = Visibility.Collapsed;
+        SettingsProfileFormView.Visibility = Visibility.Visible;
+        ProfileNameBox.Focus();
+        ProfileNameBox.SelectAll();
+    }
+
+    void FinishImport(ProfileEntry profile, int skipped)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        config.profiles.Add(profile);
+        ConfigService.Save(InstallService.ScriptRoot, config);
+
+        _selectedProfileForExport = profile.name;
+        RefreshProfileDropdown();
+        ShowProfilesView();
+
+        var msg = $"Profile '{profile.name}' imported.";
+        if (skipped > 0)
+            ShowFeedback($"{msg} {skipped} binding{(skipped == 1 ? "" : "s")} skipped (unknown trigger).", FeedbackKind.Warn);
+        else
+            ShowFeedback(msg, FeedbackKind.Ok);
+    }
 
     // Stops + restarts the daemon if it's currently running (e.g. after switching profiles).
     bool RestartDaemonIfRunning()
