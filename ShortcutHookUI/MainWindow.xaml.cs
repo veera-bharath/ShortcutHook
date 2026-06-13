@@ -160,6 +160,7 @@ public partial class MainWindow : Window
     static readonly Brush LabelBrush = Br("#CCCCCC");
     static readonly Brush DarkBorder = Br("#2E2E2E");
     static readonly Brush BtnHoverBg = Br("#1F1F1F");
+    static readonly Brush AccentBrush = Br("#5B9CF6");
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 
@@ -281,6 +282,7 @@ public partial class MainWindow : Window
     {
         RefreshInstallState();
         ReloadBindingsFromConfig();
+        RefreshProfileDropdown();
         ApplySectionState();
         UpdateHookStatus();
         _setupComplete = InstallService.IsSetupComplete()
@@ -558,11 +560,15 @@ public partial class MainWindow : Window
 
     void SettingsCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
 
-    void ManageProfilesOption_Click(object sender, MouseButtonEventArgs e)
+    void ManageProfilesOption_Click(object sender, MouseButtonEventArgs e) => OpenProfilesView();
+
+    void OpenProfilesView()
     {
-        SettingsMenuView.Visibility     = Visibility.Collapsed;
-        SettingsProfilesView.Visibility = Visibility.Visible;
+        ShowSettingsMenu();
+        SettingsMenuView.Visibility      = Visibility.Collapsed;
+        SettingsProfilesView.Visibility  = Visibility.Visible;
         BuildProfileList();
+        SettingsRoot.Visibility = Visibility.Visible;
     }
 
     void AboutOption_Click(object sender, MouseButtonEventArgs e)
@@ -679,6 +685,7 @@ public partial class MainWindow : Window
 
         ConfigService.SetActiveProfile(InstallService.ScriptRoot, name);
         ReloadBindingsFromConfig();
+        RefreshProfileDropdown();
         RestartDaemonIfRunning();
         ShowFeedback($"Switched to '{name}'.", FeedbackKind.Ok);
     }
@@ -740,6 +747,7 @@ public partial class MainWindow : Window
             ShowFeedback($"Profile renamed to '{name}'.", FeedbackKind.Ok);
         }
 
+        RefreshProfileDropdown();
         ShowProfilesView();
     }
 
@@ -774,6 +782,7 @@ public partial class MainWindow : Window
 
         ConfigService.DeleteProfile(InstallService.ScriptRoot, name);
         ShowFeedback($"Profile '{name}' deleted.", FeedbackKind.Ok);
+        RefreshProfileDropdown();
         ShowProfilesView();
     }
 
@@ -796,6 +805,87 @@ public partial class MainWindow : Window
         StatusDot.Fill  = AmberBrush;
         StatusText.Text = "Restarting...";
         return wasRunning;
+    }
+
+    // =========================================================================
+    // Header profile switcher
+    // =========================================================================
+    void ProfileSwitcherBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileSwitcherPopup.IsOpen) { ProfileSwitcherPopup.IsOpen = false; return; }
+        RefreshProfileDropdown();
+        ProfileSwitcherPopup.IsOpen = true;
+    }
+
+    void RefreshProfileDropdown()
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        ProfileSwitcherLabel.Text = config.activeProfile;
+
+        ProfileSwitcherList.Children.Clear();
+
+        foreach (var profile in config.profiles)
+        {
+            var name     = profile.name;
+            var isActive = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+
+            var text = new TextBlock
+            {
+                Text              = (isActive ? "✓  " : "    ") + name,
+                Foreground        = isActive ? AccentBrush : TextBrush,
+                FontSize          = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var row = new Border
+            {
+                Padding      = new Thickness(10, 7, 10, 7),
+                CornerRadius = new CornerRadius(4),
+                Background   = Transparent,
+                Cursor       = Cursors.Hand,
+                Child        = text,
+            };
+            row.MouseEnter += (_, __) => row.Background = BtnHoverBg;
+            row.MouseLeave += (_, __) => row.Background = Transparent;
+            row.MouseLeftButtonUp += (_, __) =>
+            {
+                ProfileSwitcherPopup.IsOpen = false;
+                SwitchActiveProfile(name);
+            };
+
+            ProfileSwitcherList.Children.Add(row);
+        }
+
+        ProfileSwitcherList.Children.Add(new Border
+        {
+            Height     = 1,
+            Background = Br("#3A3A3A"),
+            Margin     = new Thickness(4, 4, 4, 4),
+        });
+
+        var manageText = new TextBlock
+        {
+            Text              = "Manage Profiles →",
+            Foreground        = AccentBrush,
+            FontSize          = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var manageRow = new Border
+        {
+            Padding      = new Thickness(10, 7, 10, 7),
+            CornerRadius = new CornerRadius(4),
+            Background   = Transparent,
+            Cursor       = Cursors.Hand,
+            Child        = manageText,
+        };
+        manageRow.MouseEnter += (_, __) => manageRow.Background = BtnHoverBg;
+        manageRow.MouseLeave += (_, __) => manageRow.Background = Transparent;
+        manageRow.MouseLeftButtonUp += (_, __) =>
+        {
+            ProfileSwitcherPopup.IsOpen = false;
+            OpenProfilesView();
+        };
+        ProfileSwitcherList.Children.Add(manageRow);
     }
 
     // =========================================================================
