@@ -561,10 +561,11 @@ public partial class MainWindow : Window
         _mouseRows.Clear();
         _mouseGestureStacks.Clear();
 
-        var configRoot = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var configRoot     = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var activeBindings = ConfigService.GetActiveProfile(configRoot).bindings;
 
         var gestureGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var b in configRoot.bindings)
+        foreach (var b in activeBindings)
         {
             if (!b.trigger.StartsWith("mouse:", StringComparison.Ordinal)) continue;
             var g = b.trigger.Substring(6);
@@ -1957,8 +1958,7 @@ public partial class MainWindow : Window
             if (HotkeyProbe.IsConflicted(parsed.Mods, parsed.Keys[0]))
                 conflicts.Add(trig.Substring(4));
 
-        var configToSave = new ConfigRoot { bindings = entries };
-        try { ConfigService.Save(InstallService.ScriptRoot, configToSave); }
+        try { ConfigService.SaveActiveProfileBindings(InstallService.ScriptRoot, entries); }
         catch (Exception ex) { ShowFeedback($"Save failed: {ex.Message}", FeedbackKind.Err); return; }
 
         var wasRunning = DaemonService.IsRunning();

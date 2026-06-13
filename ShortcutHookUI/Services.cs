@@ -160,29 +160,64 @@ internal static class ConfigService
                 var txt = File.ReadAllText(p);
                 var doc = JsonSerializer.Deserialize<ConfigRoot>(txt);
                 if (doc is not null)
-                {
-                    if (doc.bindings is not { Count: > 0 })
-                        doc.bindings = new List<BindingEntry>(Defaults);
-                    else
-                        NormalizeOutputs(doc.bindings);
-                    return doc;
-                }
+                    return Migrate(doc, root);
             }
             catch { }
         }
-        return new ConfigRoot { bindings = new List<BindingEntry>(Defaults) };
+        return DefaultConfig();
     }
 
-    public static List<BindingEntry> Read(string root) => ReadConfig(root).bindings;
+    // Migrates a freshly-deserialized ConfigRoot to the profiles format, persisting the
+    // migration if the on-disk file was in the old (top-level `bindings`) or empty format.
+    static ConfigRoot Migrate(ConfigRoot doc, string root)
+    {
+        if (doc.profiles is { Count: > 0 })
+        {
+            doc.bindings = null;
+            foreach (var profile in doc.profiles)
+                NormalizeOutputs(profile.bindings);
+            if (!doc.profiles.Any(pr => string.Equals(pr.name, doc.activeProfile, StringComparison.Ordinal)))
+                doc.activeProfile = doc.profiles[0].name;
+            return doc;
+        }
+
+        // Old format (top-level `bindings`) or an empty config — wrap into a "Default" profile.
+        var bindings = doc.bindings is { Count: > 0 } ? doc.bindings : new List<BindingEntry>();
+        NormalizeOutputs(bindings);
+
+        doc.bindings = null;
+        doc.profiles = new List<ProfileEntry> { new() { name = "Default", bindings = bindings } };
+        doc.activeProfile = "Default";
+        Save(root, doc);
+        return doc;
+    }
+
+    public static ProfileEntry GetActiveProfile(ConfigRoot config) =>
+        config.profiles.FirstOrDefault(p => string.Equals(p.name, config.activeProfile, StringComparison.Ordinal))
+        ?? config.profiles[0];
+
+    public static List<BindingEntry> Read(string root) => GetActiveProfile(ReadConfig(root)).bindings;
+
+    public static ConfigRoot DefaultConfig() => new()
+    {
+        activeProfile = "Default",
+        profiles = new List<ProfileEntry> { new() { name = "Default", bindings = new List<BindingEntry>(Defaults) } },
+    };
 
     public static void Save(string root, ConfigRoot config)
     {
+        config.bindings = null;
         Directory.CreateDirectory(root);
         File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(config, JsonOpts));
     }
 
-    public static void Save(string root, IEnumerable<BindingEntry> bindings) =>
-        Save(root, new ConfigRoot { bindings = bindings.ToList() });
+    // Replaces the active profile's bindings, preserving other profiles and settings.
+    public static void SaveActiveProfileBindings(string root, IEnumerable<BindingEntry> bindings)
+    {
+        var config = ReadConfig(root);
+        GetActiveProfile(config).bindings = bindings.ToList();
+        Save(root, config);
+    }
 }
 
 internal static class InstallService
@@ -257,7 +292,7 @@ internal static class InstallService
 
         // 3. Write default config if absent.
         if (!File.Exists(ConfigService.ConfigPath(ScriptRoot)))
-            ConfigService.Save(ScriptRoot, ConfigService.Defaults);
+            ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
 
         SaveAppRoot(appRoot);
     }
