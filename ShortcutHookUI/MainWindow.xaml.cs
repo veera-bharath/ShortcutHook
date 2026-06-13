@@ -264,6 +264,9 @@ public partial class MainWindow : Window
 
         PreviewKeyDown += OnWindowPreviewKeyDown;
         PreviewKeyUp   += OnWindowPreviewKeyUp;
+
+        var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        SettingsVersionText.Text = $"v{v.Major}.{v.Minor}.{v.Build}";
     }
 
     void OnSourceInitialized(object? sender, EventArgs e)
@@ -531,8 +534,47 @@ public partial class MainWindow : Window
         }
     }
 
-    void AboutBtn_Click(object sender, RoutedEventArgs e) =>
-        new AboutWindow { Owner = this }.ShowDialog();
+    // =========================================================================
+    // Settings overlay
+    // =========================================================================
+    void SettingsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        ShowSettingsMenu();
+        SettingsRoot.Visibility = Visibility.Visible;
+    }
+
+    void ShowSettingsMenu()
+    {
+        SettingsMenuView.Visibility     = Visibility.Visible;
+        SettingsProfilesView.Visibility = Visibility.Collapsed;
+        SettingsAboutView.Visibility    = Visibility.Collapsed;
+    }
+
+    void CloseSettings() => SettingsRoot.Visibility = Visibility.Collapsed;
+
+    void SettingsRoot_MouseDown(object sender, MouseButtonEventArgs e) => CloseSettings();
+
+    void SettingsCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    void ManageProfilesOption_Click(object sender, MouseButtonEventArgs e)
+    {
+        SettingsMenuView.Visibility     = Visibility.Collapsed;
+        SettingsProfilesView.Visibility = Visibility.Visible;
+    }
+
+    void AboutOption_Click(object sender, MouseButtonEventArgs e)
+    {
+        SettingsMenuView.Visibility  = Visibility.Collapsed;
+        SettingsAboutView.Visibility = Visibility.Visible;
+    }
+
+    void SettingsBack_Click(object sender, RoutedEventArgs e) => ShowSettingsMenu();
+
+    void SettingsGitHubBtn_Click(object sender, RoutedEventArgs e) =>
+        Process.Start(new ProcessStartInfo("https://github.com/veera-bharath/ShortcutHook")
+        {
+            UseShellExecute = true
+        });
 
     // =========================================================================
     // Feedback toast
@@ -1265,6 +1307,13 @@ public partial class MainWindow : Window
     // =========================================================================
     void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (SettingsRoot.Visibility == Visibility.Visible)
+        {
+            var settingsKey = e.Key == Key.System ? e.SystemKey : e.Key;
+            if (settingsKey == Key.Escape) { CloseSettings(); e.Handled = true; }
+            return;
+        }
+
         if (!_captureActive) return;
         e.Handled = true;
         var k = e.Key == Key.System ? e.SystemKey : e.Key;
