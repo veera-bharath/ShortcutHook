@@ -56,6 +56,9 @@ Grab the latest **ShortcutHookUI.exe** directly or browse all available versions
 
 That's it. The daemon starts automatically whenever you save.
 
+> [!NOTE]
+> **SmartScreen / Antivirus warnings**: Since this app is unsigned, Windows SmartScreen may show "Windows protected your PC" on first launch — click **More info → Run anyway**. Your antivirus may also flag the background daemon, since it installs low-level keyboard/mouse hooks (a pattern shared with keyloggers, but used here only to detect your configured shortcuts). The source is fully open — review it or build from source yourself if you'd like to verify this before running.
+
 ## Install layout
 
 | What | Where |
