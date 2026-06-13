@@ -127,6 +127,30 @@
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
 
+        <Style x:Key="DarkRadio" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid Width="18" Height="18">
+                            <Ellipse x:Name="Outer" Stroke="#555555" StrokeThickness="1.5" Fill="Transparent"/>
+                            <Ellipse x:Name="Inner" Width="9" Height="9" Fill="#5B9CF6" Opacity="0"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Outer" Property="Stroke" Value="#5B9CF6"/>
+                                <Setter TargetName="Inner" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Outer" Property="Stroke" Value="#777777"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="SettingsOptionCard" TargetType="Border">
             <Setter Property="Background" Value="#1F1F1F"/>
             <Setter Property="BorderBrush" Value="#2A2A2A"/>
@@ -557,10 +581,43 @@
                     </StackPanel>
 
                     <StackPanel x:Name="SettingsProfilesView" Visibility="Collapsed">
-                        <TextBlock Text="Profiles" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold" Margin="0,0,0,16"/>
-                        <TextBlock Text="Profile management is coming soon." Foreground="#777777" FontSize="12" TextWrapping="Wrap"/>
+                        <DockPanel Margin="0,0,0,14">
+                            <TextBlock Text="Profiles" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <Button x:Name="AddProfileBtn" DockPanel.Dock="Right" Content="+ Add Profile"
+                                    Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
+                                    Height="28" Padding="12,0" Click="AddProfileBtn_Click"/>
+                        </DockPanel>
+                        <StackPanel x:Name="ProfileListStack"/>
                         <Button Content="Back" Style="{StaticResource BtnGhost}" Height="34" Width="90"
                                 HorizontalAlignment="Left" Margin="0,18,0,0" Click="SettingsBack_Click"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SettingsProfileFormView" Visibility="Collapsed">
+                        <TextBlock x:Name="ProfileFormTitle" Text="Add Profile" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold" Margin="0,0,0,16"/>
+                        <TextBox x:Name="ProfileNameBox" Style="{StaticResource DarkTB}" Height="34" Padding="10,0" MaxLength="32"/>
+                        <TextBlock x:Name="ProfileFormError" Foreground="#E85C5C" FontSize="11" Margin="0,8,0,0"
+                                   TextWrapping="Wrap" Visibility="Collapsed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                            <Button x:Name="ProfileFormConfirmBtn" Content="Create" Background="#5B9CF6"
+                                    Style="{StaticResource BtnPrimary}" Height="36" Width="100" Padding="0"
+                                    Click="ProfileFormConfirm_Click"/>
+                            <Button Content="Cancel" Style="{StaticResource BtnGhost}" Height="36" Width="90" Padding="0"
+                                    Margin="10,0,0,0" Click="ProfileFormCancel_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SettingsProfileDeleteView" Visibility="Collapsed">
+                        <TextBlock Text="Delete Profile" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold" Margin="0,0,0,12"/>
+                        <TextBlock x:Name="ProfileDeleteMsg" Foreground="#CCCCCC" FontSize="13" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="ProfileDeleteError" Foreground="#E85C5C" FontSize="11" Margin="0,10,0,0"
+                                   TextWrapping="Wrap" Visibility="Collapsed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                            <Button x:Name="ProfileDeleteConfirmBtn" Content="Delete" Background="#E85C5C"
+                                    Style="{StaticResource BtnPrimary}" Height="36" Width="100" Padding="0"
+                                    Click="ProfileDeleteConfirm_Click"/>
+                            <Button Content="Cancel" Style="{StaticResource BtnGhost}" Height="36" Width="90" Padding="0"
+                                    Margin="10,0,0,0" Click="ProfileDeleteCancel_Click"/>
+                        </StackPanel>
                     </StackPanel>
 
                     <StackPanel x:Name="SettingsAboutView" Visibility="Collapsed">

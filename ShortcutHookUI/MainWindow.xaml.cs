@@ -545,9 +545,11 @@ public partial class MainWindow : Window
 
     void ShowSettingsMenu()
     {
-        SettingsMenuView.Visibility     = Visibility.Visible;
-        SettingsProfilesView.Visibility = Visibility.Collapsed;
-        SettingsAboutView.Visibility    = Visibility.Collapsed;
+        SettingsMenuView.Visibility        = Visibility.Visible;
+        SettingsProfilesView.Visibility    = Visibility.Collapsed;
+        SettingsAboutView.Visibility       = Visibility.Collapsed;
+        SettingsProfileFormView.Visibility = Visibility.Collapsed;
+        SettingsProfileDeleteView.Visibility = Visibility.Collapsed;
     }
 
     void CloseSettings() => SettingsRoot.Visibility = Visibility.Collapsed;
@@ -560,6 +562,7 @@ public partial class MainWindow : Window
     {
         SettingsMenuView.Visibility     = Visibility.Collapsed;
         SettingsProfilesView.Visibility = Visibility.Visible;
+        BuildProfileList();
     }
 
     void AboutOption_Click(object sender, MouseButtonEventArgs e)
@@ -575,6 +578,225 @@ public partial class MainWindow : Window
         {
             UseShellExecute = true
         });
+
+    // =========================================================================
+    // Profile management
+    // =========================================================================
+    string? _profileFormEditTarget;   // null = adding a new profile, else renaming this profile
+    string? _profileDeleteTarget;
+
+    void ShowProfilesView()
+    {
+        SettingsProfileFormView.Visibility   = Visibility.Collapsed;
+        SettingsProfileDeleteView.Visibility = Visibility.Collapsed;
+        SettingsProfilesView.Visibility      = Visibility.Visible;
+        BuildProfileList();
+    }
+
+    void BuildProfileList()
+    {
+        ProfileListStack.Children.Clear();
+
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+
+        foreach (var profile in config.profiles)
+        {
+            var name     = profile.name;
+            var isActive = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+
+            var radio = new RadioButton
+            {
+                Style             = (Style)FindResource("DarkRadio"),
+                GroupName         = "ActiveProfileGroup",
+                IsChecked         = isActive,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin            = new Thickness(0, 0, 10, 0),
+            };
+
+            var nameText = new TextBlock
+            {
+                Text              = name,
+                Foreground        = TextBrush,
+                FontSize          = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var editBtn = new Button
+            {
+                Content = "Edit", Style = (Style)FindResource("BtnGhost"),
+                Width = 52, Height = 26, Padding = new Thickness(0), FontSize = 11,
+            };
+            var deleteBtn = new Button
+            {
+                Content = "Delete", Style = (Style)FindResource("BtnGhost"),
+                Width = 58, Height = 26, Padding = new Thickness(0), FontSize = 11,
+                Margin = new Thickness(6, 0, 0, 0),
+            };
+            var actionsPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Visibility  = Visibility.Collapsed,
+            };
+            actionsPanel.Children.Add(editBtn);
+            actionsPanel.Children.Add(deleteBtn);
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(radio, 0);
+            Grid.SetColumn(nameText, 1);
+            Grid.SetColumn(actionsPanel, 2);
+            grid.Children.Add(radio);
+            grid.Children.Add(nameText);
+            grid.Children.Add(actionsPanel);
+
+            var row = new Border
+            {
+                Padding      = new Thickness(10, 8, 10, 8),
+                CornerRadius = new CornerRadius(6),
+                Background   = Transparent,
+                Margin       = new Thickness(0, 0, 0, 4),
+                Child        = grid,
+            };
+            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; row.Background = Br("#1F1F1F"); };
+            row.MouseLeave += (_, __) => { actionsPanel.Visibility = Visibility.Collapsed; row.Background = Transparent; };
+
+            radio.Checked  += (_, __) => SwitchActiveProfile(name);
+            editBtn.Click  += (_, __) => ShowProfileForm(name);
+            deleteBtn.Click += (_, __) => ShowProfileDelete(name);
+
+            ProfileListStack.Children.Add(row);
+        }
+
+        AddProfileBtn.IsEnabled = config.profiles.Count < ProfileHelpers.MaxProfiles;
+    }
+
+    void SwitchActiveProfile(string name)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        if (string.Equals(config.activeProfile, name, StringComparison.Ordinal)) return;
+
+        ConfigService.SetActiveProfile(InstallService.ScriptRoot, name);
+        ReloadBindingsFromConfig();
+        RestartDaemonIfRunning();
+        ShowFeedback($"Switched to '{name}'.", FeedbackKind.Ok);
+    }
+
+    void AddProfileBtn_Click(object sender, RoutedEventArgs e) => ShowProfileForm(null);
+
+    void ShowProfileForm(string? editTarget)
+    {
+        _profileFormEditTarget = editTarget;
+
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        if (editTarget == null)
+        {
+            ProfileFormTitle.Text        = "Add Profile";
+            ProfileFormConfirmBtn.Content = "Create";
+            ProfileNameBox.Text           = ProfileHelpers.NextDefaultName(config.profiles);
+        }
+        else
+        {
+            ProfileFormTitle.Text        = "Rename Profile";
+            ProfileFormConfirmBtn.Content = "Save";
+            ProfileNameBox.Text           = editTarget;
+        }
+
+        ProfileFormError.Visibility      = Visibility.Collapsed;
+        SettingsProfilesView.Visibility  = Visibility.Collapsed;
+        SettingsProfileFormView.Visibility = Visibility.Visible;
+        ProfileNameBox.Focus();
+        ProfileNameBox.SelectAll();
+    }
+
+    void ProfileFormConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var name   = ProfileNameBox.Text.Trim();
+
+        var error = ProfileHelpers.ValidateName(name, config.profiles, _profileFormEditTarget);
+        if (error != null)
+        {
+            ProfileFormError.Text       = error;
+            ProfileFormError.Visibility = Visibility.Visible;
+            return;
+        }
+
+        if (_profileFormEditTarget == null)
+        {
+            if (config.profiles.Count >= ProfileHelpers.MaxProfiles)
+            {
+                ProfileFormError.Text       = $"Maximum of {ProfileHelpers.MaxProfiles} profiles reached.";
+                ProfileFormError.Visibility = Visibility.Visible;
+                return;
+            }
+            ConfigService.AddProfile(InstallService.ScriptRoot, name);
+            ShowFeedback($"Profile '{name}' created.", FeedbackKind.Ok);
+        }
+        else
+        {
+            ConfigService.RenameProfile(InstallService.ScriptRoot, _profileFormEditTarget, name);
+            ShowFeedback($"Profile renamed to '{name}'.", FeedbackKind.Ok);
+        }
+
+        ShowProfilesView();
+    }
+
+    void ProfileFormCancel_Click(object sender, RoutedEventArgs e) => ShowProfilesView();
+
+    void ShowProfileDelete(string name)
+    {
+        _profileDeleteTarget = name;
+        ProfileDeleteMsg.Text         = $"Delete profile '{name}'? This cannot be undone.";
+        ProfileDeleteError.Visibility = Visibility.Collapsed;
+        SettingsProfilesView.Visibility      = Visibility.Collapsed;
+        SettingsProfileDeleteView.Visibility = Visibility.Visible;
+    }
+
+    void ProfileDeleteConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var name   = _profileDeleteTarget!;
+
+        if (string.Equals(config.activeProfile, name, StringComparison.Ordinal))
+        {
+            ProfileDeleteError.Text       = "Switch to another profile before deleting this one.";
+            ProfileDeleteError.Visibility = Visibility.Visible;
+            return;
+        }
+        if (config.profiles.Count <= 1)
+        {
+            ProfileDeleteError.Text       = "At least one profile must remain.";
+            ProfileDeleteError.Visibility = Visibility.Visible;
+            return;
+        }
+
+        ConfigService.DeleteProfile(InstallService.ScriptRoot, name);
+        ShowFeedback($"Profile '{name}' deleted.", FeedbackKind.Ok);
+        ShowProfilesView();
+    }
+
+    void ProfileDeleteCancel_Click(object sender, RoutedEventArgs e) => ShowProfilesView();
+
+    // Stops + restarts the daemon if it's currently running (e.g. after switching profiles).
+    bool RestartDaemonIfRunning()
+    {
+        var wasRunning = DaemonService.IsRunning();
+        if (!wasRunning) return false;
+
+        DaemonService.Stop();
+        try { DaemonService.Start(); }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Restart failed: {ex.Message}", FeedbackKind.Err);
+            UpdateHookStatus();
+            return wasRunning;
+        }
+        StatusDot.Fill  = AmberBrush;
+        StatusText.Text = "Restarting...";
+        return wasRunning;
+    }
 
     // =========================================================================
     // Feedback toast
