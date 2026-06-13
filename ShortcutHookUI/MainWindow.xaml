@@ -602,15 +602,22 @@
                     </StackPanel>
 
                     <StackPanel x:Name="SettingsProfilesView" Visibility="Collapsed">
-                        <DockPanel Margin="0,0,0,14">
+                        <DockPanel Margin="0,0,0,4">
                             <TextBlock Text="Profiles" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold" VerticalAlignment="Center"/>
                             <Button x:Name="AddProfileBtn" DockPanel.Dock="Right" Content="+ Add Profile"
                                     Style="{StaticResource BtnGhost}" HorizontalAlignment="Right"
                                     Height="28" Padding="12,0" Click="AddProfileBtn_Click"/>
                         </DockPanel>
+                        <TextBlock Text="Click a profile to select it for export." Foreground="#777777" FontSize="11" Margin="0,0,0,10"/>
                         <StackPanel x:Name="ProfileListStack"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="ExportProfileBtn" Content="Export Selected" Style="{StaticResource BtnGhost}"
+                                    Height="28" Padding="12,0" Click="ExportProfileBtn_Click"/>
+                            <Button x:Name="ImportProfileBtn" Content="Import" Style="{StaticResource BtnGhost}"
+                                    Height="28" Padding="12,0" Margin="8,0,0,0" Click="ImportProfileBtn_Click"/>
+                        </StackPanel>
                         <Button Content="Back" Style="{StaticResource BtnGhost}" Height="34" Width="90"
-                                HorizontalAlignment="Left" Margin="0,18,0,0" Click="SettingsBack_Click"/>
+                                HorizontalAlignment="Left" Margin="0,12,0,0" Click="SettingsBack_Click"/>
                     </StackPanel>
 
                     <StackPanel x:Name="SettingsProfileFormView" Visibility="Collapsed">

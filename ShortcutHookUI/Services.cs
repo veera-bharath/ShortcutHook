@@ -250,6 +250,47 @@ internal static class ConfigService
         config.activeProfile = name;
         Save(root, config);
     }
+
+    // Serializes a single profile as a standalone JSON document: { "name": ..., "bindings": [...] }.
+    public static void ExportProfile(string path, ProfileEntry profile)
+    {
+        var export = new ProfileEntry { name = profile.name, bindings = profile.bindings };
+        File.WriteAllText(path, JsonSerializer.Serialize(export, JsonOpts));
+    }
+
+    // Parses a standalone profile export file. Throws FormatException/JsonException if invalid.
+    public static ProfileEntry ImportProfile(string path)
+    {
+        var txt = File.ReadAllText(path);
+        using var doc = JsonDocument.Parse(txt);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("name", out var nameEl) || nameEl.ValueKind != JsonValueKind.String
+            || !root.TryGetProperty("bindings", out var bindingsEl) || bindingsEl.ValueKind != JsonValueKind.Array)
+            throw new FormatException("File must contain a 'name' string and a 'bindings' array.");
+
+        var name     = nameEl.GetString()!;
+        var bindings = JsonSerializer.Deserialize<List<BindingEntry>>(bindingsEl.GetRawText()) ?? new();
+        return new ProfileEntry { name = name, bindings = bindings };
+    }
+
+    // Normalizes and validates bindings imported from a profile export, dropping
+    // any entry with an unrecognized trigger. Returns the surviving bindings and
+    // the number that were skipped.
+    public static List<BindingEntry> SanitizeImportedBindings(List<BindingEntry> bindings, out int skipped)
+    {
+        NormalizeOutputs(bindings);
+
+        var result = new List<BindingEntry>();
+        skipped = 0;
+        foreach (var b in bindings)
+        {
+            try { TriggerHelpers.CanonicalizeTrigger(b.trigger); }
+            catch { skipped++; continue; }
+            result.Add(b);
+        }
+        return result;
+    }
 }
 
 internal static class ProfileHelpers
