@@ -11,6 +11,7 @@
 # Output formats in shortcuts.json:
 #   "Win+Shift+S"           keyboard chord
 #   "open:C:\path\to\thing" shell-execute (app .lnk, file, or folder)
+#   "type:Some text"        paste a literal string via the clipboard (text expansion)
 #
 # Requirements: Windows 10/11, PowerShell 5+, .NET Framework 4.5+
 
@@ -20,13 +21,15 @@ function Write-Log([string]$msg) {
 }
 Write-Log "=== Start (PS $($PSVersionTable.PSVersion), PID $PID) ==="
 
-try { Add-Type @"
+try { Add-Type -ReferencedAssemblies @('System.Windows.Forms.dll','System.Drawing.dll') -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Windows.Forms;
 
 public class ShortcutHook {
 
@@ -74,6 +77,18 @@ public class ShortcutHook {
     public const int MOD_ALT   = 4;
     public const int MOD_WIN   = 8;
 
+    // Global pause: while true, both hooks pass events through untouched except
+    // for keyboard bindings that toggle this flag back off (see KbdCallback).
+    public static volatile bool IsPaused = false;
+    private static readonly string PauseStatePath = @"$PSScriptRoot\pause.state";
+
+    static void WritePauseState() {
+        bool paused = IsPaused;
+        new Thread(() => {
+            try { File.WriteAllText(PauseStatePath, paused ? "paused" : "running"); } catch { }
+        }) { IsBackground = true }.Start();
+    }
+
     [DllImport("user32.dll", SetLastError=true)]
     static extern IntPtr SetWindowsHookEx(int idHook, LLProc fn, IntPtr hMod, uint threadId);
     [DllImport("user32.dll", SetLastError=true)]
@@ -117,6 +132,8 @@ public class ShortcutHook {
     static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool CloseHandle(IntPtr hObject);
+    [DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MSG {
@@ -157,12 +174,14 @@ public class ShortcutHook {
 
     // ---------- Binding ----------
     public class ChainStep {
-        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/IsHScroll is set
-        public string OpenPath;  // shell-execute target; null when Output/CmdLine/IsHScroll is set
-        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/IsHScroll is set
+        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/TypeText/IsHScroll/IsTogglePause is set
+        public string OpenPath;  // shell-execute target; null when Output/CmdLine/TypeText/IsHScroll/IsTogglePause is set
+        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/TypeText/IsHScroll/IsTogglePause is set
         public bool   CmdShow;   // true = visible cmd window (/k), false = hidden (/c)
+        public string TypeText;  // literal text typed via SendInput; null when Output/OpenPath/CmdLine/IsHScroll/IsTogglePause is set
         public bool   IsHScroll; // horizontal scroll; negative HScrollDelta = left, positive = right
         public int    HScrollDelta;
+        public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
     }
 
     public class Binding {
@@ -175,6 +194,8 @@ public class ShortcutHook {
         public int         OutputDelay;   // ms between chained steps (0 = no delay)
         public ChainStep[] Steps;         // one or more actions to execute in order
         public bool        Debounce;      // ignore repeated scroll fires within SCROLL_DEBOUNCE_MS
+        public bool        ShowToast;     // show a brief on-screen toast when this binding fires
+        public string      ToastText;     // text shown in the toast (trigger description)
     }
 
     public static List<Binding> MouseBindings = new List<Binding>();
@@ -554,6 +575,11 @@ public class ShortcutHook {
     // ---------- Output dispatch ----------
     static void ExecuteStep(ChainStep step) {
         if (step == null) return;
+        if (step.IsTogglePause) {
+            IsPaused = !IsPaused;
+            WritePauseState();
+            return;
+        }
         if (step.IsHScroll) {
             int d = step.HScrollDelta;
             new Thread(() => {
@@ -591,13 +617,73 @@ public class ShortcutHook {
                     });
                 }
             } catch { }
+        } else if (step.TypeText != null) {
+            TypeText(step.TypeText);
         } else {
             FireOutput(step.Output);
         }
     }
 
+    static bool HasTogglePause(Binding b) {
+        foreach (ChainStep s in b.Steps) if (s.IsTogglePause) return true;
+        return false;
+    }
+
+    // Spawns a small borderless topmost popup near the bottom-right corner of the
+    // screen showing the binding's trigger, auto-dismissing after ~1s. Runs on its
+    // own STA thread with its own message loop (Application.Run), so it never
+    // touches the hook callback's thread.
+    static void ShowToast(string text) {
+        if (string.IsNullOrEmpty(text)) return;
+        Thread t = new Thread(() => {
+            try {
+                Form f = new Form();
+                f.FormBorderStyle = FormBorderStyle.None;
+                f.TopMost = true;
+                f.ShowInTaskbar = false;
+                f.StartPosition = FormStartPosition.Manual;
+                f.BackColor = Color.FromArgb(32, 32, 32);
+                f.Opacity = 0.92;
+                f.AutoSize = true;
+                f.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+
+                Label lbl = new Label();
+                lbl.Text = text;
+                lbl.ForeColor = Color.White;
+                lbl.Font = new Font("Segoe UI", 10F);
+                lbl.AutoSize = true;
+                lbl.Padding = new Padding(14, 8, 14, 8);
+                f.Controls.Add(lbl);
+
+                f.Shown += (s, e) => {
+                    Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+                    f.Location = new Point(area.Right - f.Width - 16, area.Bottom - f.Height - 16);
+                    // Form.TopMost alone doesn't always place us above the
+                    // current foreground window's z-order band when we're a
+                    // background process. Force it explicitly via SetWindowPos
+                    // (SWP_NOACTIVATE so focus stays with the foreground app).
+                    const uint SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
+                    SetWindowPos(f.Handle, new IntPtr(-1), f.Left, f.Top, f.Width, f.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                };
+
+                System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+                timer.Interval = 1000;
+                timer.Tick += (s, e) => { timer.Stop(); f.Close(); };
+                f.Shown += (s, e) => timer.Start();
+
+                Application.Run(f);
+            } catch { }
+        });
+        t.IsBackground = true;
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+    }
+
     static void ExecuteBinding(Binding b) {
         if (b == null || b.Steps == null || b.Steps.Length == 0) return;
+        // While paused, every binding except a toggle:pause one is a no-op.
+        if (IsPaused && !HasTogglePause(b)) return;
+        if (b.ShowToast) ShowToast(b.ToastText);
         // Single-action with no delay: fast path — run inline (FireOutput is safe in hook callback).
         if (b.Steps.Length == 1 && b.OutputDelay == 0 && b.Steps[0].Output != null) {
             FireOutput(b.Steps[0].Output);
@@ -662,6 +748,65 @@ public class ShortcutHook {
         else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
     }
 
+    // Types a literal string in one shot via the clipboard: stash the current
+    // clipboard, drop the text in as CF_UNICODETEXT, send Ctrl+V, then restore
+    // the clipboard the caller had. Multi-line text pastes as real line breaks
+    // without needing per-key Enter presses.
+    static void TypeText(string text) {
+        if (string.IsNullOrEmpty(text)) return;
+        bool uCtrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool uShift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+        bool uAlt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+        bool uWinL  = (GetAsyncKeyState(VK_LWIN)    & 0x8000) != 0;
+        bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
+
+        // Release held modifiers so they don't interfere with our own Ctrl+V.
+        if (uCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+        var saved = BackupClipboard();
+        SetClipboardText(text);
+
+        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56 /* V */, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+        // Give the target app time to read the clipboard before we restore it.
+        Thread.Sleep(CLIP_WAIT_MS);
+        RestoreClipboard(saved);
+
+        // Restore the modifiers that were held before typing started.
+        if (uAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
+        if (uShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
+        if (uCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+
+        if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
+        else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
+    }
+
+    static void SetClipboardText(string text) {
+        try {
+            if (!OpenClipboard(IntPtr.Zero)) return;
+            EmptyClipboard();
+            int bytes = (text.Length + 1) * 2; // UTF-16 chars + null terminator
+            IntPtr hMem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)bytes);
+            if (hMem == IntPtr.Zero) { CloseClipboard(); return; }
+            IntPtr p = GlobalLock(hMem);
+            if (p == IntPtr.Zero) { GlobalFree(hMem); CloseClipboard(); return; }
+            for (int i = 0; i < text.Length; i++) Marshal.WriteInt16(p, i * 2, (short)text[i]);
+            Marshal.WriteInt16(p, text.Length * 2, 0);
+            GlobalUnlock(hMem);
+            if (SetClipboardData(CF_UNICODETEXT, hMem) == IntPtr.Zero) GlobalFree(hMem);
+            CloseClipboard();
+        } catch {
+            try { CloseClipboard(); } catch {}
+        }
+    }
+
     // =========================================================================
     // Mouse hook
     // =========================================================================
@@ -707,6 +852,9 @@ public class ShortcutHook {
 
     static IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam) {
         if (nCode < 0) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
+        // While paused, mouse input passes through untouched. Resuming is keyboard-only
+        // (mouse gesture detection requires timers we don't want running while paused).
+        if (IsPaused) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
         try {
             int msg = wParam.ToInt32();
 
@@ -1061,6 +1209,15 @@ public class ShortcutHook {
                     byte[]  sk    = SortedHeldKeys();
                     string  fgApp = null; // lazily populated; shared between FindExact and HasStrictSuperset
                     Binding exact = FindExact(heldMods, sk, ref fgApp);
+                    if (IsPaused) {
+                        // Pass everything through except the binding(s) that resume us.
+                        if (exact != null && HasTogglePause(exact)) {
+                            swallowedKeys.Add(vk); prefixSwallowed.Clear(); CancelDefer();
+                            ExecuteBinding(exact);
+                            return new IntPtr(1);
+                        }
+                        return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
+                    }
                     bool    longer = HasStrictSuperset(heldMods, heldKeys, ref fgApp);
                     if (exact != null) {
                         swallowedKeys.Add(vk); prefixSwallowed.Clear(); CancelDefer();
@@ -1098,6 +1255,8 @@ public class ShortcutHook {
     // Entry point
     // =========================================================================
     public static void Start() {
+        IsPaused = false;
+        try { File.WriteAllText(PauseStatePath, "running"); } catch { }
         dblClickMs = (int)GetDoubleClickTime();
         mouseProc = MouseCallback; kbdProc = KbdCallback;
         IntPtr hMod = GetModuleHandle(null);
@@ -1191,16 +1350,35 @@ $defaults = @(
 )
 
 $configPath = Join-Path $PSScriptRoot 'shortcuts.json'
+$activeProfileName = $null
 if (Test-Path $configPath) {
     try {
         $json = Get-Content $configPath -Raw | ConvertFrom-Json
-        $rawBindings = @($json.bindings)
-        if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
+        $profiles = @($json.profiles)
+        if ($profiles.Count -gt 0) {
+            $activeProfileName = $json.activeProfile
+            $activeProfile = $profiles | Where-Object { $_.name -eq $activeProfileName } | Select-Object -First 1
+            if ($activeProfile) {
+                # Active profile found -- use its bindings as-is, even if empty
+                # (an empty profile intentionally has no shortcuts).
+                $rawBindings = @($activeProfile.bindings)
+            } else {
+                $rawBindings = $defaults
+                Write-Log 'Active profile not found -- using defaults.'
+            }
+        } else {
+            # Old format (not yet migrated) -- fall back to top-level bindings.
+            $activeProfileName = 'Default'
+            $rawBindings = @($json.bindings)
+            if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
+        }
     } catch { Write-Log "Bad shortcuts.json -- using defaults. ($_)"; $rawBindings = $defaults }
 } else {
     Write-Log 'shortcuts.json not found -- using defaults.'
     $rawBindings = $defaults
 }
+
+if ($activeProfileName) { Write-Log "Active profile: $activeProfileName" }
 
 # ---------------------------------------------------------------------------
 # Build Binding objects
@@ -1249,6 +1427,10 @@ foreach ($b in $rawBindings) {
             } elseif ($outStr -match '^hscroll:(left|right)$') {
                 $step.IsHScroll = $true
                 $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
+            } elseif ($outStr -match '^toggle:pause$') {
+                $step.IsTogglePause = $true
+            } elseif ($outStr -match '^type:([\s\S]+)$') {
+                $step.TypeText = $Matches[1]
             } else {
                 $step.Output = Resolve-OutputChord $outStr
             }
@@ -1268,6 +1450,10 @@ foreach ($b in $rawBindings) {
         if ($b.PSObject.Properties.Name -contains 'debounce' -and $b.debounce -eq $true) {
             $nb.Debounce = $true
         }
+        if ($b.PSObject.Properties.Name -contains 'showToast' -and $b.showToast -eq $true) {
+            $nb.ShowToast = $true
+            $nb.ToastText = if ($b.trigger -match '^(?:mouse|key):(.+)$') { $Matches[1] } else { $b.trigger }
+        }
         $built.Add($nb)
     } catch {
         $outRef = if ($b.PSObject.Properties.Name -contains 'outputs') { ($b.outputs -join ', ') } else { $b.output }
@@ -1285,7 +1471,9 @@ try {
             elseif ($s.CmdLine) {
                 if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
                 else { $stepDescs += "cmd:$($s.CmdLine)" }
-            } else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
+            } elseif ($s.IsTogglePause) { $stepDescs += "toggle:pause" }
+            elseif ($s.TypeText) { $stepDescs += "type:$($s.TypeText)" }
+            else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
         }
         $dest  = [string]::Join(' -> ', $stepDescs)
         $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }

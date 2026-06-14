@@ -35,11 +35,26 @@ public sealed class BindingEntry
     // Debounce: ignore repeated scroll firings within 200 ms. Omitted when false.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool debounce { get; set; } = false;
+    // Show a brief on-screen toast when this binding fires. Omitted when false.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool showToast { get; set; } = false;
 }
 
 public sealed class ConfigRoot
 {
     public bool altHScroll { get; set; } = false;
+    public string activeProfile { get; set; } = "Default";
+    public List<ProfileEntry> profiles { get; set; } = new();
+
+    // Legacy top-level bindings from pre-profile configs. Read-only — used to detect
+    // and migrate old-format files. Never written back.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<BindingEntry>? bindings { get; set; }
+}
+
+public sealed class ProfileEntry
+{
+    public string name { get; set; } = "";
     public List<BindingEntry> bindings { get; set; } = new();
 }
 

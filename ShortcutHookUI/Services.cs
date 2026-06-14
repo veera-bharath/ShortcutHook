@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Management;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace ShortcutHookUI;
@@ -160,29 +162,166 @@ internal static class ConfigService
                 var txt = File.ReadAllText(p);
                 var doc = JsonSerializer.Deserialize<ConfigRoot>(txt);
                 if (doc is not null)
-                {
-                    if (doc.bindings is not { Count: > 0 })
-                        doc.bindings = new List<BindingEntry>(Defaults);
-                    else
-                        NormalizeOutputs(doc.bindings);
-                    return doc;
-                }
+                    return Migrate(doc, root);
             }
             catch { }
         }
-        return new ConfigRoot { bindings = new List<BindingEntry>(Defaults) };
+        return DefaultConfig();
     }
 
-    public static List<BindingEntry> Read(string root) => ReadConfig(root).bindings;
+    // Migrates a freshly-deserialized ConfigRoot to the profiles format, persisting the
+    // migration if the on-disk file was in the old (top-level `bindings`) or empty format.
+    static ConfigRoot Migrate(ConfigRoot doc, string root)
+    {
+        if (doc.profiles is { Count: > 0 })
+        {
+            doc.bindings = null;
+            foreach (var profile in doc.profiles)
+                NormalizeOutputs(profile.bindings);
+            if (!doc.profiles.Any(pr => string.Equals(pr.name, doc.activeProfile, StringComparison.Ordinal)))
+                doc.activeProfile = doc.profiles[0].name;
+            return doc;
+        }
+
+        // Old format (top-level `bindings`) or an empty config — wrap into a "Default" profile.
+        var bindings = doc.bindings is { Count: > 0 } ? doc.bindings : new List<BindingEntry>();
+        NormalizeOutputs(bindings);
+
+        doc.bindings = null;
+        doc.profiles = new List<ProfileEntry> { new() { name = "Default", bindings = bindings } };
+        doc.activeProfile = "Default";
+        Save(root, doc);
+        return doc;
+    }
+
+    public static ProfileEntry GetActiveProfile(ConfigRoot config) =>
+        config.profiles.FirstOrDefault(p => string.Equals(p.name, config.activeProfile, StringComparison.Ordinal))
+        ?? config.profiles[0];
+
+    public static List<BindingEntry> Read(string root) => GetActiveProfile(ReadConfig(root)).bindings;
+
+    public static ConfigRoot DefaultConfig() => new()
+    {
+        activeProfile = "Default",
+        profiles = new List<ProfileEntry> { new() { name = "Default", bindings = new List<BindingEntry>(Defaults) } },
+    };
 
     public static void Save(string root, ConfigRoot config)
     {
+        config.bindings = null;
         Directory.CreateDirectory(root);
         File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(config, JsonOpts));
     }
 
-    public static void Save(string root, IEnumerable<BindingEntry> bindings) =>
-        Save(root, new ConfigRoot { bindings = bindings.ToList() });
+    // Replaces the active profile's bindings, preserving other profiles and settings.
+    public static void SaveActiveProfileBindings(string root, IEnumerable<BindingEntry> bindings)
+    {
+        var config = ReadConfig(root);
+        GetActiveProfile(config).bindings = bindings.ToList();
+        Save(root, config);
+    }
+
+    public static void AddProfile(string root, string name)
+    {
+        var config = ReadConfig(root);
+        config.profiles.Add(new ProfileEntry { name = name, bindings = new List<BindingEntry>() });
+        Save(root, config);
+    }
+
+    public static void RenameProfile(string root, string oldName, string newName)
+    {
+        var config  = ReadConfig(root);
+        var profile = config.profiles.FirstOrDefault(p => string.Equals(p.name, oldName, StringComparison.Ordinal));
+        if (profile == null) return;
+        profile.name = newName;
+        if (string.Equals(config.activeProfile, oldName, StringComparison.Ordinal))
+            config.activeProfile = newName;
+        Save(root, config);
+    }
+
+    public static void DeleteProfile(string root, string name)
+    {
+        var config = ReadConfig(root);
+        config.profiles.RemoveAll(p => string.Equals(p.name, name, StringComparison.Ordinal));
+        Save(root, config);
+    }
+
+    public static void SetActiveProfile(string root, string name)
+    {
+        var config = ReadConfig(root);
+        config.activeProfile = name;
+        Save(root, config);
+    }
+
+    // Serializes a single profile as a standalone JSON document: { "name": ..., "bindings": [...] }.
+    public static void ExportProfile(string path, ProfileEntry profile)
+    {
+        var export = new ProfileEntry { name = profile.name, bindings = profile.bindings };
+        File.WriteAllText(path, JsonSerializer.Serialize(export, JsonOpts));
+    }
+
+    // Parses a standalone profile export file. Throws FormatException/JsonException if invalid.
+    public static ProfileEntry ImportProfile(string path)
+    {
+        var txt = File.ReadAllText(path);
+        using var doc = JsonDocument.Parse(txt);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("name", out var nameEl) || nameEl.ValueKind != JsonValueKind.String
+            || !root.TryGetProperty("bindings", out var bindingsEl) || bindingsEl.ValueKind != JsonValueKind.Array)
+            throw new FormatException("File must contain a 'name' string and a 'bindings' array.");
+
+        var name     = nameEl.GetString()!;
+        var bindings = JsonSerializer.Deserialize<List<BindingEntry>>(bindingsEl.GetRawText()) ?? new();
+        return new ProfileEntry { name = name, bindings = bindings };
+    }
+
+    // Normalizes and validates bindings imported from a profile export, dropping
+    // any entry with an unrecognized trigger. Returns the surviving bindings and
+    // the number that were skipped.
+    public static List<BindingEntry> SanitizeImportedBindings(List<BindingEntry> bindings, out int skipped)
+    {
+        NormalizeOutputs(bindings);
+
+        var result = new List<BindingEntry>();
+        skipped = 0;
+        foreach (var b in bindings)
+        {
+            try { TriggerHelpers.CanonicalizeTrigger(b.trigger); }
+            catch { skipped++; continue; }
+            result.Add(b);
+        }
+        return result;
+    }
+}
+
+internal static class ProfileHelpers
+{
+    public const int MaxProfiles  = 10;
+    public const int MaxNameLength = 32;
+
+    // Next "Profile-N" default name, skipping any numbers already in use.
+    public static string NextDefaultName(IEnumerable<ProfileEntry> profiles)
+    {
+        var existing = new HashSet<string>(profiles.Select(p => p.name), StringComparer.OrdinalIgnoreCase);
+        var n = profiles.Count() + 1;
+        while (existing.Contains($"Profile-{n}")) n++;
+        return $"Profile-{n}";
+    }
+
+    // Returns an error message, or null if the name is valid.
+    public static string? ValidateName(string name, IEnumerable<ProfileEntry> profiles, string? excludeName = null)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "Name cannot be empty.";
+        if (name.Length > MaxNameLength) return $"Name must be {MaxNameLength} characters or fewer.";
+        foreach (var c in name)
+            if (c < 0x20 || c > 0x7E || c is '/' or '\\' or '"' or '\'')
+                return "Name can only contain printable characters (no slashes or quotes).";
+        if (profiles.Any(p => !string.Equals(p.name, excludeName, StringComparison.OrdinalIgnoreCase)
+                               && string.Equals(p.name, name, StringComparison.OrdinalIgnoreCase)))
+            return "A profile with this name already exists.";
+        return null;
+    }
 }
 
 internal static class InstallService
@@ -190,6 +329,7 @@ internal static class InstallService
     const string RegistryKeyPath      = @"Software\ShortcutHook";
     const string AppInstallPathValue  = "AppInstallPath";
     const string SetupCompleteValue   = "SetupComplete";
+    const string DismissedUpdateValue = "DismissedUpdateVersion";
     const string ScriptResourceName   = "ShortcutHookUI.Runtime.ShortcutHook.ps1";
     const string ScriptFileName       = "ShortcutHook.ps1";
     const string UiExeFileName        = "ShortcutHookUI.exe";
@@ -197,6 +337,9 @@ internal static class InstallService
     // Script + config always live here — fixed, never changes.
     public static readonly string ScriptRoot = @"C:\Tools\ShortcutHook";
     public static string ScriptPath => Path.Combine(ScriptRoot, ScriptFileName);
+
+    // Written by the daemon whenever the global pause toggle fires.
+    public static string PauseStatePath => Path.Combine(ScriptRoot, "pause.state");
 
     // App (exe) default: same folder as script, so a default install is self-contained.
     public static string DefaultAppRoot => ScriptRoot;
@@ -231,6 +374,20 @@ internal static class InstallService
         key.SetValue(SetupCompleteValue, 1, RegistryValueKind.DWord);
     }
 
+    // Tag of the release the user dismissed the update banner for (e.g. "v1.6.0").
+    // Null if no dismissal has been recorded.
+    public static string? GetDismissedUpdateVersion()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath);
+        return key?.GetValue(DismissedUpdateValue) as string;
+    }
+
+    public static void SetDismissedUpdateVersion(string tag)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath);
+        key.SetValue(DismissedUpdateValue, tag);
+    }
+
     // Script check uses fixed ScriptRoot — no arg needed.
     public static bool IsInstalled() => File.Exists(ScriptPath);
 
@@ -257,7 +414,7 @@ internal static class InstallService
 
         // 3. Write default config if absent.
         if (!File.Exists(ConfigService.ConfigPath(ScriptRoot)))
-            ConfigService.Save(ScriptRoot, ConfigService.Defaults);
+            ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
 
         SaveAppRoot(appRoot);
     }
@@ -433,5 +590,44 @@ internal static class AppScanner
         }
         list.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
         return list;
+    }
+}
+
+internal static class UpdateCheckService
+{
+    const string ReleasesApiUrl = "https://api.github.com/repos/veera-bharath/ShortcutHook/releases/latest";
+
+    public readonly record struct UpdateInfo(string Tag, Version Version, string HtmlUrl);
+
+    // Queries the GitHub Releases API for the latest release and returns it if its
+    // version is newer than currentVersion. Returns null on any failure (offline,
+    // rate-limited, malformed response) or if already up to date — never throws,
+    // so callers can fire-and-forget this without delaying startup.
+    public static async Task<UpdateInfo?> CheckForUpdateAsync(Version currentVersion)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("ShortcutHookUI");
+
+            using var resp = await http.GetAsync(ReleasesApiUrl);
+            if (!resp.IsSuccessStatusCode) return null;
+
+            using var stream = await resp.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
+            var root = doc.RootElement;
+
+            var tag = root.TryGetProperty("tag_name", out var tagEl) ? tagEl.GetString() : null;
+            var url = root.TryGetProperty("html_url", out var urlEl) ? urlEl.GetString() : null;
+            if (string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(url)) return null;
+
+            if (!Version.TryParse(tag.TrimStart('v', 'V'), out var latest)) return null;
+
+            return latest > currentVersion ? new UpdateInfo(tag, latest, url) : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

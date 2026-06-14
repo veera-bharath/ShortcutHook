@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -15,7 +18,7 @@ using System.Windows.Threading;
 
 namespace ShortcutHookUI;
 
-public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight }
+public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, TypeText, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight, TogglePause }
 
 // One action in a chained binding. Multiple ChainedActions make up one Row's output.
 public sealed class ChainedAction
@@ -39,6 +42,7 @@ public sealed class Row
     public int        OutputDelay = 0;       // ms between chained actions
     public TextBox?   DelayBox;
     public Grid       ChainFooter = null!;   // footer row: [+ Add action] [delay spinner]
+    public FrameworkElement ControlsContainer = null!;  // top-level controls block added to ChainStack (toggle row + footer)
 
     // mouse-only
     public string?    MouseGesture;
@@ -64,6 +68,10 @@ public sealed class Row
     public bool      Debounce         = false;
     public CheckBox? DebounceToggle;
 
+    // show a brief on-screen toast when this binding fires
+    public bool      ShowToast        = false;
+    public CheckBox? ToastToggle;
+
     // gesture-specific action options (null → StandardActions)
     public ActionDef[]? AvailableActions;
 }
@@ -85,6 +93,8 @@ public partial class MainWindow : Window
         new("Open file",        ActionKind.OpenFile),
         new("Open folder",      ActionKind.OpenFolder),
         new("Run command",      ActionKind.Command),
+        new("Type text",        ActionKind.TypeText),
+        new("Toggle pause",     ActionKind.TogglePause),
     };
 
     static ActionDef[] BuildActionsForGesture(MouseGestureDef def)
@@ -160,6 +170,7 @@ public partial class MainWindow : Window
     static readonly Brush LabelBrush = Br("#CCCCCC");
     static readonly Brush DarkBorder = Br("#2E2E2E");
     static readonly Brush BtnHoverBg = Br("#1F1F1F");
+    static readonly Brush AccentBrush = Br("#5B9CF6");
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 
@@ -223,6 +234,7 @@ public partial class MainWindow : Window
     readonly List<KbdTriggerCard> _kbdCards = new();
     string _appRoot;
     bool _setupComplete;
+    UpdateCheckService.UpdateInfo? _updateInfo;
 
     // Capture state — plain C# fields, no scoping issues.
     bool            _captureActive;
@@ -264,6 +276,9 @@ public partial class MainWindow : Window
 
         PreviewKeyDown += OnWindowPreviewKeyDown;
         PreviewKeyUp   += OnWindowPreviewKeyUp;
+
+        var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        SettingsVersionText.Text = $"v{v.Major}.{v.Minor}.{v.Build}";
     }
 
     void OnSourceInitialized(object? sender, EventArgs e)
@@ -278,6 +293,7 @@ public partial class MainWindow : Window
     {
         RefreshInstallState();
         ReloadBindingsFromConfig();
+        RefreshProfileDropdown();
         ApplySectionState();
         UpdateHookStatus();
         _setupComplete = InstallService.IsSetupComplete()
@@ -287,6 +303,36 @@ public partial class MainWindow : Window
         StartupToggle.IsChecked = _setupComplete && StartupService.IsEnabled();
         UpdateSetupState();
         _pollTimer.Start();
+        if (_setupComplete) _ = CheckForUpdateAsync();
+    }
+
+    // =========================================================================
+    // Update check
+    // =========================================================================
+    async Task CheckForUpdateAsync()
+    {
+        var current = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        var update = await UpdateCheckService.CheckForUpdateAsync(current);
+        if (update == null) return;
+        if (string.Equals(InstallService.GetDismissedUpdateVersion(), update.Value.Tag, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _updateInfo = update;
+        UpdateBannerText.Text = $"ShortcutHook {update.Value.Tag} is available (you have v{current.Major}.{current.Minor}.{current.Build}).";
+        UpdateBanner.Visibility = Visibility.Visible;
+    }
+
+    void UpdateDownload_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (_updateInfo == null) return;
+        try { Process.Start(new ProcessStartInfo(_updateInfo.Value.HtmlUrl) { UseShellExecute = true }); }
+        catch { /* best-effort — ignore if no browser association */ }
+    }
+
+    void UpdateDismiss_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updateInfo != null) InstallService.SetDismissedUpdateVersion(_updateInfo.Value.Tag);
+        UpdateBanner.Visibility = Visibility.Collapsed;
     }
 
     // =========================================================================
@@ -322,6 +368,7 @@ public partial class MainWindow : Window
             HookBtn.Content = "Start";
             HookBtn.Background = GreenBrush;
             HookBtn.IsEnabled = false;
+            PausedBadge.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -332,6 +379,7 @@ public partial class MainWindow : Window
             StatusText.Text = "Running";
             HookBtn.Content = "Stop";
             HookBtn.Background = RedBrush;
+            PausedBadge.Visibility = IsDaemonPaused() ? Visibility.Visible : Visibility.Collapsed;
         }
         else
         {
@@ -339,7 +387,14 @@ public partial class MainWindow : Window
             StatusText.Text = "Stopped";
             HookBtn.Content = "Start";
             HookBtn.Background = GreenBrush;
+            PausedBadge.Visibility = Visibility.Collapsed;
         }
+    }
+
+    static bool IsDaemonPaused()
+    {
+        try { return File.ReadAllText(InstallService.PauseStatePath).Trim() == "paused"; }
+        catch { return false; }
     }
 
     void HookBtn_Click(object sender, RoutedEventArgs e)
@@ -442,7 +497,7 @@ public partial class MainWindow : Window
                 {
                     bool isGlobal = b.apps == null || b.apps.Count == 0;
                     var  apps     = b.apps ?? new List<string>();
-                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, b.enabled != false);
+                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, b.enabled != false, b.showToast);
                 })
                 .ToList();
             AddKbdTriggerCard(trig, variants);
@@ -531,8 +586,483 @@ public partial class MainWindow : Window
         }
     }
 
-    void AboutBtn_Click(object sender, RoutedEventArgs e) =>
-        new AboutWindow { Owner = this }.ShowDialog();
+    // =========================================================================
+    // Settings overlay
+    // =========================================================================
+    void SettingsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        ShowSettingsMenu();
+        SettingsRoot.Visibility = Visibility.Visible;
+    }
+
+    void ShowSettingsMenu()
+    {
+        SettingsMenuView.Visibility        = Visibility.Visible;
+        SettingsProfilesView.Visibility    = Visibility.Collapsed;
+        SettingsAboutView.Visibility       = Visibility.Collapsed;
+        SettingsProfileFormView.Visibility = Visibility.Collapsed;
+        SettingsProfileDeleteView.Visibility = Visibility.Collapsed;
+    }
+
+    void CloseSettings() => SettingsRoot.Visibility = Visibility.Collapsed;
+
+    void SettingsRoot_MouseDown(object sender, MouseButtonEventArgs e) => CloseSettings();
+
+    void SettingsCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    void ManageProfilesOption_Click(object sender, MouseButtonEventArgs e) => OpenProfilesView();
+
+    void OpenProfilesView()
+    {
+        ShowSettingsMenu();
+        SettingsMenuView.Visibility      = Visibility.Collapsed;
+        SettingsProfilesView.Visibility  = Visibility.Visible;
+        BuildProfileList();
+        SettingsRoot.Visibility = Visibility.Visible;
+    }
+
+    void AboutOption_Click(object sender, MouseButtonEventArgs e)
+    {
+        SettingsMenuView.Visibility  = Visibility.Collapsed;
+        SettingsAboutView.Visibility = Visibility.Visible;
+    }
+
+    void SettingsBack_Click(object sender, RoutedEventArgs e) => ShowSettingsMenu();
+
+    void SettingsGitHubBtn_Click(object sender, RoutedEventArgs e) =>
+        Process.Start(new ProcessStartInfo("https://github.com/veera-bharath/ShortcutHook")
+        {
+            UseShellExecute = true
+        });
+
+    // =========================================================================
+    // Profile management
+    // =========================================================================
+    string? _profileFormEditTarget;   // null = adding a new profile, else renaming this profile
+    string? _profileDeleteTarget;
+    string? _selectedProfileForExport; // profile highlighted for Export; defaults to the active profile
+    ProfileEntry? _pendingImport;      // import awaiting a rename to resolve a name conflict
+    int _pendingImportSkipped;
+
+    void ShowProfilesView()
+    {
+        SettingsProfileFormView.Visibility   = Visibility.Collapsed;
+        SettingsProfileDeleteView.Visibility = Visibility.Collapsed;
+        SettingsProfilesView.Visibility      = Visibility.Visible;
+        BuildProfileList();
+    }
+
+    void BuildProfileList()
+    {
+        ProfileListStack.Children.Clear();
+
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+
+        var selectedName = config.profiles.Any(p => string.Equals(p.name, _selectedProfileForExport, StringComparison.Ordinal))
+            ? _selectedProfileForExport!
+            : config.activeProfile;
+
+        foreach (var profile in config.profiles)
+        {
+            var name       = profile.name;
+            var isActive   = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+            var isSelected = string.Equals(name, selectedName, StringComparison.Ordinal);
+
+            var radio = new RadioButton
+            {
+                Style             = (Style)FindResource("DarkRadio"),
+                GroupName         = "ActiveProfileGroup",
+                IsChecked         = isActive,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin            = new Thickness(0, 0, 10, 0),
+            };
+
+            var nameText = new TextBlock
+            {
+                Text              = name,
+                Foreground        = TextBrush,
+                FontSize          = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var editBtn = new Button
+            {
+                Content = "Edit", Style = (Style)FindResource("BtnGhost"),
+                Width = 52, Height = 26, Padding = new Thickness(0), FontSize = 11,
+            };
+            var deleteBtn = new Button
+            {
+                Content = "Delete", Style = (Style)FindResource("BtnGhost"),
+                Width = 58, Height = 26, Padding = new Thickness(0), FontSize = 11,
+                Margin = new Thickness(6, 0, 0, 0),
+            };
+            var actionsPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Visibility  = Visibility.Collapsed,
+            };
+            actionsPanel.Children.Add(editBtn);
+            actionsPanel.Children.Add(deleteBtn);
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(radio, 0);
+            Grid.SetColumn(nameText, 1);
+            Grid.SetColumn(actionsPanel, 2);
+            grid.Children.Add(radio);
+            grid.Children.Add(nameText);
+            grid.Children.Add(actionsPanel);
+
+            var row = new Border
+            {
+                Padding      = new Thickness(10, 8, 10, 8),
+                CornerRadius = new CornerRadius(6),
+                Background   = Transparent,
+                BorderBrush  = isSelected ? AccentBrush : Transparent,
+                BorderThickness = new Thickness(1),
+                Margin       = new Thickness(0, 0, 0, 4),
+                Child        = grid,
+            };
+            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; if (!isSelected) row.Background = Br("#1F1F1F"); };
+            row.MouseLeave += (_, __) => { actionsPanel.Visibility = Visibility.Collapsed; if (!isSelected) row.Background = Transparent; };
+            row.MouseLeftButtonDown += (_, __) => { _selectedProfileForExport = name; BuildProfileList(); };
+
+            radio.Checked  += (_, __) => SwitchActiveProfile(name);
+            editBtn.Click  += (_, __) => ShowProfileForm(name);
+            deleteBtn.Click += (_, __) => ShowProfileDelete(name);
+
+            ProfileListStack.Children.Add(row);
+        }
+
+        AddProfileBtn.IsEnabled = config.profiles.Count < ProfileHelpers.MaxProfiles;
+    }
+
+    void SwitchActiveProfile(string name)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        if (string.Equals(config.activeProfile, name, StringComparison.Ordinal)) return;
+
+        ConfigService.SetActiveProfile(InstallService.ScriptRoot, name);
+        ReloadBindingsFromConfig();
+        RefreshProfileDropdown();
+        RestartDaemonIfRunning();
+        ShowFeedback($"Switched to '{name}'.", FeedbackKind.Ok);
+    }
+
+    void AddProfileBtn_Click(object sender, RoutedEventArgs e) => ShowProfileForm(null);
+
+    void ShowProfileForm(string? editTarget)
+    {
+        _profileFormEditTarget = editTarget;
+
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        if (editTarget == null)
+        {
+            ProfileFormTitle.Text        = "Add Profile";
+            ProfileFormConfirmBtn.Content = "Create";
+            ProfileNameBox.Text           = ProfileHelpers.NextDefaultName(config.profiles);
+        }
+        else
+        {
+            ProfileFormTitle.Text        = "Rename Profile";
+            ProfileFormConfirmBtn.Content = "Save";
+            ProfileNameBox.Text           = editTarget;
+        }
+
+        ProfileFormError.Visibility      = Visibility.Collapsed;
+        SettingsProfilesView.Visibility  = Visibility.Collapsed;
+        SettingsProfileFormView.Visibility = Visibility.Visible;
+        ProfileNameBox.Focus();
+        ProfileNameBox.SelectAll();
+    }
+
+    void ProfileFormConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var name   = ProfileNameBox.Text.Trim();
+
+        var error = ProfileHelpers.ValidateName(name, config.profiles, _profileFormEditTarget);
+        if (error != null)
+        {
+            ProfileFormError.Text       = error;
+            ProfileFormError.Visibility = Visibility.Visible;
+            return;
+        }
+
+        if (_pendingImport != null)
+        {
+            _pendingImport.name = name;
+            FinishImport(_pendingImport, _pendingImportSkipped);
+            _pendingImport = null;
+            return;
+        }
+
+        if (_profileFormEditTarget == null)
+        {
+            if (config.profiles.Count >= ProfileHelpers.MaxProfiles)
+            {
+                ProfileFormError.Text       = $"Maximum of {ProfileHelpers.MaxProfiles} profiles reached.";
+                ProfileFormError.Visibility = Visibility.Visible;
+                return;
+            }
+            ConfigService.AddProfile(InstallService.ScriptRoot, name);
+            ShowFeedback($"Profile '{name}' created.", FeedbackKind.Ok);
+        }
+        else
+        {
+            ConfigService.RenameProfile(InstallService.ScriptRoot, _profileFormEditTarget, name);
+            ShowFeedback($"Profile renamed to '{name}'.", FeedbackKind.Ok);
+        }
+
+        RefreshProfileDropdown();
+        ShowProfilesView();
+    }
+
+    void ProfileFormCancel_Click(object sender, RoutedEventArgs e)
+    {
+        _pendingImport = null;
+        ShowProfilesView();
+    }
+
+    void ShowProfileDelete(string name)
+    {
+        _profileDeleteTarget = name;
+        ProfileDeleteMsg.Text         = $"Delete profile '{name}'? This cannot be undone.";
+        ProfileDeleteError.Visibility = Visibility.Collapsed;
+        SettingsProfilesView.Visibility      = Visibility.Collapsed;
+        SettingsProfileDeleteView.Visibility = Visibility.Visible;
+    }
+
+    void ProfileDeleteConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var name   = _profileDeleteTarget!;
+
+        if (string.Equals(config.activeProfile, name, StringComparison.Ordinal))
+        {
+            ProfileDeleteError.Text       = "Switch to another profile before deleting this one.";
+            ProfileDeleteError.Visibility = Visibility.Visible;
+            return;
+        }
+        if (config.profiles.Count <= 1)
+        {
+            ProfileDeleteError.Text       = "At least one profile must remain.";
+            ProfileDeleteError.Visibility = Visibility.Visible;
+            return;
+        }
+
+        ConfigService.DeleteProfile(InstallService.ScriptRoot, name);
+        ShowFeedback($"Profile '{name}' deleted.", FeedbackKind.Ok);
+        RefreshProfileDropdown();
+        ShowProfilesView();
+    }
+
+    void ProfileDeleteCancel_Click(object sender, RoutedEventArgs e) => ShowProfilesView();
+
+    // =========================================================================
+    // Profile import / export
+    // =========================================================================
+    void ExportProfileBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var name = config.profiles.Any(p => string.Equals(p.name, _selectedProfileForExport, StringComparison.Ordinal))
+            ? _selectedProfileForExport!
+            : config.activeProfile;
+        var profile = config.profiles.FirstOrDefault(p => string.Equals(p.name, name, StringComparison.Ordinal));
+        if (profile == null) return;
+
+        var dialog = new SaveFileDialog
+        {
+            Title      = "Export Profile",
+            Filter     = "JSON files (*.json)|*.json",
+            DefaultExt = "json",
+            FileName   = $"{profile.name}.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            ConfigService.ExportProfile(dialog.FileName, profile);
+            ShowFeedback($"Profile '{profile.name}' exported.", FeedbackKind.Ok);
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Export failed: {ex.Message}", FeedbackKind.Err);
+        }
+    }
+
+    void ImportProfileBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title  = "Import Profile",
+            Filter = "JSON files (*.json)|*.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        ProfileEntry imported;
+        try
+        {
+            imported = ConfigService.ImportProfile(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Import failed: {ex.Message}", FeedbackKind.Err);
+            return;
+        }
+
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        if (config.profiles.Count >= ProfileHelpers.MaxProfiles)
+        {
+            ShowFeedback($"Cannot import: maximum of {ProfileHelpers.MaxProfiles} profiles reached.", FeedbackKind.Err);
+            return;
+        }
+
+        imported.bindings = ConfigService.SanitizeImportedBindings(imported.bindings, out var skipped);
+
+        if (config.profiles.Any(p => string.Equals(p.name, imported.name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _pendingImport        = imported;
+            _pendingImportSkipped = skipped;
+            ShowImportRenameForm(imported.name);
+            return;
+        }
+
+        FinishImport(imported, skipped);
+    }
+
+    void ShowImportRenameForm(string conflictName)
+    {
+        _profileFormEditTarget = null;
+        ProfileFormTitle.Text         = "Import Profile";
+        ProfileFormConfirmBtn.Content = "Import";
+        ProfileNameBox.Text            = $"{conflictName} (imported)";
+
+        ProfileFormError.Visibility       = Visibility.Collapsed;
+        SettingsProfilesView.Visibility   = Visibility.Collapsed;
+        SettingsProfileFormView.Visibility = Visibility.Visible;
+        ProfileNameBox.Focus();
+        ProfileNameBox.SelectAll();
+    }
+
+    void FinishImport(ProfileEntry profile, int skipped)
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        config.profiles.Add(profile);
+        ConfigService.Save(InstallService.ScriptRoot, config);
+
+        _selectedProfileForExport = profile.name;
+        RefreshProfileDropdown();
+        ShowProfilesView();
+
+        var msg = $"Profile '{profile.name}' imported.";
+        if (skipped > 0)
+            ShowFeedback($"{msg} {skipped} binding{(skipped == 1 ? "" : "s")} skipped (unknown trigger).", FeedbackKind.Warn);
+        else
+            ShowFeedback(msg, FeedbackKind.Ok);
+    }
+
+    // Stops + restarts the daemon if it's currently running (e.g. after switching profiles).
+    bool RestartDaemonIfRunning()
+    {
+        var wasRunning = DaemonService.IsRunning();
+        if (!wasRunning) return false;
+
+        DaemonService.Stop();
+        try { DaemonService.Start(); }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Restart failed: {ex.Message}", FeedbackKind.Err);
+            UpdateHookStatus();
+            return wasRunning;
+        }
+        StatusDot.Fill  = AmberBrush;
+        StatusText.Text = "Restarting...";
+        return wasRunning;
+    }
+
+    // =========================================================================
+    // Header profile switcher
+    // =========================================================================
+    void ProfileSwitcherBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileSwitcherPopup.IsOpen) { ProfileSwitcherPopup.IsOpen = false; return; }
+        RefreshProfileDropdown();
+        ProfileSwitcherPopup.IsOpen = true;
+    }
+
+    void RefreshProfileDropdown()
+    {
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        ProfileSwitcherLabel.Text = config.activeProfile;
+
+        ProfileSwitcherList.Children.Clear();
+
+        foreach (var profile in config.profiles)
+        {
+            var name     = profile.name;
+            var isActive = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+
+            var text = new TextBlock
+            {
+                Text              = (isActive ? "✓  " : "    ") + name,
+                Foreground        = isActive ? AccentBrush : TextBrush,
+                FontSize          = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var row = new Border
+            {
+                Padding      = new Thickness(10, 7, 10, 7),
+                CornerRadius = new CornerRadius(4),
+                Background   = Transparent,
+                Cursor       = Cursors.Hand,
+                Child        = text,
+            };
+            row.MouseEnter += (_, __) => row.Background = BtnHoverBg;
+            row.MouseLeave += (_, __) => row.Background = Transparent;
+            row.MouseLeftButtonUp += (_, __) =>
+            {
+                ProfileSwitcherPopup.IsOpen = false;
+                SwitchActiveProfile(name);
+            };
+
+            ProfileSwitcherList.Children.Add(row);
+        }
+
+        ProfileSwitcherList.Children.Add(new Border
+        {
+            Height     = 1,
+            Background = Br("#3A3A3A"),
+            Margin     = new Thickness(4, 4, 4, 4),
+        });
+
+        var manageText = new TextBlock
+        {
+            Text              = "Manage Profiles →",
+            Foreground        = AccentBrush,
+            FontSize          = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var manageRow = new Border
+        {
+            Padding      = new Thickness(10, 7, 10, 7),
+            CornerRadius = new CornerRadius(4),
+            Background   = Transparent,
+            Cursor       = Cursors.Hand,
+            Child        = manageText,
+        };
+        manageRow.MouseEnter += (_, __) => manageRow.Background = BtnHoverBg;
+        manageRow.MouseLeave += (_, __) => manageRow.Background = Transparent;
+        manageRow.MouseLeftButtonUp += (_, __) =>
+        {
+            ProfileSwitcherPopup.IsOpen = false;
+            OpenProfilesView();
+        };
+        ProfileSwitcherList.Children.Add(manageRow);
+    }
 
     // =========================================================================
     // Feedback toast
@@ -561,10 +1091,11 @@ public partial class MainWindow : Window
         _mouseRows.Clear();
         _mouseGestureStacks.Clear();
 
-        var configRoot = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var configRoot     = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var activeBindings = ConfigService.GetActiveProfile(configRoot).bindings;
 
         var gestureGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var b in configRoot.bindings)
+        foreach (var b in activeBindings)
         {
             if (!b.trigger.StartsWith("mouse:", StringComparison.Ordinal)) continue;
             var g = b.trigger.Substring(6);
@@ -586,7 +1117,8 @@ public partial class MainWindow : Window
                 globalEntry?.outputs ?? new List<string> { "" },
                 globalEntry?.outputDelay ?? 0,
                 true, new List<string>(), globalEntry?.enabled != false, isGlobal: true,
-                debounce: globalEntry?.debounce ?? false);
+                debounce: globalEntry?.debounce ?? false,
+                showToast: globalEntry?.showToast ?? false);
 
             // App-scoped variant rows
             if (bindings != null)
@@ -594,7 +1126,7 @@ public partial class MainWindow : Window
                     AddMouseVariantRow(def, gestureSP,
                         b.outputs ?? new List<string> { "" },
                         b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false,
-                        debounce: b.debounce);
+                        debounce: b.debounce, showToast: b.showToast);
 
             MouseStack.Children.Add(gestureSP);
         }
@@ -602,7 +1134,8 @@ public partial class MainWindow : Window
     }
 
     void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
-                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false)
+                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false,
+                            bool showToast = false)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=*:   chain block border (different shade per global/variant) containing the chain stack
@@ -667,6 +1200,7 @@ public partial class MainWindow : Window
             Label            = def.Label,
             AvailableActions = BuildActionsForGesture(def),
             Debounce         = debounce,
+            ShowToast        = showToast,
         };
 
         BuildChainStack(row, outputs, isGlobal_scope, apps, enabled);
@@ -700,7 +1234,6 @@ public partial class MainWindow : Window
             AddChainItem(row, o, rebuild: false);
 
         var controlRow = BuildChainControlRow(row, isGlobal, apps, enabled);
-        row.ChainFooter = controlRow;
         row.ChainStack.Children.Add(controlRow);
 
         RefreshChainDeleteButtons(row);
@@ -771,9 +1304,9 @@ public partial class MainWindow : Window
 
         row.Chain.Add(item);
 
-        if (rebuild && row.ChainFooter != null)
+        if (rebuild && row.ControlsContainer != null)
         {
-            int footerIdx = row.ChainStack.Children.IndexOf(row.ChainFooter);
+            int footerIdx = row.ChainStack.Children.IndexOf(row.ControlsContainer);
             if (footerIdx >= 0)
                 row.ChainStack.Children.Insert(footerIdx, itemGrid);
             else
@@ -789,18 +1322,101 @@ public partial class MainWindow : Window
         return item;
     }
 
-    // Builds the bottom control row for a variant:
-    // [+ chain][delay-lbl][delay-tb][ms][spacer *][AppScopeBtn][Enable]
-    Grid BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled)
+    // Builds the bottom control area for a variant as two stacked rows:
+    //   Row 1: [+ chain][delay-lbl][delay-tb][ms][spacer *][AppScopeBtn], as usual.
+    //   Row 2 (bottom, right-aligned): all toggles — enable, toast, and (scroll
+    //   gestures only) debounce. Keeping every toggle on its own row means it
+    //   never competes for space with the chain/delay/scope controls above.
+    FrameworkElement BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled)
     {
-        var footer = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        // ---- Toggle row (placed last) ----
+        var toggleRow = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            // Left offset matches "+ chain"'s button border + padding so the
+            // "enable" label lines up with the "+ chain" text above it.
+            Margin              = new Thickness(7, 3, 0, 0),
+        };
+
+        var enableLbl = new TextBlock
+        {
+            Text = "enable",
+            Foreground = DimBrush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 3, 0),
+            ToolTip = "Enable this binding",
+        };
+        var enableToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = enabled,
+            ToolTip   = "Enable this binding",
+        };
+        row.EnabledToggle = enableToggle;
+        row.Enabled       = enabled;
+        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
+        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
+        toggleRow.Children.Add(enableLbl);
+        toggleRow.Children.Add(enableToggle);
+
+        var toastLbl = new TextBlock
+        {
+            Text = "toast",
+            Foreground = DimBrush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 3, 0),
+            ToolTip = "Show a brief on-screen toast when this binding fires",
+        };
+        var toastToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = row.ShowToast,
+            ToolTip   = "Show a brief on-screen toast when this binding fires",
+        };
+        row.ToastToggle = toastToggle;
+        toastToggle.Checked   += (_, __) => row.ShowToast = true;
+        toastToggle.Unchecked += (_, __) => row.ShowToast = false;
+        toggleRow.Children.Add(toastLbl);
+        toggleRow.Children.Add(toastToggle);
+
+        if (row.MouseGesture?.Contains("scroll") == true)
+        {
+            var debounceLbl = new TextBlock
+            {
+                Text = "debounce",
+                Foreground = DimBrush,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 3, 0),
+                ToolTip = "Ignore repeated scroll firings within 200 ms",
+            };
+            var debounceToggle = new CheckBox
+            {
+                Style     = (Style)FindResource("Toggle"),
+                IsChecked = row.Debounce,
+                ToolTip   = "Ignore repeated scroll firings within 200 ms",
+            };
+            row.DebounceToggle = debounceToggle;
+            debounceToggle.Checked   += (_, __) => row.Debounce = true;
+            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
+            toggleRow.Children.Add(debounceLbl);
+            toggleRow.Children.Add(debounceToggle);
+        }
+
+        // ---- Row 1: chain / delay / scope controls ----
+        var footer = new Grid { Margin = new Thickness(0, 3, 0, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var addBtn = new Button
         {
@@ -855,64 +1471,21 @@ public partial class MainWindow : Window
         var scopeBtn = BuildAppScopeButton(row, isGlobal, apps);
         Grid.SetColumn(scopeBtn, 5);
 
-        var enableToggle = new CheckBox
-        {
-            Style     = (Style)FindResource("Toggle"),
-            IsChecked = enabled,
-            Margin    = new Thickness(6, 0, 0, 0),
-            ToolTip   = "Enable this binding",
-        };
-        Grid.SetColumn(enableToggle, 6);
-
-        row.EnabledToggle = enableToggle;
-        row.Enabled       = enabled;
-        row.DelayBox      = delayTB;
-
-        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
-        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
+        row.DelayBox = delayTB;
 
         footer.Children.Add(addBtn);
         footer.Children.Add(delayLbl);
         footer.Children.Add(delayTB);
         footer.Children.Add(msLbl);
         footer.Children.Add(scopeBtn);
-        footer.Children.Add(enableToggle);
 
-        if (row.MouseGesture?.Contains("scroll") == true)
-        {
-            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ChainFooter = footer;
 
-            var debounceLbl = new TextBlock
-            {
-                Text = "debounce",
-                Foreground = DimBrush,
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 3, 0),
-                ToolTip = "Ignore repeated scroll firings within 200 ms",
-            };
-            Grid.SetColumn(debounceLbl, 7);
-
-            var debounceToggle = new CheckBox
-            {
-                Style     = (Style)FindResource("Toggle"),
-                IsChecked = row.Debounce,
-                Margin    = new Thickness(0, 0, 0, 0),
-                ToolTip   = "Ignore repeated scroll firings within 200 ms",
-            };
-            Grid.SetColumn(debounceToggle, 8);
-
-            row.DebounceToggle = debounceToggle;
-            debounceToggle.Checked   += (_, __) => row.Debounce = true;
-            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
-
-            footer.Children.Add(debounceLbl);
-            footer.Children.Add(debounceToggle);
-        }
-
-        return footer;
+        var stack = new StackPanel();
+        stack.Children.Add(footer);
+        stack.Children.Add(toggleRow);
+        row.ControlsContainer = stack;
+        return stack;
     }
 
     // Builds the multi-select app scope button + popup and wires it to row state.
@@ -1074,7 +1647,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, bool enabled)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, bool enabled, bool showToast)>? variants)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -1170,7 +1743,7 @@ public partial class MainWindow : Window
             },
             onRestore: () => RestoreTriggerButton(capBtn, card.Trigger));
 
-        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), true);
+        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), true, false);
 
         delCardBtn.Click += (_, __) =>
         {
@@ -1183,14 +1756,14 @@ public partial class MainWindow : Window
         _kbdCards.Add(card);
 
         if (variants is { Count: > 0 })
-            foreach (var (o, d, isG, apps, e) in variants) AddKbdVariantRow(card, o, d, isG, apps, e);
+            foreach (var (o, d, isG, apps, e, st) in variants) AddKbdVariantRow(card, o, d, isG, apps, e, st);
         else
-            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), true);
+            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), true, false);
 
         UpdateCardAccentBorder(card);
     }
 
-    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, bool enabled)
+    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, bool enabled, bool showToast)
     {
         // col0=*: chain block border containing chain items + control row
         // col1=Auto: delete-variant button — top-aligned
@@ -1236,6 +1809,7 @@ public partial class MainWindow : Window
             Container   = grid,
             ChainStack  = chainStack,
             OutputDelay = outputDelay,
+            ShowToast   = showToast,
         };
         BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled);
         if (!enabled) grid.Opacity = 0.45;
@@ -1264,6 +1838,13 @@ public partial class MainWindow : Window
     // =========================================================================
     void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (SettingsRoot.Visibility == Visibility.Visible)
+        {
+            var settingsKey = e.Key == Key.System ? e.SystemKey : e.Key;
+            if (settingsKey == Key.Escape) { CloseSettings(); e.Handled = true; }
+            return;
+        }
+
         if (!_captureActive) return;
         e.Handled = true;
         var k = e.Key == Key.System ? e.SystemKey : e.Key;
@@ -1475,8 +2056,10 @@ public partial class MainWindow : Window
 
         if (output.StartsWith("cmd:", StringComparison.Ordinal) ||
             output.StartsWith("cmdw:", StringComparison.Ordinal)) return ActionKind.Command;
+        if (output.StartsWith("type:", StringComparison.Ordinal) && Has(ActionKind.TypeText)) return ActionKind.TypeText;
         if (output == "hscroll:left"   && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
         if (output == "hscroll:right"  && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
+        if (output == "toggle:pause"   && Has(ActionKind.TogglePause))    return ActionKind.TogglePause;
         if (output == "Shift+Home"         && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
         if (output == "Shift+End"          && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
         if (output == "Ctrl+Shift+Left"    && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
@@ -1496,6 +2079,8 @@ public partial class MainWindow : Window
             item.OutputValue = prevTB.Text.Trim();
         if (item.Action == ActionKind.Command && item.OutputCtrl is TextBox prevCmd && !string.IsNullOrWhiteSpace(prevCmd.Text))
             item.OutputValue = (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + prevCmd.Text.Trim();
+        if (item.Action == ActionKind.TypeText && item.OutputCtrl is TextBox prevType && prevType.Text.Length > 0)
+            item.OutputValue = "type:" + prevType.Text;
 
         if (_captureActive && ReferenceEquals(_captureBtn, item.OutputCtrl)) EndCapture();
 
@@ -1540,6 +2125,7 @@ public partial class MainWindow : Window
             case ActionKind.CtrlShiftRight:
             case ActionKind.HScrollLeft:
             case ActionKind.HScrollRight:
+            case ActionKind.TogglePause:
             {
                 var desc = action switch {
                     ActionKind.ShiftHome      => "Shift+Home — select to line start",
@@ -1548,6 +2134,7 @@ public partial class MainWindow : Window
                     ActionKind.CtrlShiftRight => "Ctrl+Shift+Right — select word right",
                     ActionKind.HScrollLeft    => "Horizontal scroll left",
                     ActionKind.HScrollRight   => "Horizontal scroll right",
+                    ActionKind.TogglePause    => "Pause/resume all hook processing",
                     _                         => ""
                 };
                 item.OutputPanel.Children.Add(new TextBlock
@@ -1610,6 +2197,25 @@ public partial class MainWindow : Window
                 item.OutputPanel.Children.Add(g);
                 item.OutputCtrl      = tb;
                 item.CmdShowCheckBox = showCb;
+                break;
+            }
+            case ActionKind.TypeText:
+            {
+                var tb = new TextBox
+                {
+                    Style                       = (Style)FindResource("DarkTB"),
+                    AcceptsReturn               = true,
+                    AcceptsTab                  = true,
+                    TextWrapping                = TextWrapping.Wrap,
+                    Height                      = 56,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    FontFamily                  = new FontFamily("Consolas"),
+                    FontSize                    = 11,
+                    Text = item.OutputValue.StartsWith("type:", StringComparison.Ordinal)
+                        ? item.OutputValue.Substring(5) : "",
+                };
+                item.OutputPanel.Children.Add(tb);
+                item.OutputCtrl = tb;
                 break;
             }
         }
@@ -1767,12 +2373,15 @@ public partial class MainWindow : Window
         ActionKind.OpenFolder      => item.OutputValue,
         ActionKind.Command         => (item.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
                                          ? (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
+        ActionKind.TypeText        => (item.OutputCtrl is TextBox typeTb && typeTb.Text.Length > 0)
+                                         ? "type:" + typeTb.Text : "",
         ActionKind.ShiftHome       => "Shift+Home",
         ActionKind.ShiftEnd        => "Shift+End",
         ActionKind.CtrlShiftLeft   => "Ctrl+Shift+Left",
         ActionKind.CtrlShiftRight  => "Ctrl+Shift+Right",
         ActionKind.HScrollLeft     => "hscroll:left",
         ActionKind.HScrollRight    => "hscroll:right",
+        ActionKind.TogglePause     => "toggle:pause",
         _                          => "",
     };
 
@@ -1814,7 +2423,9 @@ public partial class MainWindow : Window
                         if (outp.StartsWith("open:", StringComparison.Ordinal) ||
                             outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
                             outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
-                            outp.StartsWith("hscroll:", StringComparison.Ordinal)) continue;
+                            outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
+                            outp.StartsWith("type:", StringComparison.Ordinal) ||
+                            outp == "toggle:pause") continue;
                         try { TriggerHelpers.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
                     }
@@ -1842,6 +2453,7 @@ public partial class MainWindow : Window
                 };
                 if (!row.Enabled) entry.enabled = false;
                 if (row.Debounce)  entry.debounce = true;
+                if (row.ShowToast) entry.showToast = true;
                 entries.Add(entry);
             }
         }
@@ -1880,6 +2492,7 @@ public partial class MainWindow : Window
                             outputDelay = row.OutputDelay,
                             apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                             enabled     = false,
+                            showToast   = row.ShowToast,
                         });
                     continue;
                 }
@@ -1895,7 +2508,9 @@ public partial class MainWindow : Window
                 {
                     if (outp.StartsWith("open:", StringComparison.Ordinal) ||
                         outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
-                        outp.StartsWith("cmdw:", StringComparison.Ordinal)) continue;
+                        outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
+                        outp.StartsWith("type:", StringComparison.Ordinal) ||
+                        outp == "toggle:pause") continue;
                     try { TriggerHelpers.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
                 }
@@ -1933,6 +2548,7 @@ public partial class MainWindow : Window
                     outputs     = outputsList,
                     outputDelay = row.OutputDelay,
                     apps        = row.IsGlobal ? null : new List<string>(row.Apps),
+                    showToast   = row.ShowToast,
                 });
             }
         }
@@ -1957,8 +2573,7 @@ public partial class MainWindow : Window
             if (HotkeyProbe.IsConflicted(parsed.Mods, parsed.Keys[0]))
                 conflicts.Add(trig.Substring(4));
 
-        var configToSave = new ConfigRoot { bindings = entries };
-        try { ConfigService.Save(InstallService.ScriptRoot, configToSave); }
+        try { ConfigService.SaveActiveProfileBindings(InstallService.ScriptRoot, entries); }
         catch (Exception ex) { ShowFeedback($"Save failed: {ex.Message}", FeedbackKind.Err); return; }
 
         var wasRunning = DaemonService.IsRunning();
