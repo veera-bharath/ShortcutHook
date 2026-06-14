@@ -21,13 +21,15 @@ function Write-Log([string]$msg) {
 }
 Write-Log "=== Start (PS $($PSVersionTable.PSVersion), PID $PID) ==="
 
-try { Add-Type @"
+try { Add-Type -ReferencedAssemblies @('System.Windows.Forms.dll','System.Drawing.dll') -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Windows.Forms;
 
 public class ShortcutHook {
 
@@ -130,6 +132,8 @@ public class ShortcutHook {
     static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool CloseHandle(IntPtr hObject);
+    [DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MSG {
@@ -190,6 +194,8 @@ public class ShortcutHook {
         public int         OutputDelay;   // ms between chained steps (0 = no delay)
         public ChainStep[] Steps;         // one or more actions to execute in order
         public bool        Debounce;      // ignore repeated scroll fires within SCROLL_DEBOUNCE_MS
+        public bool        ShowToast;     // show a brief on-screen toast when this binding fires
+        public string      ToastText;     // text shown in the toast (trigger description)
     }
 
     public static List<Binding> MouseBindings = new List<Binding>();
@@ -623,10 +629,61 @@ public class ShortcutHook {
         return false;
     }
 
+    // Spawns a small borderless topmost popup near the bottom-right corner of the
+    // screen showing the binding's trigger, auto-dismissing after ~1s. Runs on its
+    // own STA thread with its own message loop (Application.Run), so it never
+    // touches the hook callback's thread.
+    static void ShowToast(string text) {
+        if (string.IsNullOrEmpty(text)) return;
+        Thread t = new Thread(() => {
+            try {
+                Form f = new Form();
+                f.FormBorderStyle = FormBorderStyle.None;
+                f.TopMost = true;
+                f.ShowInTaskbar = false;
+                f.StartPosition = FormStartPosition.Manual;
+                f.BackColor = Color.FromArgb(32, 32, 32);
+                f.Opacity = 0.92;
+                f.AutoSize = true;
+                f.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+
+                Label lbl = new Label();
+                lbl.Text = text;
+                lbl.ForeColor = Color.White;
+                lbl.Font = new Font("Segoe UI", 10F);
+                lbl.AutoSize = true;
+                lbl.Padding = new Padding(14, 8, 14, 8);
+                f.Controls.Add(lbl);
+
+                f.Shown += (s, e) => {
+                    Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+                    f.Location = new Point(area.Right - f.Width - 16, area.Bottom - f.Height - 16);
+                    // Form.TopMost alone doesn't always place us above the
+                    // current foreground window's z-order band when we're a
+                    // background process. Force it explicitly via SetWindowPos
+                    // (SWP_NOACTIVATE so focus stays with the foreground app).
+                    const uint SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
+                    SetWindowPos(f.Handle, new IntPtr(-1), f.Left, f.Top, f.Width, f.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                };
+
+                System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+                timer.Interval = 1000;
+                timer.Tick += (s, e) => { timer.Stop(); f.Close(); };
+                f.Shown += (s, e) => timer.Start();
+
+                Application.Run(f);
+            } catch { }
+        });
+        t.IsBackground = true;
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+    }
+
     static void ExecuteBinding(Binding b) {
         if (b == null || b.Steps == null || b.Steps.Length == 0) return;
         // While paused, every binding except a toggle:pause one is a no-op.
         if (IsPaused && !HasTogglePause(b)) return;
+        if (b.ShowToast) ShowToast(b.ToastText);
         // Single-action with no delay: fast path — run inline (FireOutput is safe in hook callback).
         if (b.Steps.Length == 1 && b.OutputDelay == 0 && b.Steps[0].Output != null) {
             FireOutput(b.Steps[0].Output);
@@ -1392,6 +1449,10 @@ foreach ($b in $rawBindings) {
         }
         if ($b.PSObject.Properties.Name -contains 'debounce' -and $b.debounce -eq $true) {
             $nb.Debounce = $true
+        }
+        if ($b.PSObject.Properties.Name -contains 'showToast' -and $b.showToast -eq $true) {
+            $nb.ShowToast = $true
+            $nb.ToastText = if ($b.trigger -match '^(?:mouse|key):(.+)$') { $Matches[1] } else { $b.trigger }
         }
         $built.Add($nb)
     } catch {

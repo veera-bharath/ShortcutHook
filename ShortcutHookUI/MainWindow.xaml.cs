@@ -41,6 +41,7 @@ public sealed class Row
     public int        OutputDelay = 0;       // ms between chained actions
     public TextBox?   DelayBox;
     public Grid       ChainFooter = null!;   // footer row: [+ Add action] [delay spinner]
+    public FrameworkElement ControlsContainer = null!;  // top-level controls block added to ChainStack (toggle row + footer)
 
     // mouse-only
     public string?    MouseGesture;
@@ -65,6 +66,10 @@ public sealed class Row
     // debounce (scroll gestures only): ignore repeats within 200 ms
     public bool      Debounce         = false;
     public CheckBox? DebounceToggle;
+
+    // show a brief on-screen toast when this binding fires
+    public bool      ShowToast        = false;
+    public CheckBox? ToastToggle;
 
     // gesture-specific action options (null → StandardActions)
     public ActionDef[]? AvailableActions;
@@ -460,7 +465,7 @@ public partial class MainWindow : Window
                 {
                     bool isGlobal = b.apps == null || b.apps.Count == 0;
                     var  apps     = b.apps ?? new List<string>();
-                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, b.enabled != false);
+                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, b.enabled != false, b.showToast);
                 })
                 .ToList();
             AddKbdTriggerCard(trig, variants);
@@ -1080,7 +1085,8 @@ public partial class MainWindow : Window
                 globalEntry?.outputs ?? new List<string> { "" },
                 globalEntry?.outputDelay ?? 0,
                 true, new List<string>(), globalEntry?.enabled != false, isGlobal: true,
-                debounce: globalEntry?.debounce ?? false);
+                debounce: globalEntry?.debounce ?? false,
+                showToast: globalEntry?.showToast ?? false);
 
             // App-scoped variant rows
             if (bindings != null)
@@ -1088,7 +1094,7 @@ public partial class MainWindow : Window
                     AddMouseVariantRow(def, gestureSP,
                         b.outputs ?? new List<string> { "" },
                         b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false,
-                        debounce: b.debounce);
+                        debounce: b.debounce, showToast: b.showToast);
 
             MouseStack.Children.Add(gestureSP);
         }
@@ -1096,7 +1102,8 @@ public partial class MainWindow : Window
     }
 
     void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
-                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false)
+                            bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false,
+                            bool showToast = false)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=*:   chain block border (different shade per global/variant) containing the chain stack
@@ -1161,6 +1168,7 @@ public partial class MainWindow : Window
             Label            = def.Label,
             AvailableActions = BuildActionsForGesture(def),
             Debounce         = debounce,
+            ShowToast        = showToast,
         };
 
         BuildChainStack(row, outputs, isGlobal_scope, apps, enabled);
@@ -1194,7 +1202,6 @@ public partial class MainWindow : Window
             AddChainItem(row, o, rebuild: false);
 
         var controlRow = BuildChainControlRow(row, isGlobal, apps, enabled);
-        row.ChainFooter = controlRow;
         row.ChainStack.Children.Add(controlRow);
 
         RefreshChainDeleteButtons(row);
@@ -1265,9 +1272,9 @@ public partial class MainWindow : Window
 
         row.Chain.Add(item);
 
-        if (rebuild && row.ChainFooter != null)
+        if (rebuild && row.ControlsContainer != null)
         {
-            int footerIdx = row.ChainStack.Children.IndexOf(row.ChainFooter);
+            int footerIdx = row.ChainStack.Children.IndexOf(row.ControlsContainer);
             if (footerIdx >= 0)
                 row.ChainStack.Children.Insert(footerIdx, itemGrid);
             else
@@ -1283,18 +1290,101 @@ public partial class MainWindow : Window
         return item;
     }
 
-    // Builds the bottom control row for a variant:
-    // [+ chain][delay-lbl][delay-tb][ms][spacer *][AppScopeBtn][Enable]
-    Grid BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled)
+    // Builds the bottom control area for a variant as two stacked rows:
+    //   Row 1: [+ chain][delay-lbl][delay-tb][ms][spacer *][AppScopeBtn], as usual.
+    //   Row 2 (bottom, right-aligned): all toggles — enable, toast, and (scroll
+    //   gestures only) debounce. Keeping every toggle on its own row means it
+    //   never competes for space with the chain/delay/scope controls above.
+    FrameworkElement BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled)
     {
-        var footer = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        // ---- Toggle row (placed last) ----
+        var toggleRow = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            // Left offset matches "+ chain"'s button border + padding so the
+            // "enable" label lines up with the "+ chain" text above it.
+            Margin              = new Thickness(7, 3, 0, 0),
+        };
+
+        var enableLbl = new TextBlock
+        {
+            Text = "enable",
+            Foreground = DimBrush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 3, 0),
+            ToolTip = "Enable this binding",
+        };
+        var enableToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = enabled,
+            ToolTip   = "Enable this binding",
+        };
+        row.EnabledToggle = enableToggle;
+        row.Enabled       = enabled;
+        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
+        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
+        toggleRow.Children.Add(enableLbl);
+        toggleRow.Children.Add(enableToggle);
+
+        var toastLbl = new TextBlock
+        {
+            Text = "toast",
+            Foreground = DimBrush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 3, 0),
+            ToolTip = "Show a brief on-screen toast when this binding fires",
+        };
+        var toastToggle = new CheckBox
+        {
+            Style     = (Style)FindResource("Toggle"),
+            IsChecked = row.ShowToast,
+            ToolTip   = "Show a brief on-screen toast when this binding fires",
+        };
+        row.ToastToggle = toastToggle;
+        toastToggle.Checked   += (_, __) => row.ShowToast = true;
+        toastToggle.Unchecked += (_, __) => row.ShowToast = false;
+        toggleRow.Children.Add(toastLbl);
+        toggleRow.Children.Add(toastToggle);
+
+        if (row.MouseGesture?.Contains("scroll") == true)
+        {
+            var debounceLbl = new TextBlock
+            {
+                Text = "debounce",
+                Foreground = DimBrush,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 3, 0),
+                ToolTip = "Ignore repeated scroll firings within 200 ms",
+            };
+            var debounceToggle = new CheckBox
+            {
+                Style     = (Style)FindResource("Toggle"),
+                IsChecked = row.Debounce,
+                ToolTip   = "Ignore repeated scroll firings within 200 ms",
+            };
+            row.DebounceToggle = debounceToggle;
+            debounceToggle.Checked   += (_, __) => row.Debounce = true;
+            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
+            toggleRow.Children.Add(debounceLbl);
+            toggleRow.Children.Add(debounceToggle);
+        }
+
+        // ---- Row 1: chain / delay / scope controls ----
+        var footer = new Grid { Margin = new Thickness(0, 3, 0, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
-        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var addBtn = new Button
         {
@@ -1349,64 +1439,21 @@ public partial class MainWindow : Window
         var scopeBtn = BuildAppScopeButton(row, isGlobal, apps);
         Grid.SetColumn(scopeBtn, 5);
 
-        var enableToggle = new CheckBox
-        {
-            Style     = (Style)FindResource("Toggle"),
-            IsChecked = enabled,
-            Margin    = new Thickness(6, 0, 0, 0),
-            ToolTip   = "Enable this binding",
-        };
-        Grid.SetColumn(enableToggle, 6);
-
-        row.EnabledToggle = enableToggle;
-        row.Enabled       = enabled;
-        row.DelayBox      = delayTB;
-
-        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
-        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
+        row.DelayBox = delayTB;
 
         footer.Children.Add(addBtn);
         footer.Children.Add(delayLbl);
         footer.Children.Add(delayTB);
         footer.Children.Add(msLbl);
         footer.Children.Add(scopeBtn);
-        footer.Children.Add(enableToggle);
 
-        if (row.MouseGesture?.Contains("scroll") == true)
-        {
-            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ChainFooter = footer;
 
-            var debounceLbl = new TextBlock
-            {
-                Text = "debounce",
-                Foreground = DimBrush,
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 3, 0),
-                ToolTip = "Ignore repeated scroll firings within 200 ms",
-            };
-            Grid.SetColumn(debounceLbl, 7);
-
-            var debounceToggle = new CheckBox
-            {
-                Style     = (Style)FindResource("Toggle"),
-                IsChecked = row.Debounce,
-                Margin    = new Thickness(0, 0, 0, 0),
-                ToolTip   = "Ignore repeated scroll firings within 200 ms",
-            };
-            Grid.SetColumn(debounceToggle, 8);
-
-            row.DebounceToggle = debounceToggle;
-            debounceToggle.Checked   += (_, __) => row.Debounce = true;
-            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
-
-            footer.Children.Add(debounceLbl);
-            footer.Children.Add(debounceToggle);
-        }
-
-        return footer;
+        var stack = new StackPanel();
+        stack.Children.Add(footer);
+        stack.Children.Add(toggleRow);
+        row.ControlsContainer = stack;
+        return stack;
     }
 
     // Builds the multi-select app scope button + popup and wires it to row state.
@@ -1568,7 +1615,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, bool enabled)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, bool enabled, bool showToast)>? variants)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -1664,7 +1711,7 @@ public partial class MainWindow : Window
             },
             onRestore: () => RestoreTriggerButton(capBtn, card.Trigger));
 
-        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), true);
+        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), true, false);
 
         delCardBtn.Click += (_, __) =>
         {
@@ -1677,14 +1724,14 @@ public partial class MainWindow : Window
         _kbdCards.Add(card);
 
         if (variants is { Count: > 0 })
-            foreach (var (o, d, isG, apps, e) in variants) AddKbdVariantRow(card, o, d, isG, apps, e);
+            foreach (var (o, d, isG, apps, e, st) in variants) AddKbdVariantRow(card, o, d, isG, apps, e, st);
         else
-            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), true);
+            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), true, false);
 
         UpdateCardAccentBorder(card);
     }
 
-    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, bool enabled)
+    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, bool enabled, bool showToast)
     {
         // col0=*: chain block border containing chain items + control row
         // col1=Auto: delete-variant button — top-aligned
@@ -1730,6 +1777,7 @@ public partial class MainWindow : Window
             Container   = grid,
             ChainStack  = chainStack,
             OutputDelay = outputDelay,
+            ShowToast   = showToast,
         };
         BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled);
         if (!enabled) grid.Opacity = 0.45;
@@ -2373,6 +2421,7 @@ public partial class MainWindow : Window
                 };
                 if (!row.Enabled) entry.enabled = false;
                 if (row.Debounce)  entry.debounce = true;
+                if (row.ShowToast) entry.showToast = true;
                 entries.Add(entry);
             }
         }
@@ -2411,6 +2460,7 @@ public partial class MainWindow : Window
                             outputDelay = row.OutputDelay,
                             apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                             enabled     = false,
+                            showToast   = row.ShowToast,
                         });
                     continue;
                 }
@@ -2466,6 +2516,7 @@ public partial class MainWindow : Window
                     outputs     = outputsList,
                     outputDelay = row.OutputDelay,
                     apps        = row.IsGlobal ? null : new List<string>(row.Apps),
+                    showToast   = row.ShowToast,
                 });
             }
         }
