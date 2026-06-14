@@ -335,6 +335,9 @@ internal static class InstallService
     public static readonly string ScriptRoot = @"C:\Tools\ShortcutHook";
     public static string ScriptPath => Path.Combine(ScriptRoot, ScriptFileName);
 
+    // Written by the daemon whenever the global pause toggle fires.
+    public static string PauseStatePath => Path.Combine(ScriptRoot, "pause.state");
+
     // App (exe) default: same folder as script, so a default install is self-contained.
     public static string DefaultAppRoot => ScriptRoot;
 
