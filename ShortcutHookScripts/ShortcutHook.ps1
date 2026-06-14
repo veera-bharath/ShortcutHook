@@ -11,7 +11,7 @@
 # Output formats in shortcuts.json:
 #   "Win+Shift+S"           keyboard chord
 #   "open:C:\path\to\thing" shell-execute (app .lnk, file, or folder)
-#   "type:Some text"        type a literal string via SendInput (text expansion)
+#   "type:Some text"        paste a literal string via the clipboard (text expansion)
 #
 # Requirements: Windows 10/11, PowerShell 5+, .NET Framework 4.5+
 
@@ -52,9 +52,6 @@ public class ShortcutHook {
     private const uint MOUSEEVENTF_MIDDLEUP   = 0x0040;
     private const uint MOUSEEVENTF_HWHEEL     = 0x1000;
     private const uint KEYEVENTF_KEYUP        = 0x0002;
-    private const uint KEYEVENTF_UNICODE      = 0x0004;
-    private const uint INPUT_KEYBOARD         = 1;
-    private const byte VK_RETURN              = 0x0D;
     private const uint LLKHF_INJECTED         = 0x10;
     private const uint CF_UNICODETEXT         = 13;
     private const uint CF_HDROP               = 15;
@@ -102,8 +99,6 @@ public class ShortcutHook {
     static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")]
     static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
-    [DllImport("user32.dll", SetLastError=true)]
-    static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
     [DllImport("user32.dll")]
     static extern uint GetDoubleClickTime();
     [DllImport("user32.dll")]
@@ -144,22 +139,6 @@ public class ShortcutHook {
     [DllImport("user32.dll")] static extern int    GetMessage(out MSG msg, IntPtr hwnd, uint min, uint max);
     [DllImport("user32.dll")] static extern bool   TranslateMessage(ref MSG msg);
     [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG msg);
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct KEYBDINPUT {
-        public ushort wVk;     public ushort wScan; public uint dwFlags;
-        public uint   time;    public IntPtr dwExtraInfo;
-    }
-
-    // Padded to match the size of the native INPUT union (32 bytes on x64, the size
-    // of its largest member MOUSEINPUT) so SendInput's cbSize check and array
-    // marshaling stride agree with the OS.
-    [StructLayout(LayoutKind.Sequential)]
-    public struct INPUT {
-        public uint       type;
-        public KEYBDINPUT ki;
-        public ulong      padding;
-    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct KBDLLHOOKSTRUCT {
@@ -712,10 +691,10 @@ public class ShortcutHook {
         else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
     }
 
-    // Types a literal string via SendInput Unicode injection (works for any character
-    // regardless of the active keyboard layout, including ones requiring Shift/AltGr).
-    // '\n' is sent as a real Enter key so multi-line snippets create new lines/submit
-    // forms as expected; '\r' is dropped.
+    // Types a literal string in one shot via the clipboard: stash the current
+    // clipboard, drop the text in as CF_UNICODETEXT, send Ctrl+V, then restore
+    // the clipboard the caller had. Multi-line text pastes as real line breaks
+    // without needing per-key Enter presses.
     static void TypeText(string text) {
         if (string.IsNullOrEmpty(text)) return;
         bool uCtrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -724,22 +703,24 @@ public class ShortcutHook {
         bool uWinL  = (GetAsyncKeyState(VK_LWIN)    & 0x8000) != 0;
         bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
 
-        // Release held modifiers so they don't combine with the injected characters.
+        // Release held modifiers so they don't interfere with our own Ctrl+V.
         if (uCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
-        foreach (char c in text) {
-            if (c == '\r') continue;
-            if (c == '\n') {
-                keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
-                keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            } else {
-                SendUnicodeChar(c);
-            }
-        }
+        var saved = BackupClipboard();
+        SetClipboardText(text);
+
+        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56 /* V */, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+        // Give the target app time to read the clipboard before we restore it.
+        Thread.Sleep(CLIP_WAIT_MS);
+        RestoreClipboard(saved);
 
         // Restore the modifiers that were held before typing started.
         if (uAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
@@ -750,17 +731,23 @@ public class ShortcutHook {
         else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
     }
 
-    static void SendUnicodeChar(char c) {
-        INPUT[] inputs = new INPUT[2];
-        inputs[0].type        = INPUT_KEYBOARD;
-        inputs[0].ki.wVk      = 0;
-        inputs[0].ki.wScan    = c;
-        inputs[0].ki.dwFlags  = KEYEVENTF_UNICODE;
-        inputs[1].type        = INPUT_KEYBOARD;
-        inputs[1].ki.wVk      = 0;
-        inputs[1].ki.wScan    = c;
-        inputs[1].ki.dwFlags  = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-        SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+    static void SetClipboardText(string text) {
+        try {
+            if (!OpenClipboard(IntPtr.Zero)) return;
+            EmptyClipboard();
+            int bytes = (text.Length + 1) * 2; // UTF-16 chars + null terminator
+            IntPtr hMem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)bytes);
+            if (hMem == IntPtr.Zero) { CloseClipboard(); return; }
+            IntPtr p = GlobalLock(hMem);
+            if (p == IntPtr.Zero) { GlobalFree(hMem); CloseClipboard(); return; }
+            for (int i = 0; i < text.Length; i++) Marshal.WriteInt16(p, i * 2, (short)text[i]);
+            Marshal.WriteInt16(p, text.Length * 2, 0);
+            GlobalUnlock(hMem);
+            if (SetClipboardData(CF_UNICODETEXT, hMem) == IntPtr.Zero) GlobalFree(hMem);
+            CloseClipboard();
+        } catch {
+            try { CloseClipboard(); } catch {}
+        }
     }
 
     // =========================================================================
