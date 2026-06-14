@@ -17,7 +17,7 @@ using System.Windows.Threading;
 
 namespace ShortcutHookUI;
 
-public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight, TogglePause }
+public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, TypeText, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight, TogglePause }
 
 // One action in a chained binding. Multiple ChainedActions make up one Row's output.
 public sealed class ChainedAction
@@ -87,6 +87,7 @@ public partial class MainWindow : Window
         new("Open file",        ActionKind.OpenFile),
         new("Open folder",      ActionKind.OpenFolder),
         new("Run command",      ActionKind.Command),
+        new("Type text",        ActionKind.TypeText),
         new("Toggle pause",     ActionKind.TogglePause),
     };
 
@@ -1975,6 +1976,7 @@ public partial class MainWindow : Window
 
         if (output.StartsWith("cmd:", StringComparison.Ordinal) ||
             output.StartsWith("cmdw:", StringComparison.Ordinal)) return ActionKind.Command;
+        if (output.StartsWith("type:", StringComparison.Ordinal) && Has(ActionKind.TypeText)) return ActionKind.TypeText;
         if (output == "hscroll:left"   && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
         if (output == "hscroll:right"  && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
         if (output == "toggle:pause"   && Has(ActionKind.TogglePause))    return ActionKind.TogglePause;
@@ -1997,6 +1999,8 @@ public partial class MainWindow : Window
             item.OutputValue = prevTB.Text.Trim();
         if (item.Action == ActionKind.Command && item.OutputCtrl is TextBox prevCmd && !string.IsNullOrWhiteSpace(prevCmd.Text))
             item.OutputValue = (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + prevCmd.Text.Trim();
+        if (item.Action == ActionKind.TypeText && item.OutputCtrl is TextBox prevType && prevType.Text.Length > 0)
+            item.OutputValue = "type:" + prevType.Text;
 
         if (_captureActive && ReferenceEquals(_captureBtn, item.OutputCtrl)) EndCapture();
 
@@ -2113,6 +2117,25 @@ public partial class MainWindow : Window
                 item.OutputPanel.Children.Add(g);
                 item.OutputCtrl      = tb;
                 item.CmdShowCheckBox = showCb;
+                break;
+            }
+            case ActionKind.TypeText:
+            {
+                var tb = new TextBox
+                {
+                    Style                       = (Style)FindResource("DarkTB"),
+                    AcceptsReturn               = true,
+                    AcceptsTab                  = true,
+                    TextWrapping                = TextWrapping.Wrap,
+                    Height                      = 56,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    FontFamily                  = new FontFamily("Consolas"),
+                    FontSize                    = 11,
+                    Text = item.OutputValue.StartsWith("type:", StringComparison.Ordinal)
+                        ? item.OutputValue.Substring(5) : "",
+                };
+                item.OutputPanel.Children.Add(tb);
+                item.OutputCtrl = tb;
                 break;
             }
         }
@@ -2270,6 +2293,8 @@ public partial class MainWindow : Window
         ActionKind.OpenFolder      => item.OutputValue,
         ActionKind.Command         => (item.OutputCtrl is TextBox cmdTb && !string.IsNullOrWhiteSpace(cmdTb.Text))
                                          ? (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + cmdTb.Text.Trim() : "",
+        ActionKind.TypeText        => (item.OutputCtrl is TextBox typeTb && typeTb.Text.Length > 0)
+                                         ? "type:" + typeTb.Text : "",
         ActionKind.ShiftHome       => "Shift+Home",
         ActionKind.ShiftEnd        => "Shift+End",
         ActionKind.CtrlShiftLeft   => "Ctrl+Shift+Left",
@@ -2319,6 +2344,7 @@ public partial class MainWindow : Window
                             outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
                             outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
                             outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
+                            outp.StartsWith("type:", StringComparison.Ordinal) ||
                             outp == "toggle:pause") continue;
                         try { TriggerHelpers.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
@@ -2401,6 +2427,7 @@ public partial class MainWindow : Window
                     if (outp.StartsWith("open:", StringComparison.Ordinal) ||
                         outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
                         outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
+                        outp.StartsWith("type:", StringComparison.Ordinal) ||
                         outp == "toggle:pause") continue;
                     try { TriggerHelpers.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }

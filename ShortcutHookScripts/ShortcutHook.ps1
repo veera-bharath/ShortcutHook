@@ -11,6 +11,7 @@
 # Output formats in shortcuts.json:
 #   "Win+Shift+S"           keyboard chord
 #   "open:C:\path\to\thing" shell-execute (app .lnk, file, or folder)
+#   "type:Some text"        paste a literal string via the clipboard (text expansion)
 #
 # Requirements: Windows 10/11, PowerShell 5+, .NET Framework 4.5+
 
@@ -169,10 +170,11 @@ public class ShortcutHook {
 
     // ---------- Binding ----------
     public class ChainStep {
-        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/IsHScroll/IsTogglePause is set
-        public string OpenPath;  // shell-execute target; null when Output/CmdLine/IsHScroll/IsTogglePause is set
-        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/IsHScroll/IsTogglePause is set
+        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/TypeText/IsHScroll/IsTogglePause is set
+        public string OpenPath;  // shell-execute target; null when Output/CmdLine/TypeText/IsHScroll/IsTogglePause is set
+        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/TypeText/IsHScroll/IsTogglePause is set
         public bool   CmdShow;   // true = visible cmd window (/k), false = hidden (/c)
+        public string TypeText;  // literal text typed via SendInput; null when Output/OpenPath/CmdLine/IsHScroll/IsTogglePause is set
         public bool   IsHScroll; // horizontal scroll; negative HScrollDelta = left, positive = right
         public int    HScrollDelta;
         public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
@@ -609,6 +611,8 @@ public class ShortcutHook {
                     });
                 }
             } catch { }
+        } else if (step.TypeText != null) {
+            TypeText(step.TypeText);
         } else {
             FireOutput(step.Output);
         }
@@ -685,6 +689,65 @@ public class ShortcutHook {
 
         if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
         else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
+    }
+
+    // Types a literal string in one shot via the clipboard: stash the current
+    // clipboard, drop the text in as CF_UNICODETEXT, send Ctrl+V, then restore
+    // the clipboard the caller had. Multi-line text pastes as real line breaks
+    // without needing per-key Enter presses.
+    static void TypeText(string text) {
+        if (string.IsNullOrEmpty(text)) return;
+        bool uCtrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool uShift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+        bool uAlt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+        bool uWinL  = (GetAsyncKeyState(VK_LWIN)    & 0x8000) != 0;
+        bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
+
+        // Release held modifiers so they don't interfere with our own Ctrl+V.
+        if (uCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+        var saved = BackupClipboard();
+        SetClipboardText(text);
+
+        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56 /* V */, 0, 0, UIntPtr.Zero);
+        keybd_event(0x56, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+        // Give the target app time to read the clipboard before we restore it.
+        Thread.Sleep(CLIP_WAIT_MS);
+        RestoreClipboard(saved);
+
+        // Restore the modifiers that were held before typing started.
+        if (uAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
+        if (uShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
+        if (uCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+
+        if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
+        else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
+    }
+
+    static void SetClipboardText(string text) {
+        try {
+            if (!OpenClipboard(IntPtr.Zero)) return;
+            EmptyClipboard();
+            int bytes = (text.Length + 1) * 2; // UTF-16 chars + null terminator
+            IntPtr hMem = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)bytes);
+            if (hMem == IntPtr.Zero) { CloseClipboard(); return; }
+            IntPtr p = GlobalLock(hMem);
+            if (p == IntPtr.Zero) { GlobalFree(hMem); CloseClipboard(); return; }
+            for (int i = 0; i < text.Length; i++) Marshal.WriteInt16(p, i * 2, (short)text[i]);
+            Marshal.WriteInt16(p, text.Length * 2, 0);
+            GlobalUnlock(hMem);
+            if (SetClipboardData(CF_UNICODETEXT, hMem) == IntPtr.Zero) GlobalFree(hMem);
+            CloseClipboard();
+        } catch {
+            try { CloseClipboard(); } catch {}
+        }
     }
 
     // =========================================================================
@@ -1309,6 +1372,8 @@ foreach ($b in $rawBindings) {
                 $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
             } elseif ($outStr -match '^toggle:pause$') {
                 $step.IsTogglePause = $true
+            } elseif ($outStr -match '^type:([\s\S]+)$') {
+                $step.TypeText = $Matches[1]
             } else {
                 $step.Output = Resolve-OutputChord $outStr
             }
@@ -1346,6 +1411,7 @@ try {
                 if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
                 else { $stepDescs += "cmd:$($s.CmdLine)" }
             } elseif ($s.IsTogglePause) { $stepDescs += "toggle:pause" }
+            elseif ($s.TypeText) { $stepDescs += "type:$($s.TypeText)" }
             else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
         }
         $dest  = [string]::Join(' -> ', $stepDescs)
