@@ -35,6 +35,9 @@ public sealed class BindingEntry
     // Debounce: ignore repeated scroll firings within 200 ms. Omitted when false.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool debounce { get; set; } = false;
+    // Show a brief on-screen toast when this binding fires. Omitted when false.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool showToast { get; set; } = false;
 }
 
 public sealed class ConfigRoot
