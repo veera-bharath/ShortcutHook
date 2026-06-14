@@ -74,6 +74,18 @@ public class ShortcutHook {
     public const int MOD_ALT   = 4;
     public const int MOD_WIN   = 8;
 
+    // Global pause: while true, both hooks pass events through untouched except
+    // for keyboard bindings that toggle this flag back off (see KbdCallback).
+    public static volatile bool IsPaused = false;
+    private static readonly string PauseStatePath = @"$PSScriptRoot\pause.state";
+
+    static void WritePauseState() {
+        bool paused = IsPaused;
+        new Thread(() => {
+            try { File.WriteAllText(PauseStatePath, paused ? "paused" : "running"); } catch { }
+        }) { IsBackground = true }.Start();
+    }
+
     [DllImport("user32.dll", SetLastError=true)]
     static extern IntPtr SetWindowsHookEx(int idHook, LLProc fn, IntPtr hMod, uint threadId);
     [DllImport("user32.dll", SetLastError=true)]
@@ -157,12 +169,13 @@ public class ShortcutHook {
 
     // ---------- Binding ----------
     public class ChainStep {
-        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/IsHScroll is set
-        public string OpenPath;  // shell-execute target; null when Output/CmdLine/IsHScroll is set
-        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/IsHScroll is set
+        public byte[] Output;    // keyboard chord; null when OpenPath/CmdLine/IsHScroll/IsTogglePause is set
+        public string OpenPath;  // shell-execute target; null when Output/CmdLine/IsHScroll/IsTogglePause is set
+        public string CmdLine;   // cmd.exe command; null when Output/OpenPath/IsHScroll/IsTogglePause is set
         public bool   CmdShow;   // true = visible cmd window (/k), false = hidden (/c)
         public bool   IsHScroll; // horizontal scroll; negative HScrollDelta = left, positive = right
         public int    HScrollDelta;
+        public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
     }
 
     public class Binding {
@@ -554,6 +567,11 @@ public class ShortcutHook {
     // ---------- Output dispatch ----------
     static void ExecuteStep(ChainStep step) {
         if (step == null) return;
+        if (step.IsTogglePause) {
+            IsPaused = !IsPaused;
+            WritePauseState();
+            return;
+        }
         if (step.IsHScroll) {
             int d = step.HScrollDelta;
             new Thread(() => {
@@ -596,8 +614,15 @@ public class ShortcutHook {
         }
     }
 
+    static bool HasTogglePause(Binding b) {
+        foreach (ChainStep s in b.Steps) if (s.IsTogglePause) return true;
+        return false;
+    }
+
     static void ExecuteBinding(Binding b) {
         if (b == null || b.Steps == null || b.Steps.Length == 0) return;
+        // While paused, every binding except a toggle:pause one is a no-op.
+        if (IsPaused && !HasTogglePause(b)) return;
         // Single-action with no delay: fast path — run inline (FireOutput is safe in hook callback).
         if (b.Steps.Length == 1 && b.OutputDelay == 0 && b.Steps[0].Output != null) {
             FireOutput(b.Steps[0].Output);
@@ -707,6 +732,9 @@ public class ShortcutHook {
 
     static IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam) {
         if (nCode < 0) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
+        // While paused, mouse input passes through untouched. Resuming is keyboard-only
+        // (mouse gesture detection requires timers we don't want running while paused).
+        if (IsPaused) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
         try {
             int msg = wParam.ToInt32();
 
@@ -1061,6 +1089,15 @@ public class ShortcutHook {
                     byte[]  sk    = SortedHeldKeys();
                     string  fgApp = null; // lazily populated; shared between FindExact and HasStrictSuperset
                     Binding exact = FindExact(heldMods, sk, ref fgApp);
+                    if (IsPaused) {
+                        // Pass everything through except the binding(s) that resume us.
+                        if (exact != null && HasTogglePause(exact)) {
+                            swallowedKeys.Add(vk); prefixSwallowed.Clear(); CancelDefer();
+                            ExecuteBinding(exact);
+                            return new IntPtr(1);
+                        }
+                        return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
+                    }
                     bool    longer = HasStrictSuperset(heldMods, heldKeys, ref fgApp);
                     if (exact != null) {
                         swallowedKeys.Add(vk); prefixSwallowed.Clear(); CancelDefer();
@@ -1098,6 +1135,8 @@ public class ShortcutHook {
     // Entry point
     // =========================================================================
     public static void Start() {
+        IsPaused = false;
+        try { File.WriteAllText(PauseStatePath, "running"); } catch { }
         dblClickMs = (int)GetDoubleClickTime();
         mouseProc = MouseCallback; kbdProc = KbdCallback;
         IntPtr hMod = GetModuleHandle(null);
@@ -1268,6 +1307,8 @@ foreach ($b in $rawBindings) {
             } elseif ($outStr -match '^hscroll:(left|right)$') {
                 $step.IsHScroll = $true
                 $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
+            } elseif ($outStr -match '^toggle:pause$') {
+                $step.IsTogglePause = $true
             } else {
                 $step.Output = Resolve-OutputChord $outStr
             }
@@ -1304,7 +1345,8 @@ try {
             elseif ($s.CmdLine) {
                 if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
                 else { $stepDescs += "cmd:$($s.CmdLine)" }
-            } else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
+            } elseif ($s.IsTogglePause) { $stepDescs += "toggle:pause" }
+            else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
         }
         $dest  = [string]::Join(' -> ', $stepDescs)
         $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }

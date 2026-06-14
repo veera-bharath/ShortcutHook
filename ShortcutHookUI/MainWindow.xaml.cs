@@ -17,7 +17,7 @@ using System.Windows.Threading;
 
 namespace ShortcutHookUI;
 
-public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight }
+public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight, TogglePause }
 
 // One action in a chained binding. Multiple ChainedActions make up one Row's output.
 public sealed class ChainedAction
@@ -87,6 +87,7 @@ public partial class MainWindow : Window
         new("Open file",        ActionKind.OpenFile),
         new("Open folder",      ActionKind.OpenFolder),
         new("Run command",      ActionKind.Command),
+        new("Toggle pause",     ActionKind.TogglePause),
     };
 
     static ActionDef[] BuildActionsForGesture(MouseGestureDef def)
@@ -329,6 +330,7 @@ public partial class MainWindow : Window
             HookBtn.Content = "Start";
             HookBtn.Background = GreenBrush;
             HookBtn.IsEnabled = false;
+            PausedBadge.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -339,6 +341,7 @@ public partial class MainWindow : Window
             StatusText.Text = "Running";
             HookBtn.Content = "Stop";
             HookBtn.Background = RedBrush;
+            PausedBadge.Visibility = IsDaemonPaused() ? Visibility.Visible : Visibility.Collapsed;
         }
         else
         {
@@ -346,7 +349,14 @@ public partial class MainWindow : Window
             StatusText.Text = "Stopped";
             HookBtn.Content = "Start";
             HookBtn.Background = GreenBrush;
+            PausedBadge.Visibility = Visibility.Collapsed;
         }
+    }
+
+    static bool IsDaemonPaused()
+    {
+        try { return File.ReadAllText(InstallService.PauseStatePath).Trim() == "paused"; }
+        catch { return false; }
     }
 
     void HookBtn_Click(object sender, RoutedEventArgs e)
@@ -1967,6 +1977,7 @@ public partial class MainWindow : Window
             output.StartsWith("cmdw:", StringComparison.Ordinal)) return ActionKind.Command;
         if (output == "hscroll:left"   && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
         if (output == "hscroll:right"  && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
+        if (output == "toggle:pause"   && Has(ActionKind.TogglePause))    return ActionKind.TogglePause;
         if (output == "Shift+Home"         && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
         if (output == "Shift+End"          && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
         if (output == "Ctrl+Shift+Left"    && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
@@ -2030,6 +2041,7 @@ public partial class MainWindow : Window
             case ActionKind.CtrlShiftRight:
             case ActionKind.HScrollLeft:
             case ActionKind.HScrollRight:
+            case ActionKind.TogglePause:
             {
                 var desc = action switch {
                     ActionKind.ShiftHome      => "Shift+Home — select to line start",
@@ -2038,6 +2050,7 @@ public partial class MainWindow : Window
                     ActionKind.CtrlShiftRight => "Ctrl+Shift+Right — select word right",
                     ActionKind.HScrollLeft    => "Horizontal scroll left",
                     ActionKind.HScrollRight   => "Horizontal scroll right",
+                    ActionKind.TogglePause    => "Pause/resume all hook processing",
                     _                         => ""
                 };
                 item.OutputPanel.Children.Add(new TextBlock
@@ -2263,6 +2276,7 @@ public partial class MainWindow : Window
         ActionKind.CtrlShiftRight  => "Ctrl+Shift+Right",
         ActionKind.HScrollLeft     => "hscroll:left",
         ActionKind.HScrollRight    => "hscroll:right",
+        ActionKind.TogglePause     => "toggle:pause",
         _                          => "",
     };
 
@@ -2304,7 +2318,8 @@ public partial class MainWindow : Window
                         if (outp.StartsWith("open:", StringComparison.Ordinal) ||
                             outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
                             outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
-                            outp.StartsWith("hscroll:", StringComparison.Ordinal)) continue;
+                            outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
+                            outp == "toggle:pause") continue;
                         try { TriggerHelpers.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
                     }
@@ -2385,7 +2400,8 @@ public partial class MainWindow : Window
                 {
                     if (outp.StartsWith("open:", StringComparison.Ordinal) ||
                         outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
-                        outp.StartsWith("cmdw:", StringComparison.Ordinal)) continue;
+                        outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
+                        outp == "toggle:pause") continue;
                     try { TriggerHelpers.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
                 }
