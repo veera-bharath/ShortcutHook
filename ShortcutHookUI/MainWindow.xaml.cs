@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
@@ -233,6 +234,7 @@ public partial class MainWindow : Window
     readonly List<KbdTriggerCard> _kbdCards = new();
     string _appRoot;
     bool _setupComplete;
+    UpdateCheckService.UpdateInfo? _updateInfo;
 
     // Capture state — plain C# fields, no scoping issues.
     bool            _captureActive;
@@ -301,6 +303,36 @@ public partial class MainWindow : Window
         StartupToggle.IsChecked = _setupComplete && StartupService.IsEnabled();
         UpdateSetupState();
         _pollTimer.Start();
+        if (_setupComplete) _ = CheckForUpdateAsync();
+    }
+
+    // =========================================================================
+    // Update check
+    // =========================================================================
+    async Task CheckForUpdateAsync()
+    {
+        var current = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        var update = await UpdateCheckService.CheckForUpdateAsync(current);
+        if (update == null) return;
+        if (string.Equals(InstallService.GetDismissedUpdateVersion(), update.Value.Tag, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _updateInfo = update;
+        UpdateBannerText.Text = $"ShortcutHook {update.Value.Tag} is available (you have v{current.Major}.{current.Minor}.{current.Build}).";
+        UpdateBanner.Visibility = Visibility.Visible;
+    }
+
+    void UpdateDownload_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (_updateInfo == null) return;
+        try { Process.Start(new ProcessStartInfo(_updateInfo.Value.HtmlUrl) { UseShellExecute = true }); }
+        catch { /* best-effort — ignore if no browser association */ }
+    }
+
+    void UpdateDismiss_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updateInfo != null) InstallService.SetDismissedUpdateVersion(_updateInfo.Value.Tag);
+        UpdateBanner.Visibility = Visibility.Collapsed;
     }
 
     // =========================================================================
