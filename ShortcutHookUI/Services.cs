@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Management;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace ShortcutHookUI;
@@ -327,6 +329,7 @@ internal static class InstallService
     const string RegistryKeyPath      = @"Software\ShortcutHook";
     const string AppInstallPathValue  = "AppInstallPath";
     const string SetupCompleteValue   = "SetupComplete";
+    const string DismissedUpdateValue = "DismissedUpdateVersion";
     const string ScriptResourceName   = "ShortcutHookUI.Runtime.ShortcutHook.ps1";
     const string ScriptFileName       = "ShortcutHook.ps1";
     const string UiExeFileName        = "ShortcutHookUI.exe";
@@ -369,6 +372,20 @@ internal static class InstallService
     {
         using var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath);
         key.SetValue(SetupCompleteValue, 1, RegistryValueKind.DWord);
+    }
+
+    // Tag of the release the user dismissed the update banner for (e.g. "v1.6.0").
+    // Null if no dismissal has been recorded.
+    public static string? GetDismissedUpdateVersion()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath);
+        return key?.GetValue(DismissedUpdateValue) as string;
+    }
+
+    public static void SetDismissedUpdateVersion(string tag)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath);
+        key.SetValue(DismissedUpdateValue, tag);
     }
 
     // Script check uses fixed ScriptRoot — no arg needed.
@@ -573,5 +590,44 @@ internal static class AppScanner
         }
         list.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
         return list;
+    }
+}
+
+internal static class UpdateCheckService
+{
+    const string ReleasesApiUrl = "https://api.github.com/repos/veera-bharath/ShortcutHook/releases/latest";
+
+    public readonly record struct UpdateInfo(string Tag, Version Version, string HtmlUrl);
+
+    // Queries the GitHub Releases API for the latest release and returns it if its
+    // version is newer than currentVersion. Returns null on any failure (offline,
+    // rate-limited, malformed response) or if already up to date — never throws,
+    // so callers can fire-and-forget this without delaying startup.
+    public static async Task<UpdateInfo?> CheckForUpdateAsync(Version currentVersion)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("ShortcutHookUI");
+
+            using var resp = await http.GetAsync(ReleasesApiUrl);
+            if (!resp.IsSuccessStatusCode) return null;
+
+            using var stream = await resp.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
+            var root = doc.RootElement;
+
+            var tag = root.TryGetProperty("tag_name", out var tagEl) ? tagEl.GetString() : null;
+            var url = root.TryGetProperty("html_url", out var urlEl) ? urlEl.GetString() : null;
+            if (string.IsNullOrWhiteSpace(tag) || string.IsNullOrWhiteSpace(url)) return null;
+
+            if (!Version.TryParse(tag.TrimStart('v', 'V'), out var latest)) return null;
+
+            return latest > currentVersion ? new UpdateInfo(tag, latest, url) : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
