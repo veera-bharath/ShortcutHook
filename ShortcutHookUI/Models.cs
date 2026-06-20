@@ -30,6 +30,9 @@ public sealed class BindingEntry
     // Multi-app scope. Null/empty = global (fires everywhere). Always written when scoped.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? apps { get; set; }
+    // Global binding suppressed in these apps. Null/empty = no exclusions.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? exceptApps { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? enabled  { get; set; }
     // Debounce: ignore repeated scroll firings within 200 ms. Omitted when false.

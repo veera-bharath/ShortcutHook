@@ -53,8 +53,9 @@ public sealed class Row
     public string     Trigger = "";
 
     // app scope
-    public bool          IsGlobal  = true;
-    public List<string>  Apps      = new();
+    public bool          IsGlobal   = true;
+    public List<string>  Apps       = new();
+    public List<string>  ExceptApps = new();  // global binding skipped in these apps
     public Button?       AppScopeBtn;
     public Popup?        AppScopePopup;
     public CheckBox?     GlobalCheckBox;
@@ -205,9 +206,24 @@ public partial class MainWindow : Window
         if (row.AppScopeBtn == null) return;
         if (row.IsGlobal)
         {
-            row.AppScopeBtn.Content    = "Global";
-            row.AppScopeBtn.Foreground = LabelBrush;
-            row.AppScopeBtn.BorderBrush = DarkBorder;
+            if (row.ExceptApps.Count == 0)
+            {
+                row.AppScopeBtn.Content     = "Global";
+                row.AppScopeBtn.Foreground  = LabelBrush;
+                row.AppScopeBtn.BorderBrush = DarkBorder;
+            }
+            else if (row.ExceptApps.Count == 1)
+            {
+                row.AppScopeBtn.Content     = $"≠ {row.ExceptApps[0]}";
+                row.AppScopeBtn.Foreground  = AccentBrush;
+                row.AppScopeBtn.BorderBrush = AccentBrush;
+            }
+            else
+            {
+                row.AppScopeBtn.Content     = $"≠ {row.ExceptApps.Count} apps";
+                row.AppScopeBtn.Foreground  = AccentBrush;
+                row.AppScopeBtn.BorderBrush = AccentBrush;
+            }
         }
         else if (row.Apps.Count == 0)
         {
@@ -490,6 +506,7 @@ public partial class MainWindow : Window
             outputs     = outputs,
             outputDelay = row.OutputDelay,
             apps        = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
+            exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
             enabled     = row.Enabled ? null : false,
             debounce    = row.Debounce,
             showToast   = row.ShowToast,
@@ -507,6 +524,7 @@ public partial class MainWindow : Window
             outputs     = outputs,
             outputDelay = row.OutputDelay,
             apps        = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
+            exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
             enabled     = row.Enabled ? null : false,
             showToast   = row.ShowToast,
         };
@@ -751,9 +769,10 @@ public partial class MainWindow : Window
             var variants = triggerGroups[trig]
                 .Select(b =>
                 {
-                    bool isGlobal = b.apps == null || b.apps.Count == 0;
-                    var  apps     = b.apps ?? new List<string>();
-                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, b.enabled != false, b.showToast);
+                    bool isGlobal  = b.apps == null || b.apps.Count == 0;
+                    var  apps      = b.apps      ?? new List<string>();
+                    var  exceptApps = b.exceptApps ?? new List<string>();
+                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, exceptApps, b.enabled != false, b.showToast);
                 })
                 .ToList();
             AddKbdTriggerCard(trig, variants);
@@ -1473,7 +1492,8 @@ public partial class MainWindow : Window
                 globalEntry?.outputDelay ?? 0,
                 true, new List<string>(), globalEntry?.enabled != false, isGlobal: true,
                 debounce: globalEntry?.debounce ?? false,
-                showToast: globalEntry?.showToast ?? false);
+                showToast: globalEntry?.showToast ?? false,
+                exceptApps: globalEntry?.exceptApps ?? new List<string>());
 
             // App-scoped variant rows
             if (bindings != null)
@@ -1490,7 +1510,7 @@ public partial class MainWindow : Window
 
     void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
                             bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false,
-                            bool showToast = false)
+                            bool showToast = false, List<string>? exceptApps = null)
     {
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=*:   chain block border (different shade per global/variant) containing the chain stack
@@ -1558,12 +1578,12 @@ public partial class MainWindow : Window
             ShowToast        = showToast,
         };
 
-        BuildChainStack(row, outputs, isGlobal_scope, apps, enabled);
+        BuildChainStack(row, outputs, isGlobal_scope, apps, enabled, exceptApps);
         AddExportToRow(row, () => BuildMouseBindingEntry(def.Gesture, row));
         if (!enabled) grid.Opacity = 0.45;
 
         if (isGlobal)
-            variantBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, false, new List<string>(), true, isGlobal: false);
+            variantBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, false, new List<string>(), true, isGlobal: false, exceptApps: new List<string>());
         else
             variantBtn.Click += (_, __) =>
             {
@@ -1580,7 +1600,7 @@ public partial class MainWindow : Window
     // =========================================================================
 
     // Builds chain items + control row into row.ChainStack.
-    void BuildChainStack(Row row, List<string> outputs, bool isGlobal, List<string> apps, bool enabled)
+    void BuildChainStack(Row row, List<string> outputs, bool isGlobal, List<string> apps, bool enabled, List<string>? exceptApps = null)
     {
         row.ChainStack.Children.Clear();
         row.Chain.Clear();
@@ -1589,7 +1609,7 @@ public partial class MainWindow : Window
         foreach (var o in effectiveOutputs)
             AddChainItem(row, o, rebuild: false);
 
-        var controlRow = BuildChainControlRow(row, isGlobal, apps, enabled);
+        var controlRow = BuildChainControlRow(row, isGlobal, apps, enabled, exceptApps);
         row.ChainStack.Children.Add(controlRow);
 
         RefreshChainDeleteButtons(row);
@@ -1683,7 +1703,7 @@ public partial class MainWindow : Window
     //   Row 2 (bottom, right-aligned): all toggles — enable, toast, and (scroll
     //   gestures only) debounce. Keeping every toggle on its own row means it
     //   never competes for space with the chain/delay/scope controls above.
-    FrameworkElement BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled)
+    FrameworkElement BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled, List<string>? exceptApps = null)
     {
         // ---- Toggle row (placed last) ----
         var toggleRow = new StackPanel
@@ -1824,7 +1844,7 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(msLbl, 3);
 
-        var scopeBtn = BuildAppScopeButton(row, isGlobal, apps);
+        var scopeBtn = BuildAppScopeButton(row, isGlobal, apps, exceptApps);
         Grid.SetColumn(scopeBtn, 5);
 
         row.DelayBox = delayTB;
@@ -1845,10 +1865,11 @@ public partial class MainWindow : Window
     }
 
     // Builds the multi-select app scope button + popup and wires it to row state.
-    Button BuildAppScopeButton(Row row, bool isGlobal, List<string> initialApps)
+    Button BuildAppScopeButton(Row row, bool isGlobal, List<string> initialApps, List<string>? initialExceptApps = null)
     {
         row.IsGlobal      = isGlobal;
         row.Apps          = new List<string>(initialApps);
+        row.ExceptApps    = new List<string>(initialExceptApps ?? new List<string>());
         row.AppCheckBoxes = new List<(CheckBox, string)>();
 
         var scopeBtn = new Button
@@ -1916,10 +1937,20 @@ public partial class MainWindow : Window
             var sep = new Rectangle { Height = 1, Fill = Br("#444444"), Margin = new Thickness(0, 2, 0, 2) };
             popupStack.Children.Add(sep);
 
-            // App entries: running processes (same source as old single-select combo).
-            // Process.GetProcesses() returns process names without extension; add .exe to match
-            // what GetForegroundProcessName() returns in the daemon (Path.GetFileName of full exe path).
-            var selectedSet = new HashSet<string>(row.Apps, StringComparer.OrdinalIgnoreCase);
+            // Mode label: when global → "Except in:" (exclusion list), else → "Only in:"
+            var modeLabel = new TextBlock
+            {
+                Text       = row.IsGlobal ? "Except in:" : "Only in:",
+                Foreground = row.IsGlobal ? AccentBrush : AmberBrush,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize   = 10,
+                Margin     = new Thickness(4, 2, 4, 2),
+            };
+            popupStack.Children.Add(modeLabel);
+
+            // Collect running process names + stored names for whichever list is active.
+            var activeList   = row.IsGlobal ? row.ExceptApps : row.Apps;
+            var selectedSet  = new HashSet<string>(activeList, StringComparer.OrdinalIgnoreCase);
             var runningNames = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in Process.GetProcesses())
             {
@@ -1929,26 +1960,32 @@ public partial class MainWindow : Window
                     catch { }
                 }
             }
-            // Include any stored names that aren't currently running so they remain selectable.
-            foreach (var stored in row.Apps)
-                runningNames.Add(stored);
+            foreach (var stored in activeList) runningNames.Add(stored);
 
             foreach (var procName in runningNames)
             {
-                var name = procName; // capture for closure
+                var name = procName;
                 var cb = new CheckBox
                 {
                     Content    = name,
                     Foreground = Br("#CCCCCC"),
                     IsChecked  = selectedSet.Contains(name),
-                    IsEnabled  = !row.IsGlobal,
-                    Opacity    = row.IsGlobal ? 0.4 : 1.0,
                     Margin     = new Thickness(4, 2, 4, 2),
                     FontFamily = new FontFamily("Consolas"),
                     FontSize   = 11,
                 };
-                cb.Checked   += (_, __) => { if (!row.Apps.Contains(name, StringComparer.OrdinalIgnoreCase)) row.Apps.Add(name); UpdateAppScopeBtnLabel(row); };
-                cb.Unchecked += (_, __) => { row.Apps.RemoveAll(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase)); UpdateAppScopeBtnLabel(row); };
+                cb.Checked += (_, __) =>
+                {
+                    var list = row.IsGlobal ? row.ExceptApps : row.Apps;
+                    if (!list.Contains(name, StringComparer.OrdinalIgnoreCase)) list.Add(name);
+                    UpdateAppScopeBtnLabel(row);
+                };
+                cb.Unchecked += (_, __) =>
+                {
+                    var list = row.IsGlobal ? row.ExceptApps : row.Apps;
+                    list.RemoveAll(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
+                    UpdateAppScopeBtnLabel(row);
+                };
                 popupStack.Children.Add(cb);
                 row.AppCheckBoxes.Add((cb, name));
             }
@@ -1956,13 +1993,13 @@ public partial class MainWindow : Window
             globalCb.Checked += (_, __) =>
             {
                 row.IsGlobal = true;
-                foreach (var (cb, _) in row.AppCheckBoxes) { cb.IsEnabled = false; cb.Opacity = 0.4; }
+                RebuildPopupItems();
                 UpdateAppScopeBtnLabel(row);
             };
             globalCb.Unchecked += (_, __) =>
             {
                 row.IsGlobal = false;
-                foreach (var (cb, _) in row.AppCheckBoxes) { cb.IsEnabled = true; cb.Opacity = 1.0; }
+                RebuildPopupItems();
                 UpdateAppScopeBtnLabel(row);
             };
         }
@@ -2003,7 +2040,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, bool enabled, bool showToast)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast)>? variants)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -2099,7 +2136,7 @@ public partial class MainWindow : Window
             },
             onRestore: () => RestoreTriggerButton(capBtn, card.Trigger));
 
-        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), true, false);
+        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), new List<string>(), true, false);
 
         delCardBtn.Click += (_, __) =>
         {
@@ -2112,14 +2149,14 @@ public partial class MainWindow : Window
         _kbdCards.Add(card);
 
         if (variants is { Count: > 0 })
-            foreach (var (o, d, isG, apps, e, st) in variants) AddKbdVariantRow(card, o, d, isG, apps, e, st);
+            foreach (var (o, d, isG, apps, ex, e, st) in variants) AddKbdVariantRow(card, o, d, isG, apps, ex, e, st);
         else
-            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), true, false);
+            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), new List<string>(), true, false);
 
         UpdateCardAccentBorder(card);
     }
 
-    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, bool enabled, bool showToast)
+    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, List<string> scopeExceptApps, bool enabled, bool showToast)
     {
         // col0=*: chain block border containing chain items + control row
         // col1=Auto: delete-variant button — top-aligned
@@ -2167,7 +2204,7 @@ public partial class MainWindow : Window
             OutputDelay = outputDelay,
             ShowToast   = showToast,
         };
-        BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled);
+        BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled, scopeExceptApps);
         AddExportToRow(row, () => BuildKbdBindingEntry(card.Trigger, row));
         if (!enabled) grid.Opacity = 0.45;
 
@@ -2186,8 +2223,9 @@ public partial class MainWindow : Window
 
     void UpdateCardAccentBorder(KbdTriggerCard card)
     {
-        bool hasAppScoped = card.Variants.Any(r => !r.IsGlobal && r.Apps.Count > 0);
-        card.CardBorder.BorderBrush = hasAppScoped ? AmberBrush : Br("#2A2A2A");
+        bool hasAppScoped  = card.Variants.Any(r => !r.IsGlobal && r.Apps.Count > 0);
+        bool hasExceptApps = card.Variants.Any(r => r.IsGlobal && r.ExceptApps.Count > 0);
+        card.CardBorder.BorderBrush = hasAppScoped ? AmberBrush : hasExceptApps ? AccentBrush : Br("#2A2A2A");
     }
 
     // =========================================================================
