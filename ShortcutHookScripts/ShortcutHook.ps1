@@ -82,6 +82,10 @@ public class ShortcutHook {
     public static volatile bool IsPaused = false;
     private static readonly string PauseStatePath = @"$PSScriptRoot\pause.state";
 
+    public static volatile string SwitchProfileRequest = null;
+    public static string CurrentProfileName = "";
+    public static uint MainThreadId = 0;
+
     static void WritePauseState() {
         bool paused = IsPaused;
         new Thread(() => {
@@ -97,6 +101,8 @@ public class ShortcutHook {
     static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern IntPtr GetModuleHandle(string name);
+    [DllImport("user32.dll")] static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")]
     static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")]
@@ -182,6 +188,7 @@ public class ShortcutHook {
         public bool   IsHScroll; // horizontal scroll; negative HScrollDelta = left, positive = right
         public int    HScrollDelta;
         public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
+        public string SwitchToProfile; // switches active profile and relaunches daemon; null for all other fields when set
     }
 
     public class Binding {
@@ -578,6 +585,13 @@ public class ShortcutHook {
         if (step.IsTogglePause) {
             IsPaused = !IsPaused;
             WritePauseState();
+            return;
+        }
+        if (step.SwitchToProfile != null) {
+            string target = step.SwitchToProfile;
+            if (string.Equals(target, CurrentProfileName, StringComparison.Ordinal)) return;
+            SwitchProfileRequest = target;
+            PostThreadMessage(MainThreadId, 0x0012 /* WM_QUIT */, IntPtr.Zero, IntPtr.Zero);
             return;
         }
         if (step.IsHScroll) {
@@ -1256,6 +1270,8 @@ public class ShortcutHook {
     // =========================================================================
     public static void Start() {
         IsPaused = false;
+        SwitchProfileRequest = null;
+        MainThreadId = GetCurrentThreadId();
         try { File.WriteAllText(PauseStatePath, "running"); } catch { }
         dblClickMs = (int)GetDoubleClickTime();
         mouseProc = MouseCallback; kbdProc = KbdCallback;
@@ -1429,6 +1445,8 @@ foreach ($b in $rawBindings) {
                 $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
             } elseif ($outStr -match '^toggle:pause$') {
                 $step.IsTogglePause = $true
+            } elseif ($outStr -match '^profile:(.+)$') {
+                $step.SwitchToProfile = $Matches[1].Trim()
             } elseif ($outStr -match '^type:([\s\S]+)$') {
                 $step.TypeText = $Matches[1]
             } else {
@@ -1463,6 +1481,7 @@ foreach ($b in $rawBindings) {
 
 try {
     [ShortcutHook]::LoadBindings($built.ToArray())
+    [ShortcutHook]::CurrentProfileName = if ($activeProfileName) { $activeProfileName } else { '' }
     Write-Log ("Loaded {0} binding(s)." -f $built.Count)
     foreach ($x in $built) {
         $stepDescs = @()
@@ -1472,6 +1491,7 @@ try {
                 if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
                 else { $stepDescs += "cmd:$($s.CmdLine)" }
             } elseif ($s.IsTogglePause) { $stepDescs += "toggle:pause" }
+            elseif ($s.SwitchToProfile) { $stepDescs += "profile:$($s.SwitchToProfile)" }
             elseif ($s.TypeText) { $stepDescs += "type:$($s.TypeText)" }
             else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
         }
@@ -1490,6 +1510,7 @@ $mutexCreated = $false
 $mutex = New-Object System.Threading.Mutex($true, 'Global\ShortcutHook', [ref]$mutexCreated)
 if (-not $mutexCreated) { Write-Log 'Already running.'; exit }
 
+$mutexReleased = $false
 try {
     Write-Host 'ShortcutHook active:' -ForegroundColor Green
     foreach ($b in $rawBindings) {
@@ -1504,8 +1525,26 @@ try {
     Write-Host 'Ctrl+C to stop.' -ForegroundColor DarkGray
     [ShortcutHook]::Start()
     Write-Log 'Message loop exited normally.'
+    $profileSwitch = [ShortcutHook]::SwitchProfileRequest
+    if ($profileSwitch -ne $null) {
+        Write-Log "Profile switch requested: $profileSwitch"
+        try {
+            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            $exists = $cfg.profiles | Where-Object { $_.name -eq $profileSwitch } | Select-Object -First 1
+            if ($exists) {
+                $cfg.activeProfile = $profileSwitch
+                $cfg | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+                Write-Log "Switched active profile to: $profileSwitch"
+                $mutexReleased = $true; $mutex.ReleaseMutex(); $mutex.Dispose()
+                Start-Process 'powershell.exe' "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+                exit
+            } else {
+                Write-Log "Profile switch target not found: $profileSwitch"
+            }
+        } catch { Write-Log "Profile switch failed: $_" }
+    }
 } catch {
     Write-Log "ERROR: $_"; Write-Host "ERROR: $_" -ForegroundColor Red; Read-Host 'Press Enter to exit'
 } finally {
-    $mutex.ReleaseMutex(); $mutex.Dispose()
+    if (-not $mutexReleased) { $mutex.ReleaseMutex(); $mutex.Dispose() }
 }

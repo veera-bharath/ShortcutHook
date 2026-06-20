@@ -18,7 +18,7 @@ using System.Windows.Threading;
 
 namespace ShortcutHookUI;
 
-public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, TypeText, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight, TogglePause }
+public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, TypeText, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight, TogglePause, SwitchProfile }
 
 // One action in a chained binding. Multiple ChainedActions make up one Row's output.
 public sealed class ChainedAction
@@ -95,6 +95,7 @@ public partial class MainWindow : Window
         new("Run command",      ActionKind.Command),
         new("Type text",        ActionKind.TypeText),
         new("Toggle pause",     ActionKind.TogglePause),
+        new("Switch profile",   ActionKind.SwitchProfile),
     };
 
     static ActionDef[] BuildActionsForGesture(MouseGestureDef def)
@@ -2318,6 +2319,7 @@ public partial class MainWindow : Window
         if (output == "hscroll:left"   && Has(ActionKind.HScrollLeft))    return ActionKind.HScrollLeft;
         if (output == "hscroll:right"  && Has(ActionKind.HScrollRight))   return ActionKind.HScrollRight;
         if (output == "toggle:pause"   && Has(ActionKind.TogglePause))    return ActionKind.TogglePause;
+        if (output.StartsWith("profile:", StringComparison.Ordinal) && Has(ActionKind.SwitchProfile)) return ActionKind.SwitchProfile;
         if (output == "Shift+Home"         && Has(ActionKind.ShiftHome))      return ActionKind.ShiftHome;
         if (output == "Shift+End"          && Has(ActionKind.ShiftEnd))       return ActionKind.ShiftEnd;
         if (output == "Ctrl+Shift+Left"    && Has(ActionKind.CtrlShiftLeft))  return ActionKind.CtrlShiftLeft;
@@ -2339,6 +2341,8 @@ public partial class MainWindow : Window
             item.OutputValue = (item.CmdShowCheckBox?.IsChecked == true ? "cmdw:" : "cmd:") + prevCmd.Text.Trim();
         if (item.Action == ActionKind.TypeText && item.OutputCtrl is TextBox prevType && prevType.Text.Length > 0)
             item.OutputValue = "type:" + prevType.Text;
+        if (item.Action == ActionKind.SwitchProfile && item.OutputCtrl is ComboBox prevPcb && prevPcb.SelectedItem is string prevPn && !string.IsNullOrEmpty(prevPn))
+            item.OutputValue = "profile:" + prevPn;
 
         if (_captureActive && ReferenceEquals(_captureBtn, item.OutputCtrl)) EndCapture();
 
@@ -2404,6 +2408,26 @@ public partial class MainWindow : Window
                     VerticalAlignment = VerticalAlignment.Center,
                 });
                 item.OutputCtrl = null;
+                break;
+            }
+            case ActionKind.SwitchProfile:
+            {
+                var config   = ConfigService.ReadConfig(InstallService.ScriptRoot);
+                var profiles = config.profiles.Select(p => p.name).ToList();
+                var cb = new ComboBox
+                {
+                    Style       = (Style)FindResource("DarkCB"),
+                    Height      = 28,
+                    ItemsSource = profiles,
+                };
+                var curProfile = item.OutputValue.StartsWith("profile:", StringComparison.Ordinal)
+                    ? item.OutputValue.Substring(8) : "";
+                if (!string.IsNullOrEmpty(curProfile) && profiles.Contains(curProfile))
+                    cb.SelectedItem = curProfile;
+                else if (profiles.Count > 0)
+                    cb.SelectedIndex = 0;
+                item.OutputPanel.Children.Add(cb);
+                item.OutputCtrl = cb;
                 break;
             }
             case ActionKind.Command:
@@ -2640,6 +2664,8 @@ public partial class MainWindow : Window
         ActionKind.HScrollLeft     => "hscroll:left",
         ActionKind.HScrollRight    => "hscroll:right",
         ActionKind.TogglePause     => "toggle:pause",
+        ActionKind.SwitchProfile   => (item.OutputCtrl is ComboBox pcb && pcb.SelectedItem is string pn && !string.IsNullOrEmpty(pn))
+                                         ? "profile:" + pn : "",
         _                          => "",
     };
 
