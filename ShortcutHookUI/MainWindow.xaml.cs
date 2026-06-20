@@ -534,11 +534,12 @@ public partial class MainWindow : Window
         foreach (var outp in entry.outputs ?? new List<string>())
         {
             if (string.IsNullOrEmpty(outp)) continue;
-            if (outp.StartsWith("open:", StringComparison.Ordinal)   ||
-                outp.StartsWith("cmd:",  StringComparison.Ordinal)   ||
-                outp.StartsWith("cmdw:", StringComparison.Ordinal)   ||
-                outp.StartsWith("hscroll:", StringComparison.Ordinal)||
-                outp.StartsWith("type:", StringComparison.Ordinal)   ||
+            if (outp.StartsWith("open:", StringComparison.Ordinal)      ||
+                outp.StartsWith("cmd:",  StringComparison.Ordinal)      ||
+                outp.StartsWith("cmdw:", StringComparison.Ordinal)      ||
+                outp.StartsWith("hscroll:", StringComparison.Ordinal)   ||
+                outp.StartsWith("type:", StringComparison.Ordinal)      ||
+                outp.StartsWith("profile:", StringComparison.Ordinal)   ||
                 outp == "toggle:pause") continue;
             try { TriggerHelpers.ValidateShortcutOutput(outp); }
             catch (Exception ex) { ShowFeedback($"Invalid output '{outp}': {ex.Message}", FeedbackKind.Err); return; }
@@ -2704,11 +2705,12 @@ public partial class MainWindow : Window
                 {
                     foreach (var outp in outputsList)
                     {
-                        if (outp.StartsWith("open:", StringComparison.Ordinal) ||
-                            outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
-                            outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
+                        if (outp.StartsWith("open:", StringComparison.Ordinal)    ||
+                            outp.StartsWith("cmd:", StringComparison.Ordinal)     ||
+                            outp.StartsWith("cmdw:", StringComparison.Ordinal)    ||
                             outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
-                            outp.StartsWith("type:", StringComparison.Ordinal) ||
+                            outp.StartsWith("type:", StringComparison.Ordinal)    ||
+                            outp.StartsWith("profile:", StringComparison.Ordinal) ||
                             outp == "toggle:pause") continue;
                         try { TriggerHelpers.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
@@ -2790,10 +2792,11 @@ public partial class MainWindow : Window
 
                 foreach (var outp in outputsList)
                 {
-                    if (outp.StartsWith("open:", StringComparison.Ordinal) ||
-                        outp.StartsWith("cmd:", StringComparison.Ordinal)  ||
-                        outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
-                        outp.StartsWith("type:", StringComparison.Ordinal) ||
+                    if (outp.StartsWith("open:", StringComparison.Ordinal)    ||
+                        outp.StartsWith("cmd:", StringComparison.Ordinal)     ||
+                        outp.StartsWith("cmdw:", StringComparison.Ordinal)    ||
+                        outp.StartsWith("type:", StringComparison.Ordinal)    ||
+                        outp.StartsWith("profile:", StringComparison.Ordinal) ||
                         outp == "toggle:pause") continue;
                     try { TriggerHelpers.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
