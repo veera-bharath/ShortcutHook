@@ -252,6 +252,11 @@ public partial class MainWindow : Window
     bool _mouseExpanded = true;
     bool _kbdExpanded   = false;
 
+    string _filterText           = "";
+    bool   _filterWasActive      = false;
+    bool   _preFilterMouseExpanded = true;
+    bool   _preFilterKbdExpanded   = false;
+
     readonly DispatcherTimer _pollTimer;
     readonly DispatcherTimer _feedbackTimer;
 
@@ -354,6 +359,79 @@ public partial class MainWindow : Window
         MouseChevron.Text    = _mouseExpanded ? "▾" : "›";
         KbdBody.Visibility   = _kbdExpanded   ? Visibility.Visible   : Visibility.Collapsed;
         KbdChevron.Text      = _kbdExpanded   ? "▾" : "›";
+    }
+
+    // =========================================================================
+    // Search / filter
+    // =========================================================================
+    void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        SearchPlaceholder.Visibility = SearchBox.Text.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
+        ApplyFilter(SearchBox.Text);
+    }
+
+    void SearchClearBtn_Click(object sender, RoutedEventArgs e) => ClearSearch();
+
+    void ClearSearch()
+    {
+        SearchBox.Text = "";
+        SearchBox.Focus();
+    }
+
+    void ApplyFilter(string raw)
+    {
+        _filterText = raw.Trim();
+        bool active = !string.IsNullOrEmpty(_filterText);
+
+        SearchClearBtn.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+
+        if (active)
+        {
+            if (!_filterWasActive)
+            {
+                _preFilterMouseExpanded = _mouseExpanded;
+                _preFilterKbdExpanded   = _kbdExpanded;
+                _filterWasActive = true;
+            }
+            _mouseExpanded = true;
+            _kbdExpanded   = true;
+            ApplySectionState();
+        }
+        else if (_filterWasActive)
+        {
+            _mouseExpanded = _preFilterMouseExpanded;
+            _kbdExpanded   = _preFilterKbdExpanded;
+            _filterWasActive = false;
+            ApplySectionState();
+        }
+
+        foreach (var def in MouseDefs)
+        {
+            if (!_mouseGestureStacks.TryGetValue(def.Gesture, out var sp)) continue;
+            sp.Visibility = !active || RowsMatchFilter(def.Label, _mouseRows[def.Gesture])
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        foreach (var card in _kbdCards)
+        {
+            var trigDisplay = card.Trigger.StartsWith("key:", StringComparison.Ordinal)
+                ? card.Trigger.Substring(4) : card.Trigger;
+            card.CardBorder.Visibility = !active || RowsMatchFilter(trigDisplay, card.Variants)
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    bool RowsMatchFilter(string label, List<Row> rows)
+    {
+        if (label.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        foreach (var row in rows)
+        {
+            foreach (var output in GetRowOutputs(row))
+                if (output.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            foreach (var app in row.Apps)
+                if (app.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        }
+        return false;
     }
 
     // =========================================================================
@@ -471,6 +549,7 @@ public partial class MainWindow : Window
     void ReloadBindingsFromConfig()
     {
         if (_captureActive) EndCapture();
+        if (!string.IsNullOrEmpty(SearchBox?.Text)) { SearchBox.Text = ""; }
         KbdStack.Children.Clear();
         _kbdCards.Clear();
 
@@ -1842,6 +1921,14 @@ public partial class MainWindow : Window
         {
             var settingsKey = e.Key == Key.System ? e.SystemKey : e.Key;
             if (settingsKey == Key.Escape) { CloseSettings(); e.Handled = true; }
+            return;
+        }
+
+        var rawKey = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (rawKey == Key.Escape && SearchBox.IsFocused && !string.IsNullOrEmpty(SearchBox.Text))
+        {
+            ClearSearch();
+            e.Handled = true;
             return;
         }
 
