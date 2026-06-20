@@ -46,6 +46,9 @@ public sealed class ConfigRoot
     public string activeProfile { get; set; } = "Default";
     public List<ProfileEntry> profiles { get; set; } = new();
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ignoredApps { get; set; }
+
     // Legacy top-level bindings from pre-profile configs. Read-only — used to detect
     // and migrate old-format files. Never written back.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

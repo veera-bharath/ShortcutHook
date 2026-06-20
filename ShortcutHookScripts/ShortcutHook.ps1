@@ -86,6 +86,8 @@ public class ShortcutHook {
     public static string CurrentProfileName = "";
     public static uint MainThreadId = 0;
 
+    public static HashSet<string> IgnoredApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     static void WritePauseState() {
         bool paused = IsPaused;
         new Thread(() => {
@@ -869,6 +871,8 @@ public class ShortcutHook {
         // While paused, mouse input passes through untouched. Resuming is keyboard-only
         // (mouse gesture detection requires timers we don't want running while paused).
         if (IsPaused) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
+        if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+            return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
         try {
             int msg = wParam.ToInt32();
 
@@ -1184,6 +1188,8 @@ public class ShortcutHook {
         try {
             KBDLLHOOKSTRUCT data = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
             if ((data.flags & LLKHF_INJECTED) != 0) return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
+            if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+                return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
 
             int  msg    = wParam.ToInt32();
             bool isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
@@ -1395,6 +1401,21 @@ if (Test-Path $configPath) {
 }
 
 if ($activeProfileName) { Write-Log "Active profile: $activeProfileName" }
+
+# Load ignoredApps into the C# HashSet
+if (Test-Path $configPath) {
+    try {
+        $cfgForIgnored = Get-Content $configPath -Raw | ConvertFrom-Json
+        if ($cfgForIgnored.PSObject.Properties.Name -contains 'ignoredApps' -and $cfgForIgnored.ignoredApps) {
+            foreach ($app in @($cfgForIgnored.ignoredApps)) {
+                if ($app) { [ShortcutHook]::IgnoredApps.Add($app) | Out-Null }
+            }
+            if ([ShortcutHook]::IgnoredApps.Count -gt 0) {
+                Write-Log ("Ignored apps: {0}" -f ([ShortcutHook]::IgnoredApps -join ', '))
+            }
+        }
+    } catch { Write-Log "Failed to load ignoredApps: $_" }
+}
 
 # ---------------------------------------------------------------------------
 # Build Binding objects

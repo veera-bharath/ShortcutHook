@@ -853,10 +853,11 @@ public partial class MainWindow : Window
 
     void ShowSettingsMenu()
     {
-        SettingsMenuView.Visibility        = Visibility.Visible;
-        SettingsProfilesView.Visibility    = Visibility.Collapsed;
-        SettingsAboutView.Visibility       = Visibility.Collapsed;
-        SettingsProfileFormView.Visibility = Visibility.Collapsed;
+        SettingsMenuView.Visibility          = Visibility.Visible;
+        SettingsProfilesView.Visibility      = Visibility.Collapsed;
+        SettingsIgnoredAppsView.Visibility   = Visibility.Collapsed;
+        SettingsAboutView.Visibility         = Visibility.Collapsed;
+        SettingsProfileFormView.Visibility   = Visibility.Collapsed;
         SettingsProfileDeleteView.Visibility = Visibility.Collapsed;
     }
 
@@ -887,6 +888,97 @@ public partial class MainWindow : Window
     {
         SettingsMenuView.Visibility  = Visibility.Collapsed;
         SettingsAboutView.Visibility = Visibility.Visible;
+    }
+
+    // =========================================================================
+    // Ignored Apps view
+    // =========================================================================
+    List<(CheckBox Cb, string Name)> _ignoredAppCheckBoxes = new();
+
+    void IgnoredAppsOption_Click(object sender, MouseButtonEventArgs e)
+    {
+        ShowSettingsMenu();
+        SettingsMenuView.Visibility        = Visibility.Collapsed;
+        SettingsIgnoredAppsView.Visibility = Visibility.Visible;
+        BuildIgnoredAppsList();
+        SettingsRoot.Visibility = Visibility.Visible;
+    }
+
+    void BuildIgnoredAppsList()
+    {
+        IgnoredAppsListStack.Children.Clear();
+        _ignoredAppCheckBoxes.Clear();
+        IgnoredAppsCustomInput.Text = "";
+
+        var config  = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        var stored  = new HashSet<string>(config.ignoredApps ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+        var names   = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var p in Process.GetProcesses())
+        {
+            using (p)
+            {
+                try { if (!string.IsNullOrEmpty(p.ProcessName)) names.Add(p.ProcessName + ".exe"); }
+                catch { }
+            }
+        }
+        foreach (var s in stored) names.Add(s);
+
+        foreach (var name in names)
+        {
+            var n  = name;
+            var cb = new CheckBox
+            {
+                Content    = n,
+                IsChecked  = stored.Contains(n),
+                Foreground = Br("#CCCCCC"),
+                Margin     = new Thickness(4, 3, 4, 3),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize   = 11,
+            };
+            IgnoredAppsListStack.Children.Add(cb);
+            _ignoredAppCheckBoxes.Add((cb, n));
+        }
+    }
+
+    void IgnoredAppsAddCustom_Click(object sender, RoutedEventArgs e)
+    {
+        var raw  = IgnoredAppsCustomInput.Text.Trim();
+        if (string.IsNullOrEmpty(raw)) return;
+        var name = raw.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? raw : raw + ".exe";
+
+        if (_ignoredAppCheckBoxes.Any(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            IgnoredAppsCustomInput.Text = "";
+            return;
+        }
+
+        var cb = new CheckBox
+        {
+            Content    = name,
+            IsChecked  = true,
+            Foreground = Br("#CCCCCC"),
+            Margin     = new Thickness(4, 3, 4, 3),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+        };
+        IgnoredAppsListStack.Children.Insert(0, cb);
+        _ignoredAppCheckBoxes.Add((cb, name));
+        IgnoredAppsCustomInput.Text = "";
+    }
+
+    void IgnoredAppsSave_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _ignoredAppCheckBoxes
+            .Where(t => t.Cb.IsChecked == true)
+            .Select(t => t.Name)
+            .ToList();
+
+        ConfigService.SetIgnoredApps(InstallService.ScriptRoot, selected);
+        RestartDaemonIfRunning();
+        ShowFeedback("Ignored apps saved.", FeedbackKind.Ok);
+        ShowSettingsMenu();
+        CloseSettings();
     }
 
     void SettingsBack_Click(object sender, RoutedEventArgs e) => ShowSettingsMenu();

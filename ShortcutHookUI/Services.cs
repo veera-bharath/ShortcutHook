@@ -253,6 +253,13 @@ internal static class ConfigService
         Save(root, config);
     }
 
+    public static void SetIgnoredApps(string root, List<string> apps)
+    {
+        var config = ReadConfig(root);
+        config.ignoredApps = apps.Count > 0 ? apps : null;
+        Save(root, config);
+    }
+
     // Serializes a single BindingEntry to a compact JSON string suitable for clipboard.
     public static string SerializeBinding(BindingEntry entry) =>
         JsonSerializer.Serialize(entry, JsonOpts);

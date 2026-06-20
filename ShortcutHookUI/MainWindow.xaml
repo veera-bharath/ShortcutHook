@@ -655,6 +655,17 @@
                             </Grid>
                         </Border>
 
+                        <Border Style="{StaticResource SettingsOptionCard}" Margin="0,8,0,0" MouseLeftButtonDown="IgnoredAppsOption_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Ignored Apps" Foreground="#EFEFEF" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Apps where all shortcuts are suppressed" Foreground="#777777" FontSize="11" Margin="0,3,0,0"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="&#8250;" Foreground="#555555" FontSize="18" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+
                         <Border Style="{StaticResource SettingsOptionCard}" Margin="0,8,0,0" MouseLeftButtonDown="LogViewOption_Click">
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -695,6 +706,32 @@
                         </StackPanel>
                         <Button Content="Back" Style="{StaticResource BtnGhost}" Height="34" Width="90"
                                 HorizontalAlignment="Left" Margin="0,12,0,0" Click="SettingsBack_Click"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SettingsIgnoredAppsView" Visibility="Collapsed">
+                        <TextBlock Text="Ignored Apps" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold" Margin="0,0,0,4"/>
+                        <TextBlock Text="All shortcuts are suppressed while one of these apps is focused." Foreground="#777777" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="IgnoredAppsListStack"/>
+                        </ScrollViewer>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="IgnoredAppsCustomInput" Style="{StaticResource DarkTB}" Height="30"
+                                     Padding="8,0" FontFamily="Consolas" FontSize="11"/>
+                            <Button Grid.Column="1" Content="Add" Style="{StaticResource BtnGhost}"
+                                    Height="30" Padding="12,0" Margin="6,0,0,0"
+                                    Click="IgnoredAppsAddCustom_Click"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <Button Content="Save" Background="#5B9CF6" Style="{StaticResource BtnPrimary}"
+                                    Height="36" Width="100" Padding="0"
+                                    Click="IgnoredAppsSave_Click"/>
+                            <Button Content="Back" Style="{StaticResource BtnGhost}" Height="36" Width="90" Padding="0"
+                                    Margin="10,0,0,0" Click="SettingsBack_Click"/>
+                        </StackPanel>
                     </StackPanel>
 
                     <StackPanel x:Name="SettingsProfileFormView" Visibility="Collapsed">
