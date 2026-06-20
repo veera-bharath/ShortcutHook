@@ -260,6 +260,7 @@ public partial class MainWindow : Window
 
     readonly DispatcherTimer _pollTimer;
     readonly DispatcherTimer _feedbackTimer;
+    string? _lastKnownActiveProfile;
 
     public MainWindow()
     {
@@ -632,6 +633,14 @@ public partial class MainWindow : Window
             HookBtn.Background = GreenBrush;
             PausedBadge.Visibility = Visibility.Collapsed;
         }
+
+        try
+        {
+            var ap = ConfigService.ReadConfig(InstallService.ScriptRoot).activeProfile;
+            if (!string.Equals(ap, _lastKnownActiveProfile, StringComparison.Ordinal))
+                RefreshProfileDropdown();
+        }
+        catch { }
     }
 
     static bool IsDaemonPaused()
@@ -1246,6 +1255,7 @@ public partial class MainWindow : Window
     void RefreshProfileDropdown()
     {
         var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        _lastKnownActiveProfile = config.activeProfile;
         ProfileSwitcherLabel.Text = config.activeProfile;
 
         ProfileSwitcherList.Children.Clear();

@@ -1536,7 +1536,14 @@ try {
                 $cfg | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
                 Write-Log "Switched active profile to: $profileSwitch"
                 $mutexReleased = $true; $mutex.ReleaseMutex(); $mutex.Dispose()
-                Start-Process 'powershell.exe' "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName = 'powershell.exe'
+                $psi.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+                $psi.WorkingDirectory = $PSScriptRoot
+                $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+                $psi.CreateNoWindow = $true
+                $psi.UseShellExecute = $false
+                [System.Diagnostics.Process]::Start($psi) | Out-Null
                 exit
             } else {
                 Write-Log "Profile switch target not found: $profileSwitch"
