@@ -460,6 +460,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Grid>
                     <TextBox x:Name="SearchBox" Style="{StaticResource DarkTB}" Height="32"
@@ -474,6 +475,11 @@
                         Style="{StaticResource BtnGhost}" Width="30" Height="30"
                         Padding="0" FontSize="11" Margin="6,0,0,0" Visibility="Collapsed"
                         Click="SearchClearBtn_Click"/>
+                <Button Grid.Column="2" x:Name="ImportBindingBtn" Content="↓ Import"
+                        Style="{StaticResource BtnGhost}" Height="30" Padding="10,0"
+                        FontSize="11" Margin="6,0,0,0"
+                        ToolTip="Import a binding from clipboard JSON"
+                        Click="ImportBindingBtn_Click"/>
             </Grid>
         </Border>
 
