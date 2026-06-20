@@ -638,7 +638,10 @@ public partial class MainWindow : Window
         {
             var ap = ConfigService.ReadConfig(InstallService.ScriptRoot).activeProfile;
             if (!string.Equals(ap, _lastKnownActiveProfile, StringComparison.Ordinal))
+            {
                 RefreshProfileDropdown();
+                ReloadBindingsFromConfig();
+            }
         }
         catch { }
     }
