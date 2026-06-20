@@ -653,6 +653,17 @@
                             </Grid>
                         </Border>
 
+                        <Border Style="{StaticResource SettingsOptionCard}" Margin="0,8,0,0" MouseLeftButtonDown="LogViewOption_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="View Logs" Foreground="#EFEFEF" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Live log output for diagnosing issues" Foreground="#777777" FontSize="11" Margin="0,3,0,0"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="&#8250;" Foreground="#555555" FontSize="18" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+
                         <Border Style="{StaticResource SettingsOptionCard}" Margin="0,8,0,0" MouseLeftButtonDown="AboutOption_Click">
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>

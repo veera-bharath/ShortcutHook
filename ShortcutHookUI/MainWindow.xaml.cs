@@ -863,6 +863,12 @@ public partial class MainWindow : Window
         SettingsRoot.Visibility = Visibility.Visible;
     }
 
+    void LogViewOption_Click(object sender, MouseButtonEventArgs e)
+    {
+        CloseSettings();
+        new LogViewerWindow { Owner = this }.Show();
+    }
+
     void AboutOption_Click(object sender, MouseButtonEventArgs e)
     {
         SettingsMenuView.Visibility  = Visibility.Collapsed;
