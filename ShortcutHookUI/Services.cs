@@ -253,6 +253,33 @@ internal static class ConfigService
         Save(root, config);
     }
 
+    // Serializes a single BindingEntry to a compact JSON string suitable for clipboard.
+    public static string SerializeBinding(BindingEntry entry) =>
+        JsonSerializer.Serialize(entry, JsonOpts);
+
+    // Parses a clipboard JSON snippet into a BindingEntry. Throws on bad JSON or missing trigger.
+    public static BindingEntry ParseBinding(string json)
+    {
+        var entry = JsonSerializer.Deserialize<BindingEntry>(json.Trim())
+            ?? throw new FormatException("Could not parse JSON.");
+        if (string.IsNullOrWhiteSpace(entry.trigger))
+            throw new FormatException("Missing 'trigger' field.");
+        // Normalize legacy single-output field.
+        if ((entry.outputs == null || entry.outputs.Count == 0) && entry.output != null)
+            entry.outputs = new List<string> { entry.output };
+        if (entry.outputs == null || entry.outputs.Count == 0)
+            entry.outputs = new List<string> { "" };
+        return entry;
+    }
+
+    // Appends a single binding to the active profile and saves.
+    public static void AddBindingToActiveProfile(string root, BindingEntry entry)
+    {
+        var config = ReadConfig(root);
+        GetActiveProfile(config).bindings.Add(entry);
+        Save(root, config);
+    }
+
     // Serializes a single profile as a standalone JSON document: { "name": ..., "bindings": [...] }.
     public static void ExportProfile(string path, ProfileEntry profile)
     {

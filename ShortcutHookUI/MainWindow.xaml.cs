@@ -435,6 +435,169 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
+    // Binding export / import
+    // =========================================================================
+
+    // Adds a small ⬆ export button into the spacer column (col 4) of a row's chain footer.
+    void AddExportToRow(Row row, Func<BindingEntry?> getEntry)
+    {
+        var btn = new Button
+        {
+            Style   = (Style)FindResource("BtnGhost"),
+            Height  = 22,
+            Width   = 22,
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            ToolTip = "Copy this binding to clipboard as JSON",
+            Content = new TextBlock
+            {
+                Text                = "",
+                FontFamily          = new FontFamily("Segoe MDL2 Assets"),
+                FontSize            = 13,
+                VerticalAlignment   = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            },
+        };
+        Grid.SetColumn(btn, 4);
+        btn.Click += (_, __) => ExportBindingToClipboard(getEntry());
+        row.ChainFooter.Children.Add(btn);
+    }
+
+    void ExportBindingToClipboard(BindingEntry? entry)
+    {
+        if (entry == null) { ShowFeedback("Nothing to export — binding has no output.", FeedbackKind.Warn); return; }
+        try
+        {
+            var json = ConfigService.SerializeBinding(entry);
+            Clipboard.SetText(json);
+            ShowFeedback("Binding copied to clipboard.", FeedbackKind.Ok);
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Export failed: {ex.Message}", FeedbackKind.Err);
+        }
+    }
+
+    BindingEntry? BuildMouseBindingEntry(string gesture, Row row)
+    {
+        var outputs = GetRowOutputs(row);
+        if (outputs.Count == 0) return null;
+        return new BindingEntry
+        {
+            trigger     = "mouse:" + gesture,
+            outputs     = outputs,
+            outputDelay = row.OutputDelay,
+            apps        = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
+            enabled     = row.Enabled ? null : false,
+            debounce    = row.Debounce,
+            showToast   = row.ShowToast,
+        };
+    }
+
+    BindingEntry? BuildKbdBindingEntry(string trigger, Row row)
+    {
+        if (string.IsNullOrEmpty(trigger)) return null;
+        var outputs = GetRowOutputs(row);
+        if (outputs.Count == 0) return null;
+        return new BindingEntry
+        {
+            trigger     = trigger,
+            outputs     = outputs,
+            outputDelay = row.OutputDelay,
+            apps        = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
+            enabled     = row.Enabled ? null : false,
+            showToast   = row.ShowToast,
+        };
+    }
+
+    void ImportBindingBtn_Click(object sender, RoutedEventArgs e) => ImportBindingFromClipboard();
+
+    void ImportBindingFromClipboard()
+    {
+        string json;
+        try { json = Clipboard.GetText(); }
+        catch { ShowFeedback("Could not read clipboard.", FeedbackKind.Err); return; }
+
+        if (string.IsNullOrWhiteSpace(json))
+        { ShowFeedback("Clipboard is empty — copy a binding JSON first.", FeedbackKind.Err); return; }
+
+        BindingEntry entry;
+        try { entry = ConfigService.ParseBinding(json); }
+        catch (Exception ex) { ShowFeedback($"Invalid binding JSON: {ex.Message}", FeedbackKind.Err); return; }
+
+        string canon;
+        try { canon = TriggerHelpers.CanonicalizeTrigger(entry.trigger); }
+        catch (Exception ex) { ShowFeedback($"Invalid trigger: {ex.Message}", FeedbackKind.Err); return; }
+
+        // Validate shortcut outputs.
+        foreach (var outp in entry.outputs ?? new List<string>())
+        {
+            if (string.IsNullOrEmpty(outp)) continue;
+            if (outp.StartsWith("open:", StringComparison.Ordinal)   ||
+                outp.StartsWith("cmd:",  StringComparison.Ordinal)   ||
+                outp.StartsWith("cmdw:", StringComparison.Ordinal)   ||
+                outp.StartsWith("hscroll:", StringComparison.Ordinal)||
+                outp.StartsWith("type:", StringComparison.Ordinal)   ||
+                outp == "toggle:pause") continue;
+            try { TriggerHelpers.ValidateShortcutOutput(outp); }
+            catch (Exception ex) { ShowFeedback($"Invalid output '{outp}': {ex.Message}", FeedbackKind.Err); return; }
+        }
+
+        // Exact-duplicate check: same canonical trigger + same app scope.
+        var existing = ConfigService.Read(InstallService.ScriptRoot);
+        bool entryGlobal = entry.apps == null || entry.apps.Count == 0;
+        foreach (var b in existing)
+        {
+            string bCanon;
+            try { bCanon = TriggerHelpers.CanonicalizeTrigger(b.trigger); }
+            catch { continue; }
+            if (!string.Equals(bCanon, canon, StringComparison.Ordinal)) continue;
+            bool bGlobal = b.apps == null || b.apps.Count == 0;
+            bool sameScope = entryGlobal == bGlobal &&
+                             (entryGlobal || new HashSet<string>(entry.apps!, StringComparer.OrdinalIgnoreCase)
+                                                .SetEquals(b.apps ?? new List<string>()));
+            if (sameScope)
+            {
+                ShowFeedback("This binding already exists — remove the existing one first.", FeedbackKind.Err);
+                return;
+            }
+        }
+
+        // Prefix-pair check (keyboard only) — warn but allow.
+        bool prefixWarn = false;
+        if (entry.trigger.StartsWith("key:", StringComparison.Ordinal))
+        {
+            try
+            {
+                var newParsed = TriggerHelpers.ParseKeyTrigger(entry.trigger.Substring(4));
+                foreach (var b in existing)
+                {
+                    if (!b.trigger.StartsWith("key:", StringComparison.Ordinal)) continue;
+                    try
+                    {
+                        var bParsed = TriggerHelpers.ParseKeyTrigger(b.trigger.Substring(4));
+                        if (TriggerHelpers.IsKeyPrefixOf(newParsed, bParsed) ||
+                            TriggerHelpers.IsKeyPrefixOf(bParsed, newParsed))
+                        { prefixWarn = true; break; }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        ConfigService.AddBindingToActiveProfile(InstallService.ScriptRoot, entry);
+        ReloadBindingsFromConfig();
+        RestartDaemonIfRunning();
+
+        ShowFeedback(
+            prefixWarn
+                ? "Binding imported — note: this trigger is a prefix of another (~80 ms delay)."
+                : "Binding imported.",
+            prefixWarn ? FeedbackKind.Warn : FeedbackKind.Ok);
+    }
+
+    // =========================================================================
     // Status + hook control
     // =========================================================================
     void UpdateHookStatus()
@@ -1283,6 +1446,7 @@ public partial class MainWindow : Window
         };
 
         BuildChainStack(row, outputs, isGlobal_scope, apps, enabled);
+        AddExportToRow(row, () => BuildMouseBindingEntry(def.Gesture, row));
         if (!enabled) grid.Opacity = 0.45;
 
         if (isGlobal)
@@ -1891,6 +2055,7 @@ public partial class MainWindow : Window
             ShowToast   = showToast,
         };
         BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled);
+        AddExportToRow(row, () => BuildKbdBindingEntry(card.Trigger, row));
         if (!enabled) grid.Opacity = 0.45;
 
         delBtn.Click += (_, __) =>
