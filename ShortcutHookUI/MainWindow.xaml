@@ -471,15 +471,26 @@
                                VerticalAlignment="Center" Margin="18,0,0,0"
                                IsHitTestVisible="False"/>
                 </Grid>
-                <Button Grid.Column="1" x:Name="SearchClearBtn" Content="✕"
+                <Button Grid.Column="1" x:Name="SearchClearBtn"
                         Style="{StaticResource BtnGhost}" Width="30" Height="30"
-                        Padding="0" FontSize="11" Margin="6,0,0,0" Visibility="Collapsed"
-                        Click="SearchClearBtn_Click"/>
-                <Button Grid.Column="2" x:Name="ImportBindingBtn" Content="↓ Import"
+                        Padding="0" Margin="6,0,0,0" Visibility="Collapsed"
+                        ToolTip="Clear search"
+                        Click="SearchClearBtn_Click">
+                    <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                               VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                </Button>
+                <Button Grid.Column="2" x:Name="ImportBindingBtn"
                         Style="{StaticResource BtnGhost}" Height="30" Padding="10,0"
-                        FontSize="11" Margin="6,0,0,0"
+                        Margin="6,0,0,0"
                         ToolTip="Import a binding from clipboard JSON"
-                        Click="ImportBindingBtn_Click"/>
+                        Click="ImportBindingBtn_Click">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="&#xE77F;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                   VerticalAlignment="Center" Margin="0,0,5,0"/>
+                        <TextBlock Text="Import" FontFamily="Segoe UI" FontSize="11"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
             </Grid>
         </Border>
 

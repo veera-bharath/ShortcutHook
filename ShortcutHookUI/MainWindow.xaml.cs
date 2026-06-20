@@ -443,14 +443,20 @@ public partial class MainWindow : Window
     {
         var btn = new Button
         {
-            Style    = (Style)FindResource("BtnGhost"),
-            Content  = "⬆",
-            Height   = 22,
-            Width    = 22,
-            Padding  = new Thickness(0),
-            FontSize = 10,
+            Style   = (Style)FindResource("BtnGhost"),
+            Height  = 22,
+            Width   = 22,
+            Padding = new Thickness(0),
             HorizontalAlignment = HorizontalAlignment.Right,
-            ToolTip  = "Copy this binding to clipboard as JSON",
+            ToolTip = "Copy this binding to clipboard as JSON",
+            Content = new TextBlock
+            {
+                Text                = "",
+                FontFamily          = new FontFamily("Segoe MDL2 Assets"),
+                FontSize            = 13,
+                VerticalAlignment   = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            },
         };
         Grid.SetColumn(btn, 4);
         btn.Click += (_, __) => ExportBindingToClipboard(getEntry());
