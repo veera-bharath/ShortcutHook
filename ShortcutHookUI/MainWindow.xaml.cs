@@ -2879,6 +2879,7 @@ public partial class MainWindow : Window
                     outputs     = outputsList,
                     outputDelay = row.OutputDelay,
                     apps        = row.IsGlobal ? null : new List<string>(row.Apps),
+                    exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
                 };
                 if (!row.Enabled) entry.enabled = false;
                 if (row.Debounce)  entry.debounce = true;
@@ -2920,6 +2921,7 @@ public partial class MainWindow : Window
                             outputs     = outputsList.Count > 0 ? outputsList : new List<string> { "" },
                             outputDelay = row.OutputDelay,
                             apps        = row.IsGlobal ? null : new List<string>(row.Apps),
+                            exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
                             enabled     = false,
                             showToast   = row.ShowToast,
                         });
@@ -2978,6 +2980,7 @@ public partial class MainWindow : Window
                     outputs     = outputsList,
                     outputDelay = row.OutputDelay,
                     apps        = row.IsGlobal ? null : new List<string>(row.Apps),
+                    exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
                     showToast   = row.ShowToast,
                 });
             }
