@@ -86,6 +86,8 @@ public class ShortcutHook {
     public static string CurrentProfileName = "";
     public static uint MainThreadId = 0;
 
+    public static HashSet<string> IgnoredApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     static void WritePauseState() {
         bool paused = IsPaused;
         new Thread(() => {
@@ -198,6 +200,7 @@ public class ShortcutHook {
         public byte[]      Keys;
         public string      Signature;
         public string[]    Apps;          // null/empty = global; list of process names for app-scoped
+        public string[]    ExceptApps;   // global binding suppressed in these process names
         public int         OutputDelay;   // ms between chained steps (0 = no delay)
         public ChainStep[] Steps;         // one or more actions to execute in order
         public bool        Debounce;      // ignore repeated scroll fires within SCROLL_DEBOUNCE_MS
@@ -869,6 +872,8 @@ public class ShortcutHook {
         // While paused, mouse input passes through untouched. Resuming is keyboard-only
         // (mouse gesture detection requires timers we don't want running while paused).
         if (IsPaused) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
+        if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+            return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
         try {
             int msg = wParam.ToInt32();
 
@@ -1112,12 +1117,21 @@ public class ShortcutHook {
     // Picks the right binding for the current foreground process: app-scoped first, global fallback.
     static Binding ResolveMouseBinding(List<Binding> list) {
         if (list == null || list.Count == 0) return null;
-        if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) return list[0]; // fast path: single global
+        if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) {
+            var b0 = list[0];
+            if (b0.ExceptApps != null && b0.ExceptApps.Length > 0 && AppsContain(b0.ExceptApps, GetForegroundProcessName())) return null;
+            return b0;
+        }
         string fgApp = GetForegroundProcessName();
         foreach (Binding b in list) {
             if (b.Apps != null && b.Apps.Length > 0 && AppsContain(b.Apps, fgApp)) return b;
         }
-        foreach (Binding b in list) { if (b.Apps == null || b.Apps.Length == 0) return b; }
+        foreach (Binding b in list) {
+            if (b.Apps == null || b.Apps.Length == 0) {
+                if (b.ExceptApps != null && b.ExceptApps.Length > 0 && AppsContain(b.ExceptApps, fgApp)) continue;
+                return b;
+            }
+        }
         return null;
     }
 
@@ -1127,16 +1141,26 @@ public class ShortcutHook {
         List<Binding> candidates;
         if (!KeySigIndex.TryGetValue(MakeSignature(mods, sk), out candidates)) return null;
         // Fast path: single global binding (the common case)
-        if (candidates.Count == 1 && (candidates[0].Apps == null || candidates[0].Apps.Length == 0)) return candidates[0];
+        if (candidates.Count == 1 && (candidates[0].Apps == null || candidates[0].Apps.Length == 0)) {
+            var c = candidates[0];
+            if (c.ExceptApps != null && c.ExceptApps.Length > 0) {
+                if (fgApp == null) fgApp = GetForegroundProcessName();
+                if (AppsContain(c.ExceptApps, fgApp)) return null;
+            }
+            return c;
+        }
         if (fgApp == null) fgApp = GetForegroundProcessName();
         // Scoped bindings are at the front; check them first
         foreach (Binding b in candidates) {
             if (b.Apps == null || b.Apps.Length == 0) continue;
             if (AppsContain(b.Apps, fgApp)) return b;
         }
-        // Fall back to global binding
+        // Fall back to global binding, respecting ExceptApps
         foreach (Binding b in candidates) {
-            if (b.Apps == null || b.Apps.Length == 0) return b;
+            if (b.Apps == null || b.Apps.Length == 0) {
+                if (b.ExceptApps != null && b.ExceptApps.Length > 0 && AppsContain(b.ExceptApps, fgApp)) continue;
+                return b;
+            }
         }
         return null;
     }
@@ -1145,9 +1169,11 @@ public class ShortcutHook {
         if (keys.Count == 0) return false;
         foreach (Binding b in KeyBindings) {
             if (b.Mods != mods || b.Keys.Length <= keys.Count) continue;
+            if (fgApp == null) fgApp = GetForegroundProcessName();
             if (b.Apps != null && b.Apps.Length > 0) {
-                if (fgApp == null) fgApp = GetForegroundProcessName();
                 if (!AppsContain(b.Apps, fgApp)) continue;
+            } else if (b.ExceptApps != null && b.ExceptApps.Length > 0 && AppsContain(b.ExceptApps, fgApp)) {
+                continue;
             }
             bool ok = true;
             foreach (byte k in keys) {
@@ -1184,6 +1210,8 @@ public class ShortcutHook {
         try {
             KBDLLHOOKSTRUCT data = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
             if ((data.flags & LLKHF_INJECTED) != 0) return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
+            if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+                return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
 
             int  msg    = wParam.ToInt32();
             bool isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
@@ -1396,6 +1424,21 @@ if (Test-Path $configPath) {
 
 if ($activeProfileName) { Write-Log "Active profile: $activeProfileName" }
 
+# Load ignoredApps into the C# HashSet
+if (Test-Path $configPath) {
+    try {
+        $cfgForIgnored = Get-Content $configPath -Raw | ConvertFrom-Json
+        if ($cfgForIgnored.PSObject.Properties.Name -contains 'ignoredApps' -and $cfgForIgnored.ignoredApps) {
+            foreach ($app in @($cfgForIgnored.ignoredApps)) {
+                if ($app) { [ShortcutHook]::IgnoredApps.Add($app) | Out-Null }
+            }
+            if ([ShortcutHook]::IgnoredApps.Count -gt 0) {
+                Write-Log ("Ignored apps: {0}" -f ([ShortcutHook]::IgnoredApps -join ', '))
+            }
+        }
+    } catch { Write-Log "Failed to load ignoredApps: $_" }
+}
+
 # ---------------------------------------------------------------------------
 # Build Binding objects
 # ---------------------------------------------------------------------------
@@ -1464,6 +1507,9 @@ foreach ($b in $rawBindings) {
             $nb.Apps = [string[]]@($b.apps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         } elseif ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
             $nb.Apps = [string[]]@($b.app.Trim())
+        }
+        if ($b.PSObject.Properties.Name -contains 'exceptApps' -and $b.exceptApps -and @($b.exceptApps).Count -gt 0) {
+            $nb.ExceptApps = [string[]]@($b.exceptApps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         }
         if ($b.PSObject.Properties.Name -contains 'debounce' -and $b.debounce -eq $true) {
             $nb.Debounce = $true
