@@ -541,6 +541,32 @@
                     </StackPanel>
                 </Border>
 
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <Grid x:Name="AppTriggersHeader" Cursor="Hand" Background="Transparent"
+                              MouseLeftButtonDown="AppTriggersHeader_Click">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="APP TRIGGERS" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="AppTriggersChevron" Grid.Column="1" Text="›"
+                                       Foreground="#555555" FontSize="11" VerticalAlignment="Center"/>
+                        </Grid>
+                        <StackPanel x:Name="AppTriggersBody" Visibility="Collapsed" Margin="0,8,0,0">
+                            <DockPanel Margin="0,0,0,8">
+                                <Button x:Name="AddAppTriggerBtn" DockPanel.Dock="Right" Content="+ New trigger"
+                                        Style="{StaticResource BtnGhost}" Height="24" Width="90" Padding="0"
+                                        HorizontalAlignment="Right" Click="AddAppTriggerBtn_Click"/>
+                            </DockPanel>
+                            <StackPanel x:Name="AppTriggersStack"/>
+                            <TextBlock Margin="0,8,0,0"
+                                       Text="Fires when the named process starts or exits (polled in the background, ~1.5s resolution). Process names are case-insensitive, e.g. chrome.exe."
+                                       Foreground="#3A3A3A" FontSize="11" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
             </StackPanel>
         </ScrollViewer>
 

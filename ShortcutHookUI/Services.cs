@@ -93,7 +93,14 @@ internal static class TriggerHelpers
             }
             return "key:" + p.Mods + ":" + string.Join(",", p.Keys);
         }
-        throw new ArgumentException("Trigger must start with 'mouse:' or 'key:'");
+        if (t.StartsWith("launch:", StringComparison.Ordinal) || t.StartsWith("exit:", StringComparison.Ordinal))
+        {
+            var prefix = t.StartsWith("launch:", StringComparison.Ordinal) ? "launch:" : "exit:";
+            var app = t.Substring(prefix.Length).Trim();
+            if (string.IsNullOrEmpty(app)) throw new ArgumentException("App name cannot be empty");
+            return prefix + app.ToLowerInvariant();
+        }
+        throw new ArgumentException("Trigger must start with 'mouse:', 'key:', 'launch:', or 'exit:'");
     }
 
     public static void ValidateShortcutOutput(string combo)

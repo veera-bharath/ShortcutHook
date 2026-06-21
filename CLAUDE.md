@@ -53,6 +53,7 @@ No test harness. Verification is manual: run the daemon, perform the trigger, co
 Trigger prefixes:
 - `mouse:` — one of the seven fixed gesture detectors: `left+right`, `double-right`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`. The last two are double-/triple-click of the middle (wheel) button; the scroll gestures fire while the right button is held. Adding more requires new detection code in `MouseCallback`.
 - `key:` — any `Mod(+Mod…)+Key(+Key…)` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`. Non-modifier keys: A-Z, 0-9, F1-F12, and the named keys in `$vkMap` (Enter, Esc, Tab, Space, Back, Delete, Insert, Home, End, PgUp, PgDn, Left, Right, Up, Down, PrtScr).
+- `launch:<processName>` / `exit:<processName>` — fires when the named process (e.g. `chrome.exe`) starts or exits. Detected by a background `System.Threading.Timer` polling `Process.GetProcesses()` every ~1.5s and diffing against the previous snapshot (no WMI `Win32_ProcessStartTrace` — that needs elevation). App-scope (`apps`/`exceptApps`) doesn't apply to these triggers since the process name *is* the scope; the UI's "APP TRIGGERS" section has no scope picker for them.
 
 Outputs come in two forms:
 - **Keyboard chord** — `Mod+Key+Key` syntax. Modifiers are emitted in the order they appear in the string (matters for some shortcuts).
