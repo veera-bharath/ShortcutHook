@@ -60,6 +60,8 @@ public sealed class Row
     public Popup?        AppScopePopup;
     public CheckBox?     GlobalCheckBox;
     public List<(CheckBox Cb, string AppName)> AppCheckBoxes = new();
+    // app triggers (launch:/exit:/focus:/blur:) target specific process(es) by definition — no app-scope UI needed.
+    public bool          HasAppScope = true;
 
     // enabled state
     public bool      Enabled          = true;
@@ -88,6 +90,19 @@ public sealed class KbdTriggerCard
     public Button     CaptureBtn   = null!;
     public string     Trigger      = "";
     public List<Row>  Variants     = new();
+}
+
+// One "launch:" / "exit:" / "focus:" / "blur:" trigger card — fires when a named process
+// starts, exits, gains focus, or loses focus.
+public sealed class AppTriggerCard
+{
+    public Border        CardBorder   = null!;
+    public ComboBox      KindCombo    = null!;
+    public Button        AppNameBtn   = null!;
+    public Popup         AppNamePopup = null!;
+    public List<string>  SelectedApps = new();
+    public List<(CheckBox Cb, string AppName)> AppCheckBoxes = new();
+    public Row           Row          = null!;
 }
 
 public partial class MainWindow : Window
@@ -250,9 +265,13 @@ public partial class MainWindow : Window
     }
 
     readonly List<AppEntry> _apps;
+    // Cache of resolved .lnk -> process exe name, so reopening the app-trigger picker
+    // doesn't re-invoke WScript.Shell COM for every installed app each time.
+    readonly Dictionary<string, string?> _appProcNameCache = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, List<Row>> _mouseRows = new();
     readonly Dictionary<string, StackPanel> _mouseGestureStacks = new();
     readonly List<KbdTriggerCard> _kbdCards = new();
+    readonly List<AppTriggerCard> _appTriggerCards = new();
     string _appRoot;
     bool _setupComplete;
     UpdateCheckService.UpdateInfo? _updateInfo;
@@ -272,11 +291,13 @@ public partial class MainWindow : Window
 
     bool _mouseExpanded = true;
     bool _kbdExpanded   = false;
+    bool _appTriggersExpanded = false;
 
     string _filterText           = "";
     bool   _filterWasActive      = false;
     bool   _preFilterMouseExpanded = true;
     bool   _preFilterKbdExpanded   = false;
+    bool   _preFilterAppTriggersExpanded = false;
 
     readonly DispatcherTimer _pollTimer;
     readonly DispatcherTimer _feedbackTimer;
@@ -365,13 +386,20 @@ public partial class MainWindow : Window
     // =========================================================================
     // Accordion
     // =========================================================================
-    void MouseHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e) => ToggleSection(mouse: true);
-    void KbdHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)   => ToggleSection(mouse: false);
+    void MouseHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e) => ToggleSection(Section.Mouse);
+    void KbdHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)   => ToggleSection(Section.Kbd);
+    void AppTriggersHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e) => ToggleSection(Section.AppTriggers);
 
-    void ToggleSection(bool mouse)
+    enum Section { Mouse, Kbd, AppTriggers }
+
+    void ToggleSection(Section section)
     {
-        if (mouse) { _mouseExpanded = !_mouseExpanded; if (_mouseExpanded) _kbdExpanded = false; }
-        else       { _kbdExpanded   = !_kbdExpanded;   if (_kbdExpanded)   _mouseExpanded = false; }
+        bool newMouse = section == Section.Mouse && !_mouseExpanded;
+        bool newKbd   = section == Section.Kbd   && !_kbdExpanded;
+        bool newApp   = section == Section.AppTriggers && !_appTriggersExpanded;
+        _mouseExpanded       = newMouse;
+        _kbdExpanded         = newKbd;
+        _appTriggersExpanded = newApp;
         ApplySectionState();
     }
 
@@ -381,6 +409,8 @@ public partial class MainWindow : Window
         MouseChevron.Text    = _mouseExpanded ? "▾" : "›";
         KbdBody.Visibility   = _kbdExpanded   ? Visibility.Visible   : Visibility.Collapsed;
         KbdChevron.Text      = _kbdExpanded   ? "▾" : "›";
+        AppTriggersBody.Visibility = _appTriggersExpanded ? Visibility.Visible   : Visibility.Collapsed;
+        AppTriggersChevron.Text    = _appTriggersExpanded ? "▾" : "›";
     }
 
     // =========================================================================
@@ -413,16 +443,19 @@ public partial class MainWindow : Window
             {
                 _preFilterMouseExpanded = _mouseExpanded;
                 _preFilterKbdExpanded   = _kbdExpanded;
+                _preFilterAppTriggersExpanded = _appTriggersExpanded;
                 _filterWasActive = true;
             }
             _mouseExpanded = true;
             _kbdExpanded   = true;
+            _appTriggersExpanded = true;
             ApplySectionState();
         }
         else if (_filterWasActive)
         {
             _mouseExpanded = _preFilterMouseExpanded;
             _kbdExpanded   = _preFilterKbdExpanded;
+            _appTriggersExpanded = _preFilterAppTriggersExpanded;
             _filterWasActive = false;
             ApplySectionState();
         }
@@ -439,6 +472,13 @@ public partial class MainWindow : Window
             var trigDisplay = card.Trigger.StartsWith("key:", StringComparison.Ordinal)
                 ? card.Trigger.Substring(4) : card.Trigger;
             card.CardBorder.Visibility = !active || RowsMatchFilter(trigDisplay, card.Variants)
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        foreach (var card in _appTriggerCards)
+        {
+            var trigDisplay = string.Join(",", card.SelectedApps);
+            card.CardBorder.Visibility = !active || RowsMatchFilter(trigDisplay, new List<Row> { card.Row })
                 ? Visibility.Visible : Visibility.Collapsed;
         }
     }
@@ -753,6 +793,8 @@ public partial class MainWindow : Window
         if (!string.IsNullOrEmpty(SearchBox?.Text)) { SearchBox.Text = ""; }
         KbdStack.Children.Clear();
         _kbdCards.Clear();
+        AppTriggersStack.Children.Clear();
+        _appTriggerCards.Clear();
 
         BuildMouseRows();
 
@@ -761,6 +803,30 @@ public partial class MainWindow : Window
         var triggerGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.Ordinal);
         foreach (var b in ConfigService.Read(InstallService.ScriptRoot))
         {
+            if (b.trigger.StartsWith("launch:", StringComparison.Ordinal))
+            {
+                var apps = b.trigger.Substring(7).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                AddAppTriggerCard("launch", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                continue;
+            }
+            if (b.trigger.StartsWith("exit:", StringComparison.Ordinal))
+            {
+                var apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                AddAppTriggerCard("exit", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                continue;
+            }
+            if (b.trigger.StartsWith("focus:", StringComparison.Ordinal))
+            {
+                var apps = b.trigger.Substring(6).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                AddAppTriggerCard("focus", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                continue;
+            }
+            if (b.trigger.StartsWith("blur:", StringComparison.Ordinal))
+            {
+                var apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                AddAppTriggerCard("blur", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                continue;
+            }
             if (!b.trigger.StartsWith("key:", StringComparison.Ordinal)) continue;
             if (!triggerGroups.TryGetValue(b.trigger, out var list))
             {
@@ -1912,16 +1978,19 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(msLbl, 3);
 
-        var scopeBtn = BuildAppScopeButton(row, isGlobal, apps, exceptApps);
-        Grid.SetColumn(scopeBtn, 5);
-
         row.DelayBox = delayTB;
 
         footer.Children.Add(addBtn);
         footer.Children.Add(delayLbl);
         footer.Children.Add(delayTB);
         footer.Children.Add(msLbl);
-        footer.Children.Add(scopeBtn);
+
+        if (row.HasAppScope)
+        {
+            var scopeBtn = BuildAppScopeButton(row, isGlobal, apps, exceptApps);
+            Grid.SetColumn(scopeBtn, 5);
+            footer.Children.Add(scopeBtn);
+        }
 
         row.ChainFooter = footer;
 
@@ -2016,28 +2085,36 @@ public partial class MainWindow : Window
             };
             popupStack.Children.Add(modeLabel);
 
-            // Collect running process names + stored names for whichever list is active.
-            var activeList   = row.IsGlobal ? row.ExceptApps : row.Apps;
-            var selectedSet  = new HashSet<string>(activeList, StringComparer.OrdinalIgnoreCase);
-            var runningNames = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var p in Process.GetProcesses())
+            // Source from installed Start Menu apps (same list as "Open app" / app triggers),
+            // resolved to their underlying process exe name so it can be matched at runtime.
+            var activeList  = row.IsGlobal ? row.ExceptApps : row.Apps;
+            var selectedSet = new HashSet<string>(activeList, StringComparer.OrdinalIgnoreCase);
+            var entriesByProc = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // procName -> display
+            foreach (var app in _apps)
             {
-                using (p)
+                if (!_appProcNameCache.TryGetValue(app.Path, out var procName))
                 {
-                    try { if (!string.IsNullOrEmpty(p.ProcessName)) runningNames.Add(p.ProcessName + ".exe"); }
-                    catch { }
+                    procName = AppScanner.ResolveProcessName(app.Path);
+                    _appProcNameCache[app.Path] = procName;
                 }
+                if (string.IsNullOrEmpty(procName)) continue;
+                if (!entriesByProc.ContainsKey(procName)) entriesByProc[procName] = app.Name;
             }
-            foreach (var stored in activeList) runningNames.Add(stored);
+            // Stored entries that don't map to an installed Start Menu app (e.g. typed manually)
+            // still need to show up, checked, under their raw process name.
+            foreach (var stored in activeList)
+                if (!entriesByProc.ContainsKey(stored)) entriesByProc[stored] = stored;
 
-            foreach (var procName in runningNames)
+            foreach (var pair in entriesByProc.OrderBy(p => p.Value, StringComparer.OrdinalIgnoreCase))
             {
-                var name = procName;
+                var procName = pair.Key;
+                var display  = pair.Value;
                 var cb = new CheckBox
                 {
-                    Content    = name,
+                    Content    = display,
+                    ToolTip    = procName,
                     Foreground = Br("#CCCCCC"),
-                    IsChecked  = selectedSet.Contains(name),
+                    IsChecked  = selectedSet.Contains(procName),
                     Margin     = new Thickness(4, 2, 4, 2),
                     FontFamily = new FontFamily("Consolas"),
                     FontSize   = 11,
@@ -2045,17 +2122,17 @@ public partial class MainWindow : Window
                 cb.Checked += (_, __) =>
                 {
                     var list = row.IsGlobal ? row.ExceptApps : row.Apps;
-                    if (!list.Contains(name, StringComparer.OrdinalIgnoreCase)) list.Add(name);
+                    if (!list.Contains(procName, StringComparer.OrdinalIgnoreCase)) list.Add(procName);
                     UpdateAppScopeBtnLabel(row);
                 };
                 cb.Unchecked += (_, __) =>
                 {
                     var list = row.IsGlobal ? row.ExceptApps : row.Apps;
-                    list.RemoveAll(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
+                    list.RemoveAll(a => string.Equals(a, procName, StringComparison.OrdinalIgnoreCase));
                     UpdateAppScopeBtnLabel(row);
                 };
                 popupStack.Children.Add(cb);
-                row.AppCheckBoxes.Add((cb, name));
+                row.AppCheckBoxes.Add((cb, procName));
             }
 
             globalCb.Checked += (_, __) =>
@@ -2080,6 +2157,199 @@ public partial class MainWindow : Window
 
         UpdateAppScopeBtnLabel(row);
         return scopeBtn;
+    }
+
+    // Builds the multi-select process-name picker button + popup for an app-trigger card
+    // (mirrors BuildAppScopeButton, minus the Global/Except toggle).
+    Button BuildAppNamePickerButton(AppTriggerCard card, List<string> initialApps)
+    {
+        card.SelectedApps  = new List<string>(initialApps);
+        card.AppCheckBoxes = new List<(CheckBox, string)>();
+
+        var btn = new Button
+        {
+            Style      = (Style)FindResource("BtnGhost"),
+            Height     = 28,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 12,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Padding    = new Thickness(8, 0, 8, 0),
+            ToolTip    = "Process(es) to watch, e.g. chrome.exe — select one or more",
+        };
+        card.AppNameBtn = btn;
+
+        var popupPanel = new Border
+        {
+            Background      = Br("#222222"),
+            BorderBrush     = Br("#444444"),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(5),
+            Padding         = new Thickness(4),
+            MaxHeight       = 300,
+        };
+        var outerSV = new ScrollViewer
+        {
+            VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        var popupStack = new StackPanel();
+        outerSV.Content  = popupStack;
+        popupPanel.Child = outerSV;
+
+        var popup = new Popup
+        {
+            Child              = popupPanel,
+            StaysOpen          = false,
+            Placement          = PlacementMode.Bottom,
+            PlacementTarget    = btn,
+            AllowsTransparency = true,
+            MinWidth           = 220,
+            MaxWidth           = 320,
+        };
+        card.AppNamePopup = popup;
+
+        void RebuildPopupItems()
+        {
+            popupStack.Children.Clear();
+            card.AppCheckBoxes.Clear();
+
+            var selectedSet = new HashSet<string>(card.SelectedApps, StringComparer.OrdinalIgnoreCase);
+
+            // Source from installed Start Menu apps (same list as "Open app"), resolved
+            // to their underlying process exe name so it can be matched at runtime.
+            var entriesByProc = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // procName -> display
+            foreach (var app in _apps)
+            {
+                if (!_appProcNameCache.TryGetValue(app.Path, out var procName))
+                {
+                    procName = AppScanner.ResolveProcessName(app.Path);
+                    _appProcNameCache[app.Path] = procName;
+                }
+                if (string.IsNullOrEmpty(procName)) continue;
+                if (!entriesByProc.ContainsKey(procName)) entriesByProc[procName] = app.Name;
+            }
+            // Selected entries that don't map to an installed Start Menu app (e.g. typed manually)
+            // still need to show up, checked, under their raw process name.
+            foreach (var stored in card.SelectedApps)
+                if (!entriesByProc.ContainsKey(stored)) entriesByProc[stored] = stored;
+
+            foreach (var pair in entriesByProc.OrderBy(p => p.Value, StringComparer.OrdinalIgnoreCase))
+            {
+                var procName = pair.Key;
+                var display  = pair.Value;
+                var cb = new CheckBox
+                {
+                    Content    = display,
+                    ToolTip    = procName,
+                    Foreground = Br("#CCCCCC"),
+                    IsChecked  = selectedSet.Contains(procName),
+                    Margin     = new Thickness(4, 2, 4, 2),
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize   = 11,
+                };
+                cb.Checked += (_, __) =>
+                {
+                    if (!card.SelectedApps.Contains(procName, StringComparer.OrdinalIgnoreCase)) card.SelectedApps.Add(procName);
+                    UpdateAppNameBtnLabel(card);
+                };
+                cb.Unchecked += (_, __) =>
+                {
+                    card.SelectedApps.RemoveAll(a => string.Equals(a, procName, StringComparison.OrdinalIgnoreCase));
+                    UpdateAppNameBtnLabel(card);
+                };
+                popupStack.Children.Add(cb);
+                card.AppCheckBoxes.Add((cb, procName));
+            }
+
+            var sep = new Rectangle { Height = 1, Fill = Br("#444444"), Margin = new Thickness(0, 4, 0, 4) };
+            popupStack.Children.Add(sep);
+
+            var addRow = new Grid();
+            addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            addRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var customBox = new TextBox
+            {
+                Style      = (Style)FindResource("DarkTB"),
+                Height     = 24,
+                Padding    = new Thickness(6, 0, 6, 0),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize   = 11,
+            };
+            var customPlaceholder = new TextBlock
+            {
+                Text       = "e.g. myapp.exe",
+                Foreground = Br("#3A3A3A"),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize   = 11,
+                VerticalAlignment   = VerticalAlignment.Center,
+                Margin     = new Thickness(9, 0, 0, 0),
+                IsHitTestVisible = false,
+            };
+            customBox.TextChanged += (_, __) =>
+                customPlaceholder.Visibility = string.IsNullOrEmpty(customBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+            var customCell = new Grid();
+            customCell.Children.Add(customBox);
+            customCell.Children.Add(customPlaceholder);
+            Grid.SetColumn(customCell, 0);
+            var addBtn = new Button
+            {
+                Style   = (Style)FindResource("BtnGhost"),
+                Content = "+",
+                Width   = 24,
+                Height  = 24,
+                Padding = new Thickness(0),
+                Margin  = new Thickness(4, 0, 0, 0),
+                ToolTip = "Add a process not currently running",
+            };
+            Grid.SetColumn(addBtn, 1);
+            void CommitCustom()
+            {
+                var name = customBox.Text.Trim();
+                if (string.IsNullOrEmpty(name)) return;
+                if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name += ".exe";
+                if (!card.SelectedApps.Contains(name, StringComparer.OrdinalIgnoreCase)) card.SelectedApps.Add(name);
+                UpdateAppNameBtnLabel(card);
+                RebuildPopupItems();
+                popup.IsOpen = true;
+            }
+            addBtn.Click += (_, __) => CommitCustom();
+            customBox.KeyDown += (_, ev) => { if (ev.Key == Key.Enter) CommitCustom(); };
+            addRow.Children.Add(customCell);
+            addRow.Children.Add(addBtn);
+            popupStack.Children.Add(addRow);
+        }
+
+        btn.Click += (_, __) =>
+        {
+            RebuildPopupItems();
+            popup.IsOpen = !popup.IsOpen;
+        };
+
+        UpdateAppNameBtnLabel(card);
+        return btn;
+    }
+
+    static void UpdateAppNameBtnLabel(AppTriggerCard card)
+    {
+        if (card.SelectedApps.Count == 0)
+        {
+            card.AppNameBtn.Content     = "Select process(es)...";
+            card.AppNameBtn.Foreground  = RedBrush;
+            card.AppNameBtn.BorderBrush = RedBrush;
+        }
+        else if (card.SelectedApps.Count == 1)
+        {
+            card.AppNameBtn.Content     = card.SelectedApps[0];
+            card.AppNameBtn.Foreground  = AmberBrush;
+            card.AppNameBtn.BorderBrush = AmberBrush;
+        }
+        else
+        {
+            card.AppNameBtn.Content     = $"{card.SelectedApps.Count} processes";
+            card.AppNameBtn.Foreground  = AmberBrush;
+            card.AppNameBtn.BorderBrush = AmberBrush;
+        }
     }
 
     void RefreshChainDeleteButtons(Row row)
@@ -2295,6 +2565,135 @@ public partial class MainWindow : Window
         bool hasAppScoped  = card.Variants.Any(r => !r.IsGlobal && r.Apps.Count > 0);
         bool hasExceptApps = card.Variants.Any(r => r.IsGlobal && r.ExceptApps.Count > 0);
         card.CardBorder.BorderBrush = hasAppScoped ? AmberBrush : hasExceptApps ? AccentBrush : Br("#2A2A2A");
+    }
+
+    // =========================================================================
+    // App-launch / app-exit trigger cards
+    // =========================================================================
+    void AddAppTriggerBtn_Click(object sender, RoutedEventArgs e) =>
+        AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, "");
+
+    void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, int outputDelay, bool enabled, bool showToast, string noteLabel)
+    {
+        var card = new AppTriggerCard();
+
+        var cardBorder = new Border
+        {
+            Background      = Br("#181818"),
+            BorderBrush     = Br("#2A2A2A"),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(8),
+            Margin          = new Thickness(0, 0, 0, 6),
+            Padding         = new Thickness(12, 10, 12, 10),
+        };
+        card.CardBorder = cardBorder;
+
+        var cardContent = new StackPanel();
+
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var kindCombo = new ComboBox
+        {
+            Style      = (Style)FindResource("DarkCB"),
+            Height     = 28,
+            Width      = 110,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 11,
+        };
+        foreach (var label in new[] { "App launches", "App exits", "App focus", "App blur" }) kindCombo.Items.Add(label);
+        kindCombo.SelectedIndex = kind == "exit" ? 1 : kind == "focus" ? 2 : kind == "blur" ? 3 : 0;
+        Grid.SetColumn(kindCombo, 0);
+        card.KindCombo = kindCombo;
+
+        var appNameCell = new Grid { Margin = new Thickness(8, 0, 0, 0) };
+        Grid.SetColumn(appNameCell, 1);
+        var appNameBtn = BuildAppNamePickerButton(card, appNames);
+        appNameCell.Children.Add(appNameBtn);
+
+        var delCardBtn = new Button
+        {
+            Style   = (Style)FindResource("BtnGhost"),
+            Content = "✕",
+            Height  = 28,
+            Width   = 28,
+            Padding = new Thickness(0),
+            Margin  = new Thickness(8, 0, 0, 0),
+            FontSize = 11,
+            ToolTip = "Remove this trigger",
+        };
+        Grid.SetColumn(delCardBtn, 2);
+
+        header.Children.Add(kindCombo);
+        header.Children.Add(appNameCell);
+        header.Children.Add(delCardBtn);
+
+        var chainBorder = new Border
+        {
+            Background      = Br("#1E1E1E"),
+            BorderBrush     = Br("#2D2D2D"),
+            BorderThickness = new Thickness(1),
+            CornerRadius    = new CornerRadius(6),
+            Padding         = new Thickness(10, 8, 10, 8),
+        };
+        var chainStack = new StackPanel();
+        chainBorder.Child = chainStack;
+        var rowContainer = new Grid();
+        rowContainer.Children.Add(chainBorder);
+
+        cardContent.Children.Add(header);
+        cardContent.Children.Add(rowContainer);
+        cardBorder.Child = cardContent;
+
+        var row = new Row
+        {
+            Container   = rowContainer,
+            ChainStack  = chainStack,
+            OutputDelay = outputDelay,
+            ShowToast   = showToast,
+            NoteLabel   = noteLabel,
+            HasAppScope = false,
+        };
+        card.Row = row;
+        BuildChainStack(row, outputs, true, new List<string>(), enabled, null);
+        AddExportToRow(row, () => BuildAppTriggerBindingEntry(card));
+        if (!enabled) rowContainer.Opacity = 0.45;
+
+        delCardBtn.Click += (_, __) =>
+        {
+            AppTriggersStack.Children.Remove(cardBorder);
+            _appTriggerCards.Remove(card);
+        };
+
+        AppTriggersStack.Children.Add(cardBorder);
+        _appTriggerCards.Add(card);
+    }
+
+    static string AppTriggerPrefix(int kindComboIndex) => kindComboIndex switch
+    {
+        1 => "exit:",
+        2 => "focus:",
+        3 => "blur:",
+        _ => "launch:",
+    };
+
+    BindingEntry? BuildAppTriggerBindingEntry(AppTriggerCard card)
+    {
+        if (card.SelectedApps.Count == 0) return null;
+        var outputs = GetRowOutputs(card.Row);
+        if (outputs.Count == 0) return null;
+        var prefix = AppTriggerPrefix(card.KindCombo.SelectedIndex);
+        return new BindingEntry
+        {
+            trigger     = prefix + string.Join(",", card.SelectedApps),
+            outputs     = outputs,
+            outputDelay = card.Row.OutputDelay,
+            enabled     = card.Row.Enabled ? null : false,
+            showToast   = card.Row.ShowToast,
+            label       = string.IsNullOrWhiteSpace(card.Row.NoteLabel) ? null : card.Row.NoteLabel.Trim(),
+        };
     }
 
     // =========================================================================
@@ -3056,6 +3455,46 @@ public partial class MainWindow : Window
                     label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
                 });
             }
+        }
+
+        // --- App-launch / app-exit / app-focus / app-blur triggers ---
+        var appTriggerSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var card in _appTriggerCards)
+        {
+            var apps    = card.SelectedApps;
+            var appsLabel = string.Join(",", apps);
+            var kind    = AppTriggerPrefix(card.KindCombo.SelectedIndex).TrimEnd(':');
+            var row     = card.Row;
+            var outputsList = GetRowOutputs(row);
+
+            if (apps.Count == 0) { ShowFeedback("An app trigger is missing a process name.", FeedbackKind.Err); return; }
+            if (outputsList.Count == 0) { ShowFeedback($"App trigger '{appsLabel}': no output configured.", FeedbackKind.Err); return; }
+
+            var dedupKey = kind + ":" + string.Join(",", apps.Select(a => a.ToLowerInvariant()).OrderBy(a => a, StringComparer.Ordinal));
+            if (!appTriggerSeen.Add(dedupKey))
+            { ShowFeedback($"Duplicate app trigger: {kind}:{appsLabel}.", FeedbackKind.Err); return; }
+
+            foreach (var outp in outputsList)
+            {
+                if (outp.StartsWith("open:", StringComparison.Ordinal)    ||
+                    outp.StartsWith("cmd:", StringComparison.Ordinal)     ||
+                    outp.StartsWith("cmdw:", StringComparison.Ordinal)    ||
+                    outp.StartsWith("type:", StringComparison.Ordinal)    ||
+                    outp.StartsWith("profile:", StringComparison.Ordinal) ||
+                    outp == "toggle:pause") continue;
+                try { TriggerHelpers.ValidateShortcutOutput(outp); }
+                catch (Exception ex) { ShowFeedback($"App trigger '{appsLabel}': {ex.Message}", FeedbackKind.Err); return; }
+            }
+
+            entries.Add(new BindingEntry
+            {
+                trigger     = kind + ":" + appsLabel,
+                outputs     = outputsList,
+                outputDelay = row.OutputDelay,
+                enabled     = row.Enabled ? null : false,
+                showToast   = row.ShowToast,
+                label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
+            });
         }
 
         if (entries.Count == 0) { ShowFeedback("Add at least one binding before saving.", FeedbackKind.Err); return; }

@@ -7,6 +7,8 @@
 #                 right-scroll-down, right-scroll-up,
 #                 single-wheel, double-wheel, triple-wheel
 # Key triggers:   key:Ctrl+S  |  key:Ctrl+Alt+F5  |  key:Ctrl+S+L
+# App triggers:   launch:chrome.exe  |  exit:chrome.exe  |  focus:chrome.exe  |  blur:chrome.exe  (polled on a background timer)
+#                 Multiple process names may be comma-separated, e.g. launch:chrome.exe,notepad.exe
 #
 # Output formats in shortcuts.json:
 #   "Win+Shift+S"           keyboard chord
@@ -194,11 +196,12 @@ public class ShortcutHook {
     }
 
     public class Binding {
-        public string      Kind;          // "mouse" | "key"
+        public string      Kind;          // "mouse" | "key" | "launch" | "exit" | "focus" | "blur"
         public string      MouseGesture;
         public int         Mods;
         public byte[]      Keys;
         public string      Signature;
+        public string[]    AppNames;      // process names (e.g. "chrome.exe") for "launch"/"exit"/"focus" kind
         public string[]    Apps;          // null/empty = global; list of process names for app-scoped
         public string[]    ExceptApps;   // global binding suppressed in these process names
         public int         OutputDelay;   // ms between chained steps (0 = no delay)
@@ -214,6 +217,16 @@ public class ShortcutHook {
     const int SCROLL_DEBOUNCE_MS = 200;
     // Each signature maps to an ordered list: app-scoped bindings first, global last.
     public static Dictionary<string, List<Binding>> KeySigIndex = new Dictionary<string, List<Binding>>();
+
+    // App-launch / app-exit / app-focus / app-blur triggers, keyed by process name (e.g. "chrome.exe").
+    public static Dictionary<string, List<Binding>> LaunchBindings = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    public static Dictionary<string, List<Binding>> ExitBindings   = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    public static Dictionary<string, List<Binding>> FocusBindings  = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    public static Dictionary<string, List<Binding>> BlurBindings   = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    static HashSet<string> KnownRunningApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    static string LastFocusedApp = "";
+    static System.Threading.Timer ProcessPollTimer;
+    const int PROCESS_POLL_MS = 1500;
 
     // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
     public static List<Binding> BLeftRight        = new List<Binding>();
@@ -242,6 +255,7 @@ public class ShortcutHook {
 
     public static void LoadBindings(Binding[] bindings) {
         MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear(); ScrollDebounce.Clear();
+        LaunchBindings.Clear(); ExitBindings.Clear(); FocusBindings.Clear(); BlurBindings.Clear();
         BLeftRight.Clear(); BLeftRightDouble.Clear(); BLeftRightTriple.Clear();
         BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
         BRightScrollDown.Clear(); BRightScrollUp.Clear();
@@ -266,6 +280,14 @@ public class ShortcutHook {
             } else if (b.Kind == "key") {
                 KeyBindings.Add(b);
                 if (isScoped) scopedKbd.Add(b); else globalKbd.Add(b);
+            } else if (b.Kind == "launch") {
+                AddAppNameBindings(LaunchBindings, b);
+            } else if (b.Kind == "exit") {
+                AddAppNameBindings(ExitBindings, b);
+            } else if (b.Kind == "focus") {
+                AddAppNameBindings(FocusBindings, b);
+            } else if (b.Kind == "blur") {
+                AddAppNameBindings(BlurBindings, b);
             }
         }
         // Populate gesture lists: scoped first so ResolveMouseBinding checks them before global.
@@ -302,6 +324,61 @@ public class ShortcutHook {
             if (!KeySigIndex.TryGetValue(b.Signature, out list)) { list = new List<Binding>(); KeySigIndex[b.Signature] = list; }
             list.Add(b);
         }
+    }
+
+    // ---------- App-launch / app-exit / app-focus polling ----------
+    // No WMI process-start trace here (Win32_ProcessStartTrace needs elevation) —
+    // a lightweight poll on a background timer is simpler and good enough at this resolution.
+    static void AddAppNameBindings(Dictionary<string, List<Binding>> dict, Binding b) {
+        if (b.AppNames == null) return;
+        foreach (string name in b.AppNames) {
+            List<Binding> list;
+            if (!dict.TryGetValue(name, out list)) { list = new List<Binding>(); dict[name] = list; }
+            list.Add(b);
+        }
+    }
+
+    static HashSet<string> GetRunningAppNames() {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try {
+            foreach (Process p in Process.GetProcesses()) {
+                try { if (!string.IsNullOrEmpty(p.ProcessName)) set.Add(p.ProcessName + ".exe"); }
+                catch { } finally { p.Dispose(); }
+            }
+        } catch { }
+        return set;
+    }
+
+    static void PollProcesses(object state) {
+        try {
+            var current = GetRunningAppNames();
+            foreach (string name in current) {
+                if (KnownRunningApps.Contains(name)) continue;
+                List<Binding> list;
+                if (LaunchBindings.TryGetValue(name, out list))
+                    foreach (Binding b in list) ExecuteBinding(b);
+            }
+            foreach (string name in KnownRunningApps) {
+                if (current.Contains(name)) continue;
+                List<Binding> list;
+                if (ExitBindings.TryGetValue(name, out list))
+                    foreach (Binding b in list) ExecuteBinding(b);
+            }
+            KnownRunningApps = current;
+
+            if (FocusBindings.Count > 0 || BlurBindings.Count > 0) {
+                string fgApp = GetForegroundProcessName();
+                if (!string.IsNullOrEmpty(fgApp) && !string.Equals(fgApp, LastFocusedApp, StringComparison.OrdinalIgnoreCase)) {
+                    List<Binding> blist;
+                    if (!string.IsNullOrEmpty(LastFocusedApp) && BlurBindings.TryGetValue(LastFocusedApp, out blist))
+                        foreach (Binding b in blist) ExecuteBinding(b);
+                    List<Binding> flist;
+                    if (FocusBindings.TryGetValue(fgApp, out flist))
+                        foreach (Binding b in flist) ExecuteBinding(b);
+                    LastFocusedApp = fgApp;
+                }
+            }
+        } catch { }
     }
 
     // ---------- Clipboard helpers (selection detection) ----------
@@ -1315,10 +1392,17 @@ public class ShortcutHook {
             throw new Exception("Keyboard hook failed: " + err);
         }
 
+        if (LaunchBindings.Count > 0 || ExitBindings.Count > 0 || FocusBindings.Count > 0 || BlurBindings.Count > 0) {
+            KnownRunningApps = GetRunningAppNames();
+            LastFocusedApp = GetForegroundProcessName();
+            ProcessPollTimer = new System.Threading.Timer(PollProcesses, null, PROCESS_POLL_MS, PROCESS_POLL_MS);
+        }
+
         MSG msg; int r;
         while ((r = GetMessage(out msg, IntPtr.Zero, 0, 0)) > 0) {
             TranslateMessage(ref msg); DispatchMessage(ref msg);
         }
+        if (ProcessPollTimer != null) { ProcessPollTimer.Dispose(); ProcessPollTimer = null; }
         UnhookWindowsHookEx(kbdHookId); UnhookWindowsHookEx(mouseHookId);
     }
 }
@@ -1459,6 +1543,22 @@ foreach ($b in $rawBindings) {
             $parsed = Resolve-KeyTrigger $Matches[1]
             $nb.Kind = 'key'; $nb.Mods = $parsed.Mods; $nb.Keys = $parsed.Keys
             $nb.Signature = [ShortcutHook]::MakeSignature($parsed.Mods, $parsed.Keys)
+        } elseif ($b.trigger -match '^launch:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip launch trigger with empty app name"; continue }
+            $nb.Kind = 'launch'; $nb.AppNames = $appNames
+        } elseif ($b.trigger -match '^exit:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip exit trigger with empty app name"; continue }
+            $nb.Kind = 'exit'; $nb.AppNames = $appNames
+        } elseif ($b.trigger -match '^focus:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip focus trigger with empty app name"; continue }
+            $nb.Kind = 'focus'; $nb.AppNames = $appNames
+        } elseif ($b.trigger -match '^blur:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip blur trigger with empty app name"; continue }
+            $nb.Kind = 'blur'; $nb.AppNames = $appNames
         } else {
             Write-Log "Skip unknown trigger prefix: $($b.trigger)"; continue
         }
@@ -1545,7 +1645,8 @@ try {
         $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }
         $scope = if ($x.Apps -and $x.Apps.Length -gt 0) { " [apps:$($x.Apps -join ',')]" } else { '' }
         if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}{3}" -f $x.MouseGesture, $dest, $delay, $scope) }
-        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
+        elseif ($x.Kind -eq 'key') { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
+        else { Write-Log ("  {0}:{1} -> {2}{3}" -f $x.Kind, ($x.AppNames -join ','), $dest, $delay) }
     }
 } catch { Write-Log "LoadBindings failed: $_"; exit 1 }
 
