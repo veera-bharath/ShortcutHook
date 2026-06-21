@@ -73,6 +73,10 @@ public sealed class Row
     public bool      ShowToast        = false;
     public CheckBox? ToastToggle;
 
+    // optional user-defined note/label for this binding row
+    public string  NoteLabel = "";
+    public TextBox? NoteBox;
+
     // gesture-specific action options (null → StandardActions)
     public ActionDef[]? AvailableActions;
 }
@@ -510,6 +514,7 @@ public partial class MainWindow : Window
             enabled     = row.Enabled ? null : false,
             debounce    = row.Debounce,
             showToast   = row.ShowToast,
+            label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
         };
     }
 
@@ -527,6 +532,7 @@ public partial class MainWindow : Window
             exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
             enabled     = row.Enabled ? null : false,
             showToast   = row.ShowToast,
+            label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
         };
     }
 
@@ -772,7 +778,7 @@ public partial class MainWindow : Window
                     bool isGlobal  = b.apps == null || b.apps.Count == 0;
                     var  apps      = b.apps      ?? new List<string>();
                     var  exceptApps = b.exceptApps ?? new List<string>();
-                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, exceptApps, b.enabled != false, b.showToast);
+                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, exceptApps, b.enabled != false, b.showToast, b.label ?? "");
                 })
                 .ToList();
             AddKbdTriggerCard(trig, variants);
@@ -1493,7 +1499,8 @@ public partial class MainWindow : Window
                 true, new List<string>(), globalEntry?.enabled != false, isGlobal: true,
                 debounce: globalEntry?.debounce ?? false,
                 showToast: globalEntry?.showToast ?? false,
-                exceptApps: globalEntry?.exceptApps ?? new List<string>());
+                exceptApps: globalEntry?.exceptApps ?? new List<string>(),
+                noteLabel: globalEntry?.label ?? "");
 
             // App-scoped variant rows
             if (bindings != null)
@@ -1501,7 +1508,7 @@ public partial class MainWindow : Window
                     AddMouseVariantRow(def, gestureSP,
                         b.outputs ?? new List<string> { "" },
                         b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false,
-                        debounce: b.debounce, showToast: b.showToast);
+                        debounce: b.debounce, showToast: b.showToast, noteLabel: b.label ?? "");
 
             MouseStack.Children.Add(gestureSP);
         }
@@ -1510,7 +1517,7 @@ public partial class MainWindow : Window
 
     void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
                             bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false,
-                            bool showToast = false, List<string>? exceptApps = null)
+                            bool showToast = false, List<string>? exceptApps = null, string noteLabel = "")
     {
         // col0=175: gesture label (global) or indent arrow (variant)
         // col1=*:   chain block border (different shade per global/variant) containing the chain stack
@@ -1576,6 +1583,7 @@ public partial class MainWindow : Window
             AvailableActions = BuildActionsForGesture(def),
             Debounce         = debounce,
             ShowToast        = showToast,
+            NoteLabel        = noteLabel,
         };
 
         BuildChainStack(row, outputs, isGlobal_scope, apps, enabled, exceptApps);
@@ -1604,6 +1612,8 @@ public partial class MainWindow : Window
     {
         row.ChainStack.Children.Clear();
         row.Chain.Clear();
+
+        row.ChainStack.Children.Add(BuildNoteRow(row));
 
         var effectiveOutputs = outputs.Count > 0 ? outputs : new List<string> { "" };
         foreach (var o in effectiveOutputs)
@@ -1703,6 +1713,64 @@ public partial class MainWindow : Window
     //   Row 2 (bottom, right-aligned): all toggles — enable, toast, and (scroll
     //   gestures only) debounce. Keeping every toggle on its own row means it
     //   never competes for space with the chain/delay/scope controls above.
+    // Row 0: note/label editor (pencil icon + inline-editable dim text) — sits above everything else.
+    FrameworkElement BuildNoteRow(Row row)
+    {
+        var noteRow = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin              = new Thickness(0, 0, 0, 5),
+        };
+
+        var pencilBtn = new TextBlock
+        {
+            Text       = "✎",
+            Foreground = DimBrush,
+            FontSize   = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin     = new Thickness(0, 0, 5, 0),
+            Cursor     = Cursors.Hand,
+            ToolTip    = "Add a note/label for this binding",
+        };
+        var noteGrid = new Grid { VerticalAlignment = VerticalAlignment.Center, Width = 260 };
+        var noteBox = new TextBox
+        {
+            Style       = (Style)FindResource("DarkTB"),
+            Height      = 20,
+            FontFamily  = new FontFamily("Consolas"),
+            FontSize    = 10,
+            Padding     = new Thickness(3, 0, 3, 0),
+            Text        = row.NoteLabel,
+            Background  = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+        };
+        var notePlaceholder = new TextBlock
+        {
+            Text       = "label",
+            Foreground = Br("#3A3A3A"),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize   = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin     = new Thickness(4, 0, 0, 0),
+            IsHitTestVisible = false,
+            Visibility = string.IsNullOrEmpty(row.NoteLabel) ? Visibility.Visible : Visibility.Collapsed,
+        };
+        noteBox.TextChanged += (_, __) =>
+        {
+            row.NoteLabel = noteBox.Text;
+            notePlaceholder.Visibility = string.IsNullOrEmpty(noteBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+        };
+        noteGrid.Children.Add(noteBox);
+        noteGrid.Children.Add(notePlaceholder);
+        row.NoteBox = noteBox;
+        pencilBtn.MouseLeftButtonUp += (_, __) => noteBox.Focus();
+
+        noteRow.Children.Add(pencilBtn);
+        noteRow.Children.Add(noteGrid);
+        return noteRow;
+    }
+
     FrameworkElement BuildChainControlRow(Row row, bool isGlobal, List<string> apps, bool enabled, List<string>? exceptApps = null)
     {
         // ---- Toggle row (placed last) ----
@@ -2040,7 +2108,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -2136,7 +2204,7 @@ public partial class MainWindow : Window
             },
             onRestore: () => RestoreTriggerButton(capBtn, card.Trigger));
 
-        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), new List<string>(), true, false);
+        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), new List<string>(), true, false, "");
 
         delCardBtn.Click += (_, __) =>
         {
@@ -2149,14 +2217,14 @@ public partial class MainWindow : Window
         _kbdCards.Add(card);
 
         if (variants is { Count: > 0 })
-            foreach (var (o, d, isG, apps, ex, e, st) in variants) AddKbdVariantRow(card, o, d, isG, apps, ex, e, st);
+            foreach (var (o, d, isG, apps, ex, e, st, nl) in variants) AddKbdVariantRow(card, o, d, isG, apps, ex, e, st, nl);
         else
-            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), new List<string>(), true, false);
+            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), new List<string>(), true, false, "");
 
         UpdateCardAccentBorder(card);
     }
 
-    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, List<string> scopeExceptApps, bool enabled, bool showToast)
+    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, List<string> scopeExceptApps, bool enabled, bool showToast, string noteLabel = "")
     {
         // col0=*: chain block border containing chain items + control row
         // col1=Auto: delete-variant button — top-aligned
@@ -2203,6 +2271,7 @@ public partial class MainWindow : Window
             ChainStack  = chainStack,
             OutputDelay = outputDelay,
             ShowToast   = showToast,
+            NoteLabel   = noteLabel,
         };
         BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled, scopeExceptApps);
         AddExportToRow(row, () => BuildKbdBindingEntry(card.Trigger, row));
@@ -2884,6 +2953,7 @@ public partial class MainWindow : Window
                 if (!row.Enabled) entry.enabled = false;
                 if (row.Debounce)  entry.debounce = true;
                 if (row.ShowToast) entry.showToast = true;
+                if (!string.IsNullOrWhiteSpace(row.NoteLabel)) entry.label = row.NoteLabel.Trim();
                 entries.Add(entry);
             }
         }
@@ -2924,6 +2994,7 @@ public partial class MainWindow : Window
                             exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
                             enabled     = false,
                             showToast   = row.ShowToast,
+                            label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
                         });
                     continue;
                 }
@@ -2982,6 +3053,7 @@ public partial class MainWindow : Window
                     apps        = row.IsGlobal ? null : new List<string>(row.Apps),
                     exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
                     showToast   = row.ShowToast,
+                    label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
                 });
             }
         }
