@@ -93,14 +93,23 @@ internal static class TriggerHelpers
             }
             return "key:" + p.Mods + ":" + string.Join(",", p.Keys);
         }
-        if (t.StartsWith("launch:", StringComparison.Ordinal) || t.StartsWith("exit:", StringComparison.Ordinal))
+        if (t.StartsWith("launch:", StringComparison.Ordinal) || t.StartsWith("exit:", StringComparison.Ordinal) ||
+            t.StartsWith("focus:", StringComparison.Ordinal)  || t.StartsWith("blur:", StringComparison.Ordinal))
         {
-            var prefix = t.StartsWith("launch:", StringComparison.Ordinal) ? "launch:" : "exit:";
-            var app = t.Substring(prefix.Length).Trim();
-            if (string.IsNullOrEmpty(app)) throw new ArgumentException("App name cannot be empty");
-            return prefix + app.ToLowerInvariant();
+            string prefix =
+                t.StartsWith("launch:", StringComparison.Ordinal) ? "launch:" :
+                t.StartsWith("exit:",   StringComparison.Ordinal) ? "exit:"   :
+                t.StartsWith("focus:",  StringComparison.Ordinal) ? "focus:"  : "blur:";
+            var apps = t.Substring(prefix.Length).Split(',')
+                .Select(a => a.Trim().ToLowerInvariant())
+                .Where(a => a.Length > 0)
+                .Distinct()
+                .OrderBy(a => a, StringComparer.Ordinal)
+                .ToArray();
+            if (apps.Length == 0) throw new ArgumentException("App name cannot be empty");
+            return prefix + string.Join(",", apps);
         }
-        throw new ArgumentException("Trigger must start with 'mouse:', 'key:', 'launch:', or 'exit:'");
+        throw new ArgumentException("Trigger must start with 'mouse:', 'key:', 'launch:', 'exit:', 'focus:', or 'blur:'");
     }
 
     public static void ValidateShortcutOutput(string combo)
@@ -602,6 +611,24 @@ internal static class StartupService
 
 internal static class AppScanner
 {
+    // Resolves a .lnk shortcut to the process executable name it launches (e.g. "chrome.exe").
+    // Returns null for shortcuts with no resolvable file target (e.g. UWP "shell:AppsFolder\..." links).
+    public static string? ResolveProcessName(string lnkPath)
+    {
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null) return null;
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic shortcut = shell.CreateShortcut(lnkPath);
+            string target = shortcut.TargetPath as string ?? "";
+            if (string.IsNullOrWhiteSpace(target) || !target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                return null;
+            return Path.GetFileName(target);
+        }
+        catch { return null; }
+    }
+
     public static List<AppEntry> Scan()
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
