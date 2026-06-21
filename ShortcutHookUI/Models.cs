@@ -41,6 +41,9 @@ public sealed class BindingEntry
     // Show a brief on-screen toast when this binding fires. Omitted when false.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool showToast { get; set; } = false;
+    // Optional user-defined note/label for this binding row. UI-only metadata.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? label { get; set; }
 }
 
 public sealed class ConfigRoot
