@@ -848,14 +848,10 @@ public class ShortcutHook {
         // Give the target app time to read the clipboard before we restore it.
         Thread.Sleep(CLIP_WAIT_MS);
         RestoreClipboard(saved);
-
-        // Restore the modifiers that were held before typing started.
-        if (uAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
-        if (uShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
-        if (uCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-
-        if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
-        else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
+        // Modifiers are NOT re-pressed here. TypeText runs on a background thread and
+        // CLIP_WAIT_MS is long enough that the user has already released the physical
+        // trigger keys. Synthetically re-pressing them creates ghost key-down events
+        // with no matching key-up, leaving Ctrl/Shift stuck for all subsequent input.
     }
 
     static void SetClipboardText(string text) {
