@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Windows-only shortcut-mapping tool. A background PowerShell process installs a low-level mouse hook (`WH_MOUSE_LL`) *and* a low-level keyboard hook (`WH_KEYBOARD_LL`) and maps user-defined triggers (mouse gestures, keyboard combos, or process lifecycle events) to outputs: keyboard chords, shell-execute targets, shell commands, text expansion, horizontal scroll, pause/resume, or profile switches.
+A Windows-only shortcut-mapping tool. A background C# daemon exe installs a low-level mouse hook (`WH_MOUSE_LL`) *and* a low-level keyboard hook (`WH_KEYBOARD_LL`) and maps user-defined triggers (mouse gestures, keyboard combos, or process lifecycle events) to outputs: keyboard chords, shell-execute targets, shell commands, text expansion, horizontal scroll, pause/resume, or profile switches.
 
 Two-piece design: **daemon** is a self-contained .NET 8 console exe (`ShortcutHookDaemon.exe`); **settings UI** is a compiled .NET 8 WPF app distributed as a single-file self-contained `.exe`. Requires Windows 10/11. Neither exe has a runtime prerequisite — .NET 8 is bundled in both, and the daemon exe is embedded as a manifest resource inside the UI exe.
 
@@ -12,7 +12,7 @@ Two-piece design: **daemon** is a self-contained .NET 8 console exe (`ShortcutHo
 
 - `build/ShortcutHookUI.exe` — launches the settings UI (WPF dark-mode settings panel).
 - `ShortcutHookUI/Publish.bat` — rebuilds the UI from source and drops a fresh `ShortcutHookUI.exe` into `build/`.
-- Log: `ShortcutHook.log` in the root directory (appended, UTF-8).
+- Log: `C:\Tools\ShortcutHook\ShortcutHook.log` (appended, UTF-8).
 - Config: `C:\Tools\ShortcutHook\shortcuts.json` (fixed path after install).
 
 No test harness. Verification is manual: run the daemon, perform the trigger, confirm the chord fires in a target app.
@@ -156,7 +156,7 @@ The mouse hook still uses the older `reinjDown`/`reinjUp` counter pattern instea
 
 ### Output dispatch: FireOutput vs. Process.Start
 
-All fires go through `ExecuteBinding(Binding b)`, which branches on the binding: `b.OpenPath != null` → `Process.Start` on a background thread with `UseShellExecute = true`; otherwise → `FireOutput(b.Output)`. Exactly one of `Output`/`OpenPath` is set per binding (enforced by PS at load time).
+All fires go through `ExecuteBinding(Binding b)`, which branches on the binding: `b.OpenPath != null` → `Process.Start` on a background thread with `UseShellExecute = true`; otherwise → `FireOutput(b.Output)`. Exactly one of `Output`/`OpenPath` is set per binding (enforced by `ConfigLoader` at load time).
 
 When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifiers the user is physically holding, releases them via synthesized `KEYEVENTF_KEYUP`, emits the output chord cleanly, then re-presses the released modifiers (Win excluded — see Win-key suppression above).
 
@@ -199,7 +199,7 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 **First-run setup flow:**
 - On launch, `UpdateSetupState()` checks `_setupComplete` + `IsInstalled()` + `IsAppInstalled(_appRoot)`.
 - If not fully set up, `SetupRoot` overlay is shown (covers the main UI).
-- Step 1: folder picker → `InstallService.Install(appRoot)`. Shows both paths read-only: App (chosen) and Script (`C:\Tools\ShortcutHook`).
+- Step 1: folder picker → `InstallService.Install(appRoot)`. Shows both paths read-only: App (chosen) and Daemon (`C:\Tools\ShortcutHook`).
 - Steps 2 & 3: optional Start Menu / Desktop shortcuts.
 - Finish: `MarkSetupComplete()`, create shortcuts, relaunch from installed exe location if needed.
 
@@ -234,6 +234,6 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 - Adding a new output kind requires: a new nullable field on `ShortcutHook.Binding` (or a new `ChainStep` field), a new branch in `ExecuteBinding`/`ExecuteStep` (`HookEngine.cs`), a new parsing branch in `ConfigLoader.cs`, and UI-side support in `MainWindow.xaml.cs` (`ActionKind` enum + `ActionLabels`/`ActionOrder` arrays, a `SetChainItemOutput` branch, a `GetChainItemOutput` branch, and `DetectAction` disambiguation). `profile:` outputs skip all `ValidateShortcutOutput` guard blocks in the save flow.
 - The `ignoredApps` check sits in both `MouseCallback` and `KbdCallback`, after the `IsPaused` check and (in kbd) after the injected-event guard. It calls `GetForegroundWindow` → `GetWindowThreadProcessId` → `Process.GetProcessById`. This is safe inside a LL hook only because it's a fast in-process lookup; do not add any blocking I/O around it.
 - The UI's "Stop" kills the daemon process. Because `Start()` blocks in `GetMessage`, there is no graceful shutdown path — kill is the design. The `finally` releases the mutex but won't run on kill; the OS reclaims the mutex on process exit.
-- `InstallService.ScriptRoot` is a hardcoded constant (`C:\Tools\ShortcutHook`). The daemon script and config always live here. The app exe lives at `_appRoot` (user-chosen, stored in registry). Don't conflate the two.
+- `InstallService.ScriptRoot` is a hardcoded constant (`C:\Tools\ShortcutHook`). The daemon exe and config always live here. The UI exe lives at `_appRoot` (user-chosen, stored in registry). Don't conflate the two.
 - When a keyboard combo is a strict prefix of a registered trigger but not itself registered (e.g. only `Ctrl+S+L` is bound, user types `Ctrl+S`), the shorter combo is swallowed while waiting for the longer one. If the longer key never comes, the swallowed key is **replayed** via `prefixSwallowed` tracking — so `Ctrl+S` still works. The replay fires on key-up and only if no binding fired during the wait.
 - Win-key bindings (`key:Win+X → open:...`): the synthetic Win-up that would normally clean up key state is deferred until the physical Win-up is swallowed. At that point a Ctrl-down/Win-up/Ctrl-up sequence is injected to release Win without triggering Start Menu (`releaseWinOnSuppress` flag). Never inject synthetic Win-up eagerly for `open:` bindings — it causes Start Menu to open.
