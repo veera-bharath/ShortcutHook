@@ -166,11 +166,20 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 
 `ShortcutHookUI/` is a .NET 8 WPF project. Build output: a single-file self-contained `ShortcutHookUI.exe` (68 MB, .NET 8 runtime bundled).
 
+**Shell layout (900 × 700, `MinWidth=680`):**
+The window is structured as three zones inside a two-row outer `Grid`:
+- **Top bar** (Row 0, 48 px) — app title left; compact status dot + Running/Stopped text + Start/Stop button + Settings gear right. No card border. `HookBtn`, `StatusDot`, `StatusText`, and `PausedBadge` live here.
+- **Content area** (Row 1) — three columns: sidebar (190 px) | 1 px divider | main content (*).
+  - **Sidebar** — "PROFILES" label, `SidebarProfileStack` (scrollable list of profile rows with active-highlight), `SidebarAddProfileBtn`. Clicking a profile calls `SwitchActiveProfile`; `+ New Profile` opens the create form directly.
+  - **Main content** — Update banner, search bar + Import button, `ScrollViewer` with the three accordion sections (Mouse/Keyboard/App Triggers), and the **save bar** pinned to the bottom.
+- **Save bar** (`x:Name="SaveBar"`, `Visibility="Collapsed"`) — hidden by default; slides in when `MarkDirty()` is called. Contains `FeedbackMsg` (left) and `SaveBtn` (right). Hides again after a successful save once the 4 s feedback timer fires (via `ClearDirty()`). The timer tick also hides `SaveBar` if `!_hasUnsavedChanges`.
+- **Overlays** — `SetupRoot` (first-run, `Grid.RowSpan="2"`) and `SettingsRoot` (modal, `Grid.RowSpan="2"`) both span both rows so they cover the full window including the top bar.
+
 **Project layout:**
 - `ShortcutHookUI.csproj` — `net8.0-windows`, `UseWPF=true`, `UseWindowsForms=true` (needed for `FolderBrowserDialog`), `PublishSingleFile=true`, `SelfContained=true`, `RuntimeIdentifier=win-x64`. Embeds the built daemon exe as a manifest resource (`ShortcutHookUI.Runtime.ShortcutHookDaemon.exe`); the `BeforeBuild` target runs `dotnet publish` on `ShortcutHookDaemon.csproj` first and copies the output into `Resources/`.
 - `App.xaml` / `App.xaml.cs` — minimal WPF app shell.
-- `MainWindow.xaml` — all shared styles (`BtnPrimary`, `BtnGhost`, `DarkTB`, `DarkCB`, `Toggle`, `Card`, `SectionLabel`, `DarkCBItem`) and the main window layout. Keyboard/mouse row grids are constructed in code, not via item templates. Contains a profile dropdown + Settings gear in the header; a search bar above the scroll view; and a `SetupRoot` overlay for first-run setup.
-- `MainWindow.xaml.cs` — main window behavior. `_appRoot` tracks the user-chosen exe install folder (from registry). All config reads/writes use `InstallService.ScriptRoot` (fixed path). Key state: `_mouseRows`, `_kbdRows`, `_appTriggerRows`, `_setupComplete`, capture fields. `ActionKind` enum + `ActionLabels`/`ActionOrder` arrays drive the action-type picker in each chain item.
+- `MainWindow.xaml` — all shared styles (`BtnPrimary`, `BtnGhost`, `DarkTB`, `DarkCB`, `Toggle`, `Card`, `SectionLabel`, `DarkCBItem`) and the main window layout. Keyboard/mouse row grids are constructed in code, not via item templates. Contains the top bar, sidebar profile list, binding accordions, conditional save bar, and overlay panels (`SetupRoot`, `SettingsRoot`). The startup-on-login toggle lives inside `SettingsMenuView` (first card).
+- `MainWindow.xaml.cs` — main window behavior. `_appRoot` tracks the user-chosen exe install folder (from registry). All config reads/writes use `InstallService.ScriptRoot` (fixed path). Key state: `_mouseRows`, `_kbdRows`, `_appTriggerRows`, `_setupComplete`, `_hasUnsavedChanges`, capture fields. `ActionKind` enum + `ActionLabels`/`ActionOrder` arrays drive the action-type picker in each chain item. `MarkDirty()` / `ClearDirty()` manage save-bar visibility.
 - `AboutWindow.xaml` / `AboutWindow.xaml.cs` — small dark modal showing app name, version (read from assembly), author (Veera Bharath), and a GitHub button.
 - `LogViewerWindow.xaml` / `LogViewerWindow.xaml.cs` — dark resizable window (680×520) that tails `ShortcutHook.log` (last 2000 lines) via `FileSystemWatcher`. Non-modal — stays open while editing bindings. Provides Open Log File, Open Folder, and Clear Log (with confirmation) actions. Opened from Settings → View Logs.
 - `Models.cs` — `AppEntry`, `BindingEntry` (includes `label`, `outputDelay`, `debounce`, `showToast`), `ConfigRoot` (includes `ignoredApps`, `activeProfile`, `profiles`), `MouseGestureDef`, `ParsedKey`, `Profile`.
@@ -216,7 +225,8 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 - An `↓ Import` button reads JSON from the clipboard, validates via `TriggerHelpers`, dedup-checks against the active profile, and appends via `ConfigService.AddBindingToActiveProfile`. Exact duplicates are blocked; prefix pairs produce an amber warning but are allowed.
 
 **Save flow:**
-- Walks the 7 fixed mouse rows + any keyboard rows + app-trigger rows, runs `TriggerHelpers.CanonicalizeTrigger` for dedup, blocks exact duplicates, validates shortcut outputs. Prefix pairs are allowed but shown as an amber toast (~80 ms latency warning). Writes `shortcuts.json` to `InstallService.ScriptRoot`, then kill + relaunch the daemon if it was running.
+- `SaveBar` is hidden on load; `MarkDirty()` makes it visible. It is wired to: adding/deleting a keyboard trigger, adding/deleting an app trigger, and `FinalizeCapture` (keyboard shortcut recorded). `ClearDirty()` is called after a successful save and after a profile switch (pending changes are discarded on switch).
+- `SaveBtn_Click` walks the fixed mouse rows + keyboard rows + app-trigger rows, runs `TriggerHelpers.CanonicalizeTrigger` for dedup, blocks exact duplicates, validates shortcut outputs. Prefix pairs are allowed but shown as an amber toast (~80 ms latency warning). Writes `shortcuts.json` to `InstallService.ScriptRoot`, then kill + relaunch the daemon if it was running. On success, calls `ClearDirty()` before `ShowFeedback`; the save bar stays visible for 4 s (showing feedback) then hides.
 
 **Daemon interop:**
 - Liveness: `Mutex.OpenExisting(@"Global\ShortcutHook")`.
