@@ -60,7 +60,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
 
-- 🚀 [Download v1.6 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.6/ShortcutHookUI.exe)
+- 🚀 [Download v1.7.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.7.0/ShortcutHookUI-1.7.0.exe)
 - 📦 [Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)
 
 1. Run `ShortcutHookUI.exe`
@@ -70,7 +70,7 @@ Grab the latest **ShortcutHookUI.exe** directly or browse all available versions
 That's it. The daemon starts automatically whenever you save.
 
 > [!NOTE]
-> **SmartScreen / Antivirus warnings**: Since this app is unsigned, Windows SmartScreen may show "Windows protected your PC" on first launch — click **More info → Run anyway**. Your antivirus may also flag the background daemon, since it installs low-level keyboard/mouse hooks (a pattern shared with keyloggers, but used here only to detect your configured shortcuts). The source is fully open — review it or build from source yourself if you'd like to verify this before running.
+> **SmartScreen / Antivirus warnings**: The exe is currently unsigned (code signing via SignPath is in progress). Windows SmartScreen may show "Windows protected your PC" on first launch — click **More info → Run anyway**. Your antivirus may also flag the background daemon, since it installs low-level keyboard/mouse hooks (a pattern shared with keyloggers, but used here only to detect your configured shortcuts). The source is fully open — review it or build from source yourself if you'd like to verify this before running.
 
 ## Install layout
 
