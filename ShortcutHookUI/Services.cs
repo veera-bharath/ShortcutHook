@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Reflection;
-using System.Management;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -380,13 +379,18 @@ internal static class InstallService
     const string AppInstallPathValue  = "AppInstallPath";
     const string SetupCompleteValue   = "SetupComplete";
     const string DismissedUpdateValue = "DismissedUpdateVersion";
-    const string ScriptResourceName   = "ShortcutHookUI.Runtime.ShortcutHook.ps1";
-    const string ScriptFileName       = "ShortcutHook.ps1";
+    const string ScriptResourceName   = "ShortcutHookUI.Runtime.ShortcutHookDaemon.exe";
+    const string ScriptFileName       = "ShortcutHookDaemon.exe";
     const string UiExeFileName        = "ShortcutHookUI.exe";
 
     // Script + config always live here — fixed, never changes.
     public static readonly string ScriptRoot = @"C:\Tools\ShortcutHook";
-    public static string ScriptPath => Path.Combine(ScriptRoot, ScriptFileName);
+
+    // Primary name for the daemon executable path.
+    public static string DaemonPath => Path.Combine(ScriptRoot, ScriptFileName);
+
+    // Deprecated alias — kept for any callers that haven't been updated yet.
+    public static string ScriptPath => DaemonPath;
 
     // Written by the daemon whenever the global pause toggle fires.
     public static string PauseStatePath => Path.Combine(ScriptRoot, "pause.state");
@@ -446,11 +450,11 @@ internal static class InstallService
 
     public static void Install(string appRoot)
     {
-        // 1. Extract embedded PS1 to fixed script location.
+        // 1. Extract embedded daemon exe to fixed script location.
         Directory.CreateDirectory(ScriptRoot);
         using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(ScriptResourceName)
-               ?? throw new InvalidOperationException("Embedded daemon script not found."))
-        using (var file = File.Create(ScriptPath))
+               ?? throw new InvalidOperationException("Embedded daemon executable not found."))
+        using (var file = File.Create(DaemonPath))
         {
             stream.CopyTo(file);
         }
@@ -541,12 +545,11 @@ internal static class DaemonService
 
     public static void Start()
     {
-        var ps = InstallService.ScriptPath;
-        if (!File.Exists(ps))
-            throw new FileNotFoundException("ShortcutHook.ps1 is not installed.", ps);
-        var psi = new ProcessStartInfo("powershell.exe")
+        var daemon = InstallService.DaemonPath;
+        if (!File.Exists(daemon))
+            throw new FileNotFoundException("ShortcutHookDaemon.exe is not installed.", daemon);
+        var psi = new ProcessStartInfo(daemon)
         {
-            Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{ps}\"",
             WorkingDirectory = InstallService.ScriptRoot,
             WindowStyle = ProcessWindowStyle.Hidden,
             CreateNoWindow = true,
@@ -557,22 +560,11 @@ internal static class DaemonService
 
     public static void Stop()
     {
-        try
+        foreach (var p in Process.GetProcessesByName("ShortcutHookDaemon"))
         {
-            using var searcher = new ManagementObjectSearcher(
-                "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'powershell.exe'");
-            foreach (var obj in searcher.Get())
-            {
-                var cmd = obj["CommandLine"] as string ?? "";
-                if (cmd.IndexOf("ShortcutHook.ps1", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    cmd.IndexOf("ShortcutHookUI",   StringComparison.OrdinalIgnoreCase) < 0)
-                {
-                    var pid = Convert.ToInt32(obj["ProcessId"]);
-                    try { Process.GetProcessById(pid).Kill(); } catch { }
-                }
-            }
+            try { p.Kill(); } catch { }
+            p.Dispose();
         }
-        catch { }
     }
 }
 
@@ -589,17 +581,17 @@ internal static class StartupService
         var lnk = LnkPath();
         if (enable)
         {
-            var ps = InstallService.ScriptPath;
-            if (!File.Exists(ps))
-                throw new FileNotFoundException("ShortcutHook.ps1 is not installed.", ps);
+            var daemon = InstallService.DaemonPath;
+            if (!File.Exists(daemon))
+                throw new FileNotFoundException("ShortcutHookDaemon.exe is not installed.", daemon);
             var shellType = Type.GetTypeFromProgID("WScript.Shell")
                 ?? throw new InvalidOperationException("WScript.Shell unavailable");
             dynamic shell = Activator.CreateInstance(shellType)!;
             dynamic s = shell.CreateShortcut(lnk);
-            s.TargetPath       = "powershell.exe";
-            s.Arguments        = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{ps}\"";
+            s.TargetPath       = daemon;
+            s.Arguments        = "";
             s.WorkingDirectory = InstallService.ScriptRoot;
-            s.WindowStyle      = 7;
+            s.WindowStyle      = 7; // minimized
             s.Save();
         }
         else
