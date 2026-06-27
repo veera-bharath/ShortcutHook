@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  id-token: write  # required by SignPath
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore ShortcutHookUI/ShortcutHookUI.csproj
+
+      - name: Publish
+        run: >
+          dotnet publish ShortcutHookUI/ShortcutHookUI.csproj
+          -c Release
+          -v minimal
+          /p:Version=${{ steps.version.outputs.version }}
+          /p:AssemblyVersion=${{ steps.version.outputs.version }}.0
+          /p:FileVersion=${{ steps.version.outputs.version }}.0
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          cp "ShortcutHookUI/bin/Release/net8.0-windows/win-x64/publish/ShortcutHookUI.exe" \
+             "ShortcutHookUI-${{ steps.version.outputs.version }}.exe"
+
+      - name: Upload unsigned artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned
+          path: ShortcutHookUI-${{ steps.version.outputs.version }}.exe
+          retention-days: 7
+
+  sign:
+    name: Sign (SignPath)
+    needs: build
+    runs-on: ubuntu-latest
+    # Remove the `if` line once the SignPath OSS project is approved and
+    # SIGNPATH_API_TOKEN / SIGNPATH_ORGANIZATION_ID secrets are configured.
+    if: false
+
+    steps:
+      - name: Download unsigned artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned
+
+      - name: Sign with SignPath
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ShortcutHook
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: ShortcutHookUI
+          github-artifact-id: ${{ needs.build.outputs.version }}
+          output-artifact-directory: signed/
+          wait-for-completion: true
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed
+          path: signed/ShortcutHookUI-${{ needs.build.outputs.version }}.exe
+          retention-days: 7
+
+  release:
+    name: GitHub Release
+    needs: [build, sign]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          # Use signed artifact when available, fall back to unsigned.
+          name: ${{ needs.sign.result == 'success' && 'signed' || 'unsigned' }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ShortcutHookUI-${{ needs.build.outputs.version }}.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
