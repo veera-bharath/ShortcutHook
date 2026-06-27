@@ -293,6 +293,8 @@ public partial class MainWindow : Window
     bool _kbdExpanded   = false;
     bool _appTriggersExpanded = false;
 
+    bool   _hasUnsavedChanges    = false;
+
     string _filterText           = "";
     bool   _filterWasActive      = false;
     bool   _preFilterMouseExpanded = true;
@@ -315,7 +317,12 @@ public partial class MainWindow : Window
         _pollTimer.Tick += (_, __) => UpdateHookStatus();
 
         _feedbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
-        _feedbackTimer.Tick += (_, __) => { FeedbackMsg.Visibility = Visibility.Collapsed; _feedbackTimer.Stop(); };
+        _feedbackTimer.Tick += (_, __) =>
+        {
+            FeedbackMsg.Visibility = Visibility.Collapsed;
+            _feedbackTimer.Stop();
+            if (!_hasUnsavedChanges) SaveBar.Visibility = Visibility.Collapsed;
+        };
 
         SourceInitialized += OnSourceInitialized;
         Loaded            += OnLoaded;
@@ -1192,6 +1199,7 @@ public partial class MainWindow : Window
         ConfigService.SetActiveProfile(InstallService.ScriptRoot, name);
         ReloadBindingsFromConfig();
         RefreshProfileDropdown();
+        ClearDirty();
         RestartDaemonIfRunning();
         ShowFeedback($"Switched to '{name}'.", FeedbackKind.Ok);
     }
@@ -1429,85 +1437,70 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
-    // Header profile switcher
+    // Sidebar profile list
     // =========================================================================
-    void ProfileSwitcherBtn_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProfileSwitcherPopup.IsOpen) { ProfileSwitcherPopup.IsOpen = false; return; }
-        RefreshProfileDropdown();
-        ProfileSwitcherPopup.IsOpen = true;
-    }
-
     void RefreshProfileDropdown()
     {
         var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
         _lastKnownActiveProfile = config.activeProfile;
-        ProfileSwitcherLabel.Text = config.activeProfile;
 
-        ProfileSwitcherList.Children.Clear();
+        SidebarProfileStack.Children.Clear();
 
         foreach (var profile in config.profiles)
         {
             var name     = profile.name;
             var isActive = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
 
-            var text = new TextBlock
+            var label = new TextBlock
             {
-                Text              = (isActive ? "✓  " : "    ") + name,
-                Foreground        = isActive ? AccentBrush : TextBrush,
+                Text              = name,
+                Foreground        = isActive ? AccentBrush : Br("#AAAAAA"),
                 FontSize          = 12,
+                FontWeight        = isActive ? FontWeights.SemiBold : FontWeights.Normal,
                 VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming      = TextTrimming.CharacterEllipsis,
             };
 
             var row = new Border
             {
-                Padding      = new Thickness(10, 7, 10, 7),
-                CornerRadius = new CornerRadius(4),
-                Background   = Transparent,
-                Cursor       = Cursors.Hand,
-                Child        = text,
+                Padding         = new Thickness(10, 7, 10, 7),
+                CornerRadius    = new CornerRadius(6),
+                Background      = isActive ? Br("#1A2A3A") : Transparent,
+                BorderBrush     = isActive ? AccentBrush   : Transparent,
+                BorderThickness = new Thickness(isActive ? 2 : 0, 0, 0, 0),
+                Cursor          = Cursors.Hand,
+                Child           = label,
+                Margin          = new Thickness(0, 1, 0, 1),
             };
-            row.MouseEnter += (_, __) => row.Background = BtnHoverBg;
-            row.MouseLeave += (_, __) => row.Background = Transparent;
-            row.MouseLeftButtonUp += (_, __) =>
-            {
-                ProfileSwitcherPopup.IsOpen = false;
-                SwitchActiveProfile(name);
-            };
+            row.MouseEnter += (_, __) => { if (!string.Equals(name, _lastKnownActiveProfile, StringComparison.Ordinal)) row.Background = Br("#181818"); };
+            row.MouseLeave += (_, __) => { if (!string.Equals(name, _lastKnownActiveProfile, StringComparison.Ordinal)) row.Background = Transparent; };
+            row.MouseLeftButtonUp += (_, __) => SwitchActiveProfile(name);
 
-            ProfileSwitcherList.Children.Add(row);
+            SidebarProfileStack.Children.Add(row);
         }
+    }
 
-        ProfileSwitcherList.Children.Add(new Border
-        {
-            Height     = 1,
-            Background = Br("#3A3A3A"),
-            Margin     = new Thickness(4, 4, 4, 4),
-        });
+    void SidebarAddProfileBtn_Click(object sender, RoutedEventArgs e)
+    {
+        OpenProfilesView();
+        ShowProfileForm(null);
+    }
 
-        var manageText = new TextBlock
-        {
-            Text              = "Manage Profiles →",
-            Foreground        = AccentBrush,
-            FontSize          = 12,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var manageRow = new Border
-        {
-            Padding      = new Thickness(10, 7, 10, 7),
-            CornerRadius = new CornerRadius(4),
-            Background   = Transparent,
-            Cursor       = Cursors.Hand,
-            Child        = manageText,
-        };
-        manageRow.MouseEnter += (_, __) => manageRow.Background = BtnHoverBg;
-        manageRow.MouseLeave += (_, __) => manageRow.Background = Transparent;
-        manageRow.MouseLeftButtonUp += (_, __) =>
-        {
-            ProfileSwitcherPopup.IsOpen = false;
-            OpenProfilesView();
-        };
-        ProfileSwitcherList.Children.Add(manageRow);
+    // =========================================================================
+    // Dirty tracking / save bar
+    // =========================================================================
+    void MarkDirty()
+    {
+        _hasUnsavedChanges        = true;
+        SaveBar.Visibility        = Visibility.Visible;
+    }
+
+    void ClearDirty()
+    {
+        _hasUnsavedChanges = false;
+        // Save bar hides after feedback timer fires; if no feedback is pending, hide now.
+        if (FeedbackMsg.Visibility == Visibility.Collapsed)
+            SaveBar.Visibility = Visibility.Collapsed;
     }
 
     // =========================================================================
@@ -1524,6 +1517,7 @@ public partial class MainWindow : Window
         };
         FeedbackMsg.Text = msg;
         FeedbackMsg.Visibility = Visibility.Visible;
+        SaveBar.Visibility     = Visibility.Visible;
         _feedbackTimer.Stop();
         _feedbackTimer.Start();
     }
@@ -2376,7 +2370,7 @@ public partial class MainWindow : Window
     // =========================================================================
     // Keyboard trigger cards
     // =========================================================================
-    void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
+    void AddKbdBtn_Click(object sender, RoutedEventArgs e) { MarkDirty(); AddKbdTriggerCard("", null); }
 
     void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants)
     {
@@ -2481,6 +2475,7 @@ public partial class MainWindow : Window
             if (_captureActive && _captureBtn == capBtn) EndCapture();
             KbdStack.Children.Remove(cardBorder);
             _kbdCards.Remove(card);
+            MarkDirty();
         };
 
         KbdStack.Children.Add(cardBorder);
@@ -2570,8 +2565,8 @@ public partial class MainWindow : Window
     // =========================================================================
     // App-launch / app-exit trigger cards
     // =========================================================================
-    void AddAppTriggerBtn_Click(object sender, RoutedEventArgs e) =>
-        AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, "");
+    void AddAppTriggerBtn_Click(object sender, RoutedEventArgs e)
+    { MarkDirty(); AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, ""); }
 
     void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, int outputDelay, bool enabled, bool showToast, string noteLabel)
     {
@@ -2665,6 +2660,7 @@ public partial class MainWindow : Window
         {
             AppTriggersStack.Children.Remove(cardBorder);
             _appTriggerCards.Remove(card);
+            MarkDirty();
         };
 
         AppTriggersStack.Children.Add(cardBorder);
@@ -2875,6 +2871,7 @@ public partial class MainWindow : Window
         var onCommit = _captureOnCommit;
         ClearCaptureState();
         onCommit?.Invoke(s);
+        MarkDirty();
     }
 
     void EndCapture()
@@ -3536,6 +3533,8 @@ public partial class MainWindow : Window
             warnParts.Add("Prefix pair(s): " + string.Join("; ", prefixPairs) + ". Shorter fires after ~80 ms.");
         if (conflicts.Count > 0)
             warnParts.Add("Hotkey conflict(s): " + string.Join(", ", conflicts) + ". Will still fire via low-level hook but may behave inconsistently.");
+
+        ClearDirty();
 
         if (warnParts.Count > 0)
             ShowFeedback(savedPrefix + " " + string.Join(" ", warnParts), FeedbackKind.Warn);
