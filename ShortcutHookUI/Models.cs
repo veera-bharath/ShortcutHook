@@ -30,6 +30,9 @@ public sealed class BindingEntry
     // Multi-app scope. Null/empty = global (fires everywhere). Always written when scoped.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? apps { get; set; }
+    // Global binding suppressed in these apps. Null/empty = no exclusions.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? exceptApps { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? enabled  { get; set; }
     // Debounce: ignore repeated scroll firings within 200 ms. Omitted when false.
@@ -38,6 +41,9 @@ public sealed class BindingEntry
     // Show a brief on-screen toast when this binding fires. Omitted when false.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool showToast { get; set; } = false;
+    // Optional user-defined note/label for this binding row. UI-only metadata.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? label { get; set; }
 }
 
 public sealed class ConfigRoot
@@ -45,6 +51,9 @@ public sealed class ConfigRoot
     public bool altHScroll { get; set; } = false;
     public string activeProfile { get; set; } = "Default";
     public List<ProfileEntry> profiles { get; set; } = new();
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ignoredApps { get; set; }
 
     // Legacy top-level bindings from pre-profile configs. Read-only — used to detect
     // and migrate old-format files. Never written back.

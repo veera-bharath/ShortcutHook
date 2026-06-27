@@ -11,9 +11,9 @@
     <RootNamespace>ShortcutHookUI</RootNamespace>
     <AssemblyName>ShortcutHookUI</AssemblyName>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.6.0</Version>
-    <AssemblyVersion>1.6.0.0</AssemblyVersion>
-    <FileVersion>1.6.0.0</FileVersion>
+    <Version>1.7.0</Version>
+    <AssemblyVersion>1.7.0.0</AssemblyVersion>
+    <FileVersion>1.7.0.0</FileVersion>
     <Product>ShortcutHook</Product>
     <Authors>veerabharath123</Authors>
     <Company>veerabharath123</Company>

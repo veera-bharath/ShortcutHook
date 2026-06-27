@@ -7,6 +7,8 @@
 #                 right-scroll-down, right-scroll-up,
 #                 single-wheel, double-wheel, triple-wheel
 # Key triggers:   key:Ctrl+S  |  key:Ctrl+Alt+F5  |  key:Ctrl+S+L
+# App triggers:   launch:chrome.exe  |  exit:chrome.exe  |  focus:chrome.exe  |  blur:chrome.exe  (polled on a background timer)
+#                 Multiple process names may be comma-separated, e.g. launch:chrome.exe,notepad.exe
 #
 # Output formats in shortcuts.json:
 #   "Win+Shift+S"           keyboard chord
@@ -82,6 +84,12 @@ public class ShortcutHook {
     public static volatile bool IsPaused = false;
     private static readonly string PauseStatePath = @"$PSScriptRoot\pause.state";
 
+    public static volatile string SwitchProfileRequest = null;
+    public static string CurrentProfileName = "";
+    public static uint MainThreadId = 0;
+
+    public static HashSet<string> IgnoredApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     static void WritePauseState() {
         bool paused = IsPaused;
         new Thread(() => {
@@ -97,6 +105,8 @@ public class ShortcutHook {
     static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern IntPtr GetModuleHandle(string name);
+    [DllImport("user32.dll")] static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")]
     static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")]
@@ -182,15 +192,18 @@ public class ShortcutHook {
         public bool   IsHScroll; // horizontal scroll; negative HScrollDelta = left, positive = right
         public int    HScrollDelta;
         public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
+        public string SwitchToProfile; // switches active profile and relaunches daemon; null for all other fields when set
     }
 
     public class Binding {
-        public string      Kind;          // "mouse" | "key"
+        public string      Kind;          // "mouse" | "key" | "launch" | "exit" | "focus" | "blur"
         public string      MouseGesture;
         public int         Mods;
         public byte[]      Keys;
         public string      Signature;
+        public string[]    AppNames;      // process names (e.g. "chrome.exe") for "launch"/"exit"/"focus" kind
         public string[]    Apps;          // null/empty = global; list of process names for app-scoped
+        public string[]    ExceptApps;   // global binding suppressed in these process names
         public int         OutputDelay;   // ms between chained steps (0 = no delay)
         public ChainStep[] Steps;         // one or more actions to execute in order
         public bool        Debounce;      // ignore repeated scroll fires within SCROLL_DEBOUNCE_MS
@@ -204,6 +217,16 @@ public class ShortcutHook {
     const int SCROLL_DEBOUNCE_MS = 200;
     // Each signature maps to an ordered list: app-scoped bindings first, global last.
     public static Dictionary<string, List<Binding>> KeySigIndex = new Dictionary<string, List<Binding>>();
+
+    // App-launch / app-exit / app-focus / app-blur triggers, keyed by process name (e.g. "chrome.exe").
+    public static Dictionary<string, List<Binding>> LaunchBindings = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    public static Dictionary<string, List<Binding>> ExitBindings   = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    public static Dictionary<string, List<Binding>> FocusBindings  = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    public static Dictionary<string, List<Binding>> BlurBindings   = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
+    static HashSet<string> KnownRunningApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    static string LastFocusedApp = "";
+    static System.Threading.Timer ProcessPollTimer;
+    const int PROCESS_POLL_MS = 1500;
 
     // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
     public static List<Binding> BLeftRight        = new List<Binding>();
@@ -232,6 +255,7 @@ public class ShortcutHook {
 
     public static void LoadBindings(Binding[] bindings) {
         MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear(); ScrollDebounce.Clear();
+        LaunchBindings.Clear(); ExitBindings.Clear(); FocusBindings.Clear(); BlurBindings.Clear();
         BLeftRight.Clear(); BLeftRightDouble.Clear(); BLeftRightTriple.Clear();
         BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
         BRightScrollDown.Clear(); BRightScrollUp.Clear();
@@ -256,6 +280,14 @@ public class ShortcutHook {
             } else if (b.Kind == "key") {
                 KeyBindings.Add(b);
                 if (isScoped) scopedKbd.Add(b); else globalKbd.Add(b);
+            } else if (b.Kind == "launch") {
+                AddAppNameBindings(LaunchBindings, b);
+            } else if (b.Kind == "exit") {
+                AddAppNameBindings(ExitBindings, b);
+            } else if (b.Kind == "focus") {
+                AddAppNameBindings(FocusBindings, b);
+            } else if (b.Kind == "blur") {
+                AddAppNameBindings(BlurBindings, b);
             }
         }
         // Populate gesture lists: scoped first so ResolveMouseBinding checks them before global.
@@ -292,6 +324,61 @@ public class ShortcutHook {
             if (!KeySigIndex.TryGetValue(b.Signature, out list)) { list = new List<Binding>(); KeySigIndex[b.Signature] = list; }
             list.Add(b);
         }
+    }
+
+    // ---------- App-launch / app-exit / app-focus polling ----------
+    // No WMI process-start trace here (Win32_ProcessStartTrace needs elevation) —
+    // a lightweight poll on a background timer is simpler and good enough at this resolution.
+    static void AddAppNameBindings(Dictionary<string, List<Binding>> dict, Binding b) {
+        if (b.AppNames == null) return;
+        foreach (string name in b.AppNames) {
+            List<Binding> list;
+            if (!dict.TryGetValue(name, out list)) { list = new List<Binding>(); dict[name] = list; }
+            list.Add(b);
+        }
+    }
+
+    static HashSet<string> GetRunningAppNames() {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try {
+            foreach (Process p in Process.GetProcesses()) {
+                try { if (!string.IsNullOrEmpty(p.ProcessName)) set.Add(p.ProcessName + ".exe"); }
+                catch { } finally { p.Dispose(); }
+            }
+        } catch { }
+        return set;
+    }
+
+    static void PollProcesses(object state) {
+        try {
+            var current = GetRunningAppNames();
+            foreach (string name in current) {
+                if (KnownRunningApps.Contains(name)) continue;
+                List<Binding> list;
+                if (LaunchBindings.TryGetValue(name, out list))
+                    foreach (Binding b in list) ExecuteBinding(b);
+            }
+            foreach (string name in KnownRunningApps) {
+                if (current.Contains(name)) continue;
+                List<Binding> list;
+                if (ExitBindings.TryGetValue(name, out list))
+                    foreach (Binding b in list) ExecuteBinding(b);
+            }
+            KnownRunningApps = current;
+
+            if (FocusBindings.Count > 0 || BlurBindings.Count > 0) {
+                string fgApp = GetForegroundProcessName();
+                if (!string.IsNullOrEmpty(fgApp) && !string.Equals(fgApp, LastFocusedApp, StringComparison.OrdinalIgnoreCase)) {
+                    List<Binding> blist;
+                    if (!string.IsNullOrEmpty(LastFocusedApp) && BlurBindings.TryGetValue(LastFocusedApp, out blist))
+                        foreach (Binding b in blist) ExecuteBinding(b);
+                    List<Binding> flist;
+                    if (FocusBindings.TryGetValue(fgApp, out flist))
+                        foreach (Binding b in flist) ExecuteBinding(b);
+                    LastFocusedApp = fgApp;
+                }
+            }
+        } catch { }
     }
 
     // ---------- Clipboard helpers (selection detection) ----------
@@ -580,6 +667,13 @@ public class ShortcutHook {
             WritePauseState();
             return;
         }
+        if (step.SwitchToProfile != null) {
+            string target = step.SwitchToProfile;
+            if (string.Equals(target, CurrentProfileName, StringComparison.Ordinal)) return;
+            SwitchProfileRequest = target;
+            PostThreadMessage(MainThreadId, 0x0012 /* WM_QUIT */, IntPtr.Zero, IntPtr.Zero);
+            return;
+        }
         if (step.IsHScroll) {
             int d = step.HScrollDelta;
             new Thread(() => {
@@ -855,6 +949,8 @@ public class ShortcutHook {
         // While paused, mouse input passes through untouched. Resuming is keyboard-only
         // (mouse gesture detection requires timers we don't want running while paused).
         if (IsPaused) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
+        if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+            return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
         try {
             int msg = wParam.ToInt32();
 
@@ -1098,12 +1194,21 @@ public class ShortcutHook {
     // Picks the right binding for the current foreground process: app-scoped first, global fallback.
     static Binding ResolveMouseBinding(List<Binding> list) {
         if (list == null || list.Count == 0) return null;
-        if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) return list[0]; // fast path: single global
+        if (list.Count == 1 && (list[0].Apps == null || list[0].Apps.Length == 0)) {
+            var b0 = list[0];
+            if (b0.ExceptApps != null && b0.ExceptApps.Length > 0 && AppsContain(b0.ExceptApps, GetForegroundProcessName())) return null;
+            return b0;
+        }
         string fgApp = GetForegroundProcessName();
         foreach (Binding b in list) {
             if (b.Apps != null && b.Apps.Length > 0 && AppsContain(b.Apps, fgApp)) return b;
         }
-        foreach (Binding b in list) { if (b.Apps == null || b.Apps.Length == 0) return b; }
+        foreach (Binding b in list) {
+            if (b.Apps == null || b.Apps.Length == 0) {
+                if (b.ExceptApps != null && b.ExceptApps.Length > 0 && AppsContain(b.ExceptApps, fgApp)) continue;
+                return b;
+            }
+        }
         return null;
     }
 
@@ -1113,16 +1218,26 @@ public class ShortcutHook {
         List<Binding> candidates;
         if (!KeySigIndex.TryGetValue(MakeSignature(mods, sk), out candidates)) return null;
         // Fast path: single global binding (the common case)
-        if (candidates.Count == 1 && (candidates[0].Apps == null || candidates[0].Apps.Length == 0)) return candidates[0];
+        if (candidates.Count == 1 && (candidates[0].Apps == null || candidates[0].Apps.Length == 0)) {
+            var c = candidates[0];
+            if (c.ExceptApps != null && c.ExceptApps.Length > 0) {
+                if (fgApp == null) fgApp = GetForegroundProcessName();
+                if (AppsContain(c.ExceptApps, fgApp)) return null;
+            }
+            return c;
+        }
         if (fgApp == null) fgApp = GetForegroundProcessName();
         // Scoped bindings are at the front; check them first
         foreach (Binding b in candidates) {
             if (b.Apps == null || b.Apps.Length == 0) continue;
             if (AppsContain(b.Apps, fgApp)) return b;
         }
-        // Fall back to global binding
+        // Fall back to global binding, respecting ExceptApps
         foreach (Binding b in candidates) {
-            if (b.Apps == null || b.Apps.Length == 0) return b;
+            if (b.Apps == null || b.Apps.Length == 0) {
+                if (b.ExceptApps != null && b.ExceptApps.Length > 0 && AppsContain(b.ExceptApps, fgApp)) continue;
+                return b;
+            }
         }
         return null;
     }
@@ -1131,9 +1246,11 @@ public class ShortcutHook {
         if (keys.Count == 0) return false;
         foreach (Binding b in KeyBindings) {
             if (b.Mods != mods || b.Keys.Length <= keys.Count) continue;
+            if (fgApp == null) fgApp = GetForegroundProcessName();
             if (b.Apps != null && b.Apps.Length > 0) {
-                if (fgApp == null) fgApp = GetForegroundProcessName();
                 if (!AppsContain(b.Apps, fgApp)) continue;
+            } else if (b.ExceptApps != null && b.ExceptApps.Length > 0 && AppsContain(b.ExceptApps, fgApp)) {
+                continue;
             }
             bool ok = true;
             foreach (byte k in keys) {
@@ -1170,6 +1287,8 @@ public class ShortcutHook {
         try {
             KBDLLHOOKSTRUCT data = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
             if ((data.flags & LLKHF_INJECTED) != 0) return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
+            if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+                return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
 
             int  msg    = wParam.ToInt32();
             bool isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
@@ -1256,6 +1375,8 @@ public class ShortcutHook {
     // =========================================================================
     public static void Start() {
         IsPaused = false;
+        SwitchProfileRequest = null;
+        MainThreadId = GetCurrentThreadId();
         try { File.WriteAllText(PauseStatePath, "running"); } catch { }
         dblClickMs = (int)GetDoubleClickTime();
         mouseProc = MouseCallback; kbdProc = KbdCallback;
@@ -1271,10 +1392,17 @@ public class ShortcutHook {
             throw new Exception("Keyboard hook failed: " + err);
         }
 
+        if (LaunchBindings.Count > 0 || ExitBindings.Count > 0 || FocusBindings.Count > 0 || BlurBindings.Count > 0) {
+            KnownRunningApps = GetRunningAppNames();
+            LastFocusedApp = GetForegroundProcessName();
+            ProcessPollTimer = new System.Threading.Timer(PollProcesses, null, PROCESS_POLL_MS, PROCESS_POLL_MS);
+        }
+
         MSG msg; int r;
         while ((r = GetMessage(out msg, IntPtr.Zero, 0, 0)) > 0) {
             TranslateMessage(ref msg); DispatchMessage(ref msg);
         }
+        if (ProcessPollTimer != null) { ProcessPollTimer.Dispose(); ProcessPollTimer = null; }
         UnhookWindowsHookEx(kbdHookId); UnhookWindowsHookEx(mouseHookId);
     }
 }
@@ -1380,6 +1508,21 @@ if (Test-Path $configPath) {
 
 if ($activeProfileName) { Write-Log "Active profile: $activeProfileName" }
 
+# Load ignoredApps into the C# HashSet
+if (Test-Path $configPath) {
+    try {
+        $cfgForIgnored = Get-Content $configPath -Raw | ConvertFrom-Json
+        if ($cfgForIgnored.PSObject.Properties.Name -contains 'ignoredApps' -and $cfgForIgnored.ignoredApps) {
+            foreach ($app in @($cfgForIgnored.ignoredApps)) {
+                if ($app) { [ShortcutHook]::IgnoredApps.Add($app) | Out-Null }
+            }
+            if ([ShortcutHook]::IgnoredApps.Count -gt 0) {
+                Write-Log ("Ignored apps: {0}" -f ([ShortcutHook]::IgnoredApps -join ', '))
+            }
+        }
+    } catch { Write-Log "Failed to load ignoredApps: $_" }
+}
+
 # ---------------------------------------------------------------------------
 # Build Binding objects
 # ---------------------------------------------------------------------------
@@ -1400,6 +1543,22 @@ foreach ($b in $rawBindings) {
             $parsed = Resolve-KeyTrigger $Matches[1]
             $nb.Kind = 'key'; $nb.Mods = $parsed.Mods; $nb.Keys = $parsed.Keys
             $nb.Signature = [ShortcutHook]::MakeSignature($parsed.Mods, $parsed.Keys)
+        } elseif ($b.trigger -match '^launch:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip launch trigger with empty app name"; continue }
+            $nb.Kind = 'launch'; $nb.AppNames = $appNames
+        } elseif ($b.trigger -match '^exit:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip exit trigger with empty app name"; continue }
+            $nb.Kind = 'exit'; $nb.AppNames = $appNames
+        } elseif ($b.trigger -match '^focus:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip focus trigger with empty app name"; continue }
+            $nb.Kind = 'focus'; $nb.AppNames = $appNames
+        } elseif ($b.trigger -match '^blur:(.+)$') {
+            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($appNames.Count -eq 0) { Write-Log "Skip blur trigger with empty app name"; continue }
+            $nb.Kind = 'blur'; $nb.AppNames = $appNames
         } else {
             Write-Log "Skip unknown trigger prefix: $($b.trigger)"; continue
         }
@@ -1429,6 +1588,8 @@ foreach ($b in $rawBindings) {
                 $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
             } elseif ($outStr -match '^toggle:pause$') {
                 $step.IsTogglePause = $true
+            } elseif ($outStr -match '^profile:(.+)$') {
+                $step.SwitchToProfile = $Matches[1].Trim()
             } elseif ($outStr -match '^type:([\s\S]+)$') {
                 $step.TypeText = $Matches[1]
             } else {
@@ -1447,6 +1608,9 @@ foreach ($b in $rawBindings) {
         } elseif ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
             $nb.Apps = [string[]]@($b.app.Trim())
         }
+        if ($b.PSObject.Properties.Name -contains 'exceptApps' -and $b.exceptApps -and @($b.exceptApps).Count -gt 0) {
+            $nb.ExceptApps = [string[]]@($b.exceptApps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
         if ($b.PSObject.Properties.Name -contains 'debounce' -and $b.debounce -eq $true) {
             $nb.Debounce = $true
         }
@@ -1463,6 +1627,7 @@ foreach ($b in $rawBindings) {
 
 try {
     [ShortcutHook]::LoadBindings($built.ToArray())
+    [ShortcutHook]::CurrentProfileName = if ($activeProfileName) { $activeProfileName } else { '' }
     Write-Log ("Loaded {0} binding(s)." -f $built.Count)
     foreach ($x in $built) {
         $stepDescs = @()
@@ -1472,6 +1637,7 @@ try {
                 if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
                 else { $stepDescs += "cmd:$($s.CmdLine)" }
             } elseif ($s.IsTogglePause) { $stepDescs += "toggle:pause" }
+            elseif ($s.SwitchToProfile) { $stepDescs += "profile:$($s.SwitchToProfile)" }
             elseif ($s.TypeText) { $stepDescs += "type:$($s.TypeText)" }
             else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
         }
@@ -1479,7 +1645,8 @@ try {
         $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }
         $scope = if ($x.Apps -and $x.Apps.Length -gt 0) { " [apps:$($x.Apps -join ',')]" } else { '' }
         if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}{3}" -f $x.MouseGesture, $dest, $delay, $scope) }
-        else { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
+        elseif ($x.Kind -eq 'key') { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
+        else { Write-Log ("  {0}:{1} -> {2}{3}" -f $x.Kind, ($x.AppNames -join ','), $dest, $delay) }
     }
 } catch { Write-Log "LoadBindings failed: $_"; exit 1 }
 
@@ -1490,6 +1657,7 @@ $mutexCreated = $false
 $mutex = New-Object System.Threading.Mutex($true, 'Global\ShortcutHook', [ref]$mutexCreated)
 if (-not $mutexCreated) { Write-Log 'Already running.'; exit }
 
+$mutexReleased = $false
 try {
     Write-Host 'ShortcutHook active:' -ForegroundColor Green
     foreach ($b in $rawBindings) {
@@ -1504,8 +1672,33 @@ try {
     Write-Host 'Ctrl+C to stop.' -ForegroundColor DarkGray
     [ShortcutHook]::Start()
     Write-Log 'Message loop exited normally.'
+    $profileSwitch = [ShortcutHook]::SwitchProfileRequest
+    if ($profileSwitch -ne $null) {
+        Write-Log "Profile switch requested: $profileSwitch"
+        try {
+            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            $exists = $cfg.profiles | Where-Object { $_.name -eq $profileSwitch } | Select-Object -First 1
+            if ($exists) {
+                $cfg.activeProfile = $profileSwitch
+                $cfg | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+                Write-Log "Switched active profile to: $profileSwitch"
+                $mutexReleased = $true; $mutex.ReleaseMutex(); $mutex.Dispose()
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName = 'powershell.exe'
+                $psi.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+                $psi.WorkingDirectory = $PSScriptRoot
+                $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+                $psi.CreateNoWindow = $true
+                $psi.UseShellExecute = $false
+                [System.Diagnostics.Process]::Start($psi) | Out-Null
+                exit
+            } else {
+                Write-Log "Profile switch target not found: $profileSwitch"
+            }
+        } catch { Write-Log "Profile switch failed: $_" }
+    }
 } catch {
     Write-Log "ERROR: $_"; Write-Host "ERROR: $_" -ForegroundColor Red; Read-Host 'Press Enter to exit'
 } finally {
-    $mutex.ReleaseMutex(); $mutex.Dispose()
+    if (-not $mutexReleased) { $mutex.ReleaseMutex(); $mutex.Dispose() }
 }

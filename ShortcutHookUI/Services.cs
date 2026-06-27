@@ -93,7 +93,23 @@ internal static class TriggerHelpers
             }
             return "key:" + p.Mods + ":" + string.Join(",", p.Keys);
         }
-        throw new ArgumentException("Trigger must start with 'mouse:' or 'key:'");
+        if (t.StartsWith("launch:", StringComparison.Ordinal) || t.StartsWith("exit:", StringComparison.Ordinal) ||
+            t.StartsWith("focus:", StringComparison.Ordinal)  || t.StartsWith("blur:", StringComparison.Ordinal))
+        {
+            string prefix =
+                t.StartsWith("launch:", StringComparison.Ordinal) ? "launch:" :
+                t.StartsWith("exit:",   StringComparison.Ordinal) ? "exit:"   :
+                t.StartsWith("focus:",  StringComparison.Ordinal) ? "focus:"  : "blur:";
+            var apps = t.Substring(prefix.Length).Split(',')
+                .Select(a => a.Trim().ToLowerInvariant())
+                .Where(a => a.Length > 0)
+                .Distinct()
+                .OrderBy(a => a, StringComparer.Ordinal)
+                .ToArray();
+            if (apps.Length == 0) throw new ArgumentException("App name cannot be empty");
+            return prefix + string.Join(",", apps);
+        }
+        throw new ArgumentException("Trigger must start with 'mouse:', 'key:', 'launch:', 'exit:', 'focus:', or 'blur:'");
     }
 
     public static void ValidateShortcutOutput(string combo)
@@ -250,6 +266,40 @@ internal static class ConfigService
     {
         var config = ReadConfig(root);
         config.activeProfile = name;
+        Save(root, config);
+    }
+
+    public static void SetIgnoredApps(string root, List<string> apps)
+    {
+        var config = ReadConfig(root);
+        config.ignoredApps = apps.Count > 0 ? apps : null;
+        Save(root, config);
+    }
+
+    // Serializes a single BindingEntry to a compact JSON string suitable for clipboard.
+    public static string SerializeBinding(BindingEntry entry) =>
+        JsonSerializer.Serialize(entry, JsonOpts);
+
+    // Parses a clipboard JSON snippet into a BindingEntry. Throws on bad JSON or missing trigger.
+    public static BindingEntry ParseBinding(string json)
+    {
+        var entry = JsonSerializer.Deserialize<BindingEntry>(json.Trim())
+            ?? throw new FormatException("Could not parse JSON.");
+        if (string.IsNullOrWhiteSpace(entry.trigger))
+            throw new FormatException("Missing 'trigger' field.");
+        // Normalize legacy single-output field.
+        if ((entry.outputs == null || entry.outputs.Count == 0) && entry.output != null)
+            entry.outputs = new List<string> { entry.output };
+        if (entry.outputs == null || entry.outputs.Count == 0)
+            entry.outputs = new List<string> { "" };
+        return entry;
+    }
+
+    // Appends a single binding to the active profile and saves.
+    public static void AddBindingToActiveProfile(string root, BindingEntry entry)
+    {
+        var config = ReadConfig(root);
+        GetActiveProfile(config).bindings.Add(entry);
         Save(root, config);
     }
 
@@ -561,6 +611,24 @@ internal static class StartupService
 
 internal static class AppScanner
 {
+    // Resolves a .lnk shortcut to the process executable name it launches (e.g. "chrome.exe").
+    // Returns null for shortcuts with no resolvable file target (e.g. UWP "shell:AppsFolder\..." links).
+    public static string? ResolveProcessName(string lnkPath)
+    {
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null) return null;
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic shortcut = shell.CreateShortcut(lnkPath);
+            string target = shortcut.TargetPath as string ?? "";
+            if (string.IsNullOrWhiteSpace(target) || !target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                return null;
+            return Path.GetFileName(target);
+        }
+        catch { return null; }
+    }
+
     public static List<AppEntry> Scan()
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

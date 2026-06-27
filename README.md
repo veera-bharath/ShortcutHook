@@ -18,6 +18,14 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 - **Text expansion** — a `type:` output pastes a snippet of text via the clipboard
 - **Per-application bindings** — scope any keyboard binding to a specific app (e.g. only fires when VS Code is the foreground window)
 - **Per-binding enable/disable** — toggle individual bindings on/off without deleting them; disabled bindings are preserved in config and can be re-enabled any time
+- **Per-binding labels** — attach a short note to any binding row to document what it does; stored in config, shown in the UI, never sent to the daemon
+- **App-launch / app-exit triggers** — fire a binding chain when a named process starts (`launch:chrome.exe`) or exits (`exit:chrome.exe`); detected by a background poller (~1.5 s interval), no elevation required
+- **App-focus / app-blur triggers** — fire when a named process gains (`app-focus:`) or loses (`app-blur:`) foreground focus
+- **Global ignored-apps list** — suppress all ShortcutHook triggers while a specific app is focused; configured per-machine (not per-profile) from Settings → Ignored Apps
+- **Profile-switch output** — assign any gesture or combo to instantly switch the active profile (`profile:<name>`); daemon restarts automatically and the UI refreshes within ~3 s
+- **In-app log viewer** — Settings → View Logs opens a live-tailing window (last 2000 lines) with Open File, Open Folder, and Clear Log actions
+- **Binding search/filter** — type in the search bar to filter rows by gesture name, output, or scoped app; Esc or ✕ clears
+- **Per-row binding export/import** — copy any binding row as JSON (⬆ button) or paste one in from the clipboard (↓ Import); validates and dedup-checks before applying
 - **On-screen toast feedback** — optional per-binding toast shown briefly when a binding fires
 - **Global pause/resume** — a `toggle:pause` output suspends all hook processing until toggled again; the UI shows a "Paused" badge while suspended
 - **Profiles** — switch between multiple sets of bindings via a dropdown in the header; create, rename, duplicate, delete, and import/export profiles as JSON from the Settings screen
@@ -52,7 +60,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
 
-- 🚀 [Download v1.6 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.6/ShortcutHookUI.exe)
+- 🚀 [Download v1.7.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.7.0/ShortcutHookUI-1.7.0.exe)
 - 📦 [Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)
 
 1. Run `ShortcutHookUI.exe`
@@ -62,7 +70,7 @@ Grab the latest **ShortcutHookUI.exe** directly or browse all available versions
 That's it. The daemon starts automatically whenever you save.
 
 > [!NOTE]
-> **SmartScreen / Antivirus warnings**: Since this app is unsigned, Windows SmartScreen may show "Windows protected your PC" on first launch — click **More info → Run anyway**. Your antivirus may also flag the background daemon, since it installs low-level keyboard/mouse hooks (a pattern shared with keyloggers, but used here only to detect your configured shortcuts). The source is fully open — review it or build from source yourself if you'd like to verify this before running.
+> **SmartScreen / Antivirus warnings**: The exe is currently unsigned (code signing via SignPath is in progress). Windows SmartScreen may show "Windows protected your PC" on first launch — click **More info → Run anyway**. Your antivirus may also flag the background daemon, since it installs low-level keyboard/mouse hooks (a pattern shared with keyloggers, but used here only to detect your configured shortcuts). The source is fully open — review it or build from source yourself if you'd like to verify this before running.
 
 ## Install layout
 
@@ -78,6 +86,7 @@ That's it. The daemon starts automatically whenever you save.
 {
   "altHScroll": false,
   "activeProfile": "Default",
+  "ignoredApps": ["YourGame.exe", "mstsc.exe"],
   "profiles": [
     {
       "name": "Default",
@@ -96,7 +105,10 @@ That's it. The daemon starts automatically whenever you save.
         { "trigger": "key:Ctrl+Alt+T",          "outputs": ["open:C:\\path\\to\\app.lnk", "Win+Shift+S"], "outputDelay": 300 },
         { "trigger": "key:Ctrl+Alt+E",          "outputs": ["type:user@example.com"], "showToast": true },
         { "trigger": "key:Ctrl+Alt+P",          "outputs": ["toggle:pause"], "showToast": true },
-        { "trigger": "key:Ctrl+Alt+L",          "outputs": ["cmdw:tasklist"], "enabled": false }
+        { "trigger": "key:Ctrl+Alt+L",          "outputs": ["cmdw:tasklist"], "enabled": false, "label": "list running processes" },
+        { "trigger": "key:Ctrl+Alt+1",          "outputs": ["profile:Gaming"], "showToast": true },
+        { "trigger": "launch:chrome.exe",       "outputs": ["profile:Browser"] },
+        { "trigger": "exit:chrome.exe",         "outputs": ["profile:Default"] }
       ]
     }
   ]
@@ -109,6 +121,8 @@ That's it. The daemon starts automatically whenever you save.
 **Trigger prefixes**
 - `mouse:` — `left+right`, `left+rightx2`, `left+rightx3`, `double-right`, `double-right-sel`, `triple-right`, `single-wheel`, `double-wheel`, `triple-wheel`, `right-scroll-down`, `right-scroll-up`, `shift-scroll-down`, `shift-scroll-up`, `ctrl-shift-scroll-down`, `ctrl-shift-scroll-up`, `alt-scroll-down`, `alt-scroll-up`
 - `key:` — any `Mod+Key` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`
+- `launch:<processName>` / `exit:<processName>` — fires when the named process starts or exits (e.g. `launch:chrome.exe`). Detected by a background poller (~1.5 s); no elevation required. App-scope does not apply — the process name is the scope.
+- `app-focus:<processName>` / `app-blur:<processName>` — fires when the named process gains or loses foreground focus.
   > [!IMPORTANT]
   > To prevent hijacking standard operating system and application shortcuts, global single-letter `Ctrl` triggers (e.g. `Ctrl+A` through `Ctrl+Z`) are restricted and blocked. However, you can freely use:
   > - **Multi-key chords** (e.g., `Ctrl+K+C`, `Ctrl+S+L`)
@@ -118,11 +132,13 @@ That's it. The daemon starts automatically whenever you save.
 **Top-level fields**
 - `altHScroll` — when `true`, holding Alt while scrolling fires a horizontal scroll instead of vertical (toggleable from the UI)
 - `activeProfile` — name of the profile whose bindings the daemon loads. See [Profiles](#profiles).
+- `ignoredApps` — array of process names where all ShortcutHook triggers are suppressed (e.g. `["YourGame.exe", "mstsc.exe"]`). Omit or set to `null` to disable. Configured per-machine from Settings → Ignored Apps.
 - `profiles` — array of named binding sets. See [Profiles](#profiles).
 
 **Per-binding optional fields**
 - `outputs` — array of one or more actions executed in order (chained). Use `outputDelay` to add a pause between steps.
 - `outputDelay` — milliseconds to wait between chained `outputs` steps (e.g. `300`). Omit or set to `0` for no delay.
+- `label` — short user note describing the binding (e.g. `"open browser profile"`). UI-only; never sent to the daemon. Omit when empty.
 - `apps` — array of process names (e.g. `["Code.exe", "chrome.exe"]`) to scope the binding to specific foreground apps; omit or set to `null` for global. See [Per-application bindings](#per-application-bindings).
 - `enabled` — set to `false` to disable a binding without deleting it; omit or set to `true` to keep it active. Disabled bindings are preserved in config and shown dimmed in the UI.
 - `debounce` — set to `true` on scroll gesture bindings to ignore repeated firings within 200 ms. Useful when a single wheel tick registers multiple events. Omit or set to `false` (default) for normal behavior.
@@ -136,6 +152,7 @@ That's it. The daemon starts automatically whenever you save.
 - Visible command — `cmdw:<command>` opens a `cmd.exe` window and keeps it open after the command finishes
 - Text expansion — `type:<text>` pastes the given text via the clipboard
 - Pause/resume toggle — `toggle:pause` suspends or resumes all hook processing
+- Profile switch — `profile:<name>` instantly switches the active profile; daemon restarts and UI refreshes within ~3 s
 
 **Selection-aware double-right**
 
@@ -185,6 +202,7 @@ Output: `build\ShortcutHookUI.exe`
 ```
 ShortcutHookScripts/   PowerShell daemon (ShortcutHook.ps1)
 ShortcutHookUI/        .NET 8 WPF settings UI source
+.github/workflows/     CI pipeline (release.yml — builds and signs on tag push)
 build/                 Local build output (not tracked by Git)
 ```
 

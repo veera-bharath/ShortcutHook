@@ -378,6 +378,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -454,7 +455,46 @@
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto" Margin="0,0,-4,0">
+        <Border Grid.Row="4" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Grid>
+                    <TextBox x:Name="SearchBox" Style="{StaticResource DarkTB}" Height="32"
+                             Padding="10,0" FontFamily="Segoe UI" FontSize="12"
+                             TextChanged="SearchBox_TextChanged"/>
+                    <TextBlock x:Name="SearchPlaceholder" Text="Search bindings..."
+                               Foreground="#3A3A3A" FontSize="12" FontFamily="Segoe UI"
+                               VerticalAlignment="Center" Margin="18,0,0,0"
+                               IsHitTestVisible="False"/>
+                </Grid>
+                <Button Grid.Column="1" x:Name="SearchClearBtn"
+                        Style="{StaticResource BtnGhost}" Width="30" Height="30"
+                        Padding="0" Margin="6,0,0,0" Visibility="Collapsed"
+                        ToolTip="Clear search"
+                        Click="SearchClearBtn_Click">
+                    <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                               VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                </Button>
+                <Button Grid.Column="2" x:Name="ImportBindingBtn"
+                        Style="{StaticResource BtnGhost}" Height="30" Padding="10,0"
+                        Margin="6,0,0,0"
+                        ToolTip="Import a binding from clipboard JSON"
+                        Click="ImportBindingBtn_Click">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="&#xE77F;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                   VerticalAlignment="Center" Margin="0,0,5,0"/>
+                        <TextBlock Text="Import" FontFamily="Segoe UI" FontSize="11"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
+
+        <ScrollViewer Grid.Row="5" VerticalScrollBarVisibility="Auto" Margin="0,0,-4,0">
             <StackPanel Margin="0,0,4,0">
 
                 <Border Style="{StaticResource Card}">
@@ -501,6 +541,32 @@
                     </StackPanel>
                 </Border>
 
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <Grid x:Name="AppTriggersHeader" Cursor="Hand" Background="Transparent"
+                              MouseLeftButtonDown="AppTriggersHeader_Click">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="APP TRIGGERS" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="AppTriggersChevron" Grid.Column="1" Text="›"
+                                       Foreground="#555555" FontSize="11" VerticalAlignment="Center"/>
+                        </Grid>
+                        <StackPanel x:Name="AppTriggersBody" Visibility="Collapsed" Margin="0,8,0,0">
+                            <DockPanel Margin="0,0,0,8">
+                                <Button x:Name="AddAppTriggerBtn" DockPanel.Dock="Right" Content="+ New trigger"
+                                        Style="{StaticResource BtnGhost}" Height="24" Width="90" Padding="0"
+                                        HorizontalAlignment="Right" Click="AddAppTriggerBtn_Click"/>
+                            </DockPanel>
+                            <StackPanel x:Name="AppTriggersStack"/>
+                            <TextBlock Margin="0,8,0,0"
+                                       Text="Fires when a named process starts, exits, gains focus, or loses focus (polled in the background, ~1.5s resolution). Select one or more processes per trigger; names are case-insensitive, e.g. chrome.exe."
+                                       Foreground="#3A3A3A" FontSize="11" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
             </StackPanel>
         </ScrollViewer>
 
@@ -516,15 +582,16 @@
             </Grid>
         </Border>
 
-        <Button Grid.Row="5" x:Name="SaveBtn" Content="Save Changes"
+        <Button Grid.Row="6" x:Name="SaveBtn" Content="Save Changes"
                 Background="#5B9CF6" Style="{StaticResource BtnPrimary}" Height="42" Padding="0" FontSize="14" Margin="0,4,0,0"
                 Click="SaveBtn_Click"/>
-        <TextBlock Grid.Row="6" x:Name="FeedbackMsg" Foreground="#3DBA7B" FontSize="12"
+        <TextBlock Grid.Row="7" x:Name="FeedbackMsg" Foreground="#3DBA7B" FontSize="12"
                    HorizontalAlignment="Center" Margin="0,10,0,0" TextWrapping="Wrap" TextAlignment="Center" Visibility="Collapsed"/>
     </Grid>
         <Border x:Name="SetupRoot" Background="#111111" Visibility="Collapsed">
             <Grid Margin="28,24,28,24">
-                <Border Style="{StaticResource Card}" MaxWidth="620" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="24,22">
+                <Border Style="{StaticResource Card}" MaxWidth="620" HorizontalAlignment="Center" VerticalAlignment="Top" Padding="24,22">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
                         <TextBlock Text="First-Time Setup" Foreground="#EFEFEF" FontSize="24" FontWeight="Bold"/>
                         <TextBlock Text="Complete these steps once. After setup, ShortcutHook will open straight into the main app."
@@ -588,6 +655,7 @@
                         <TextBlock x:Name="SetupHintText" Text="Install the runtime first to continue."
                                    Foreground="#777777" FontSize="12" Margin="0,10,0,0" TextAlignment="Center" TextWrapping="Wrap"/>
                     </StackPanel>
+                    </ScrollViewer>
                 </Border>
             </Grid>
         </Border>
@@ -608,6 +676,28 @@
                                 <StackPanel>
                                     <TextBlock Text="Manage Profiles" Foreground="#EFEFEF" FontSize="14" FontWeight="SemiBold"/>
                                     <TextBlock Text="Create, rename, and switch between profiles" Foreground="#777777" FontSize="11" Margin="0,3,0,0"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="&#8250;" Foreground="#555555" FontSize="18" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Style="{StaticResource SettingsOptionCard}" Margin="0,8,0,0" MouseLeftButtonDown="IgnoredAppsOption_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Ignored Apps" Foreground="#EFEFEF" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Apps where all shortcuts are suppressed" Foreground="#777777" FontSize="11" Margin="0,3,0,0"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="&#8250;" Foreground="#555555" FontSize="18" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Style="{StaticResource SettingsOptionCard}" Margin="0,8,0,0" MouseLeftButtonDown="LogViewOption_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="View Logs" Foreground="#EFEFEF" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Live log output for diagnosing issues" Foreground="#777777" FontSize="11" Margin="0,3,0,0"/>
                                 </StackPanel>
                                 <TextBlock Grid.Column="1" Text="&#8250;" Foreground="#555555" FontSize="18" VerticalAlignment="Center"/>
                             </Grid>
@@ -642,6 +732,32 @@
                         </StackPanel>
                         <Button Content="Back" Style="{StaticResource BtnGhost}" Height="34" Width="90"
                                 HorizontalAlignment="Left" Margin="0,12,0,0" Click="SettingsBack_Click"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SettingsIgnoredAppsView" Visibility="Collapsed">
+                        <TextBlock Text="Ignored Apps" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold" Margin="0,0,0,4"/>
+                        <TextBlock Text="All shortcuts are suppressed while one of these apps is focused." Foreground="#777777" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="IgnoredAppsListStack"/>
+                        </ScrollViewer>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="IgnoredAppsCustomInput" Style="{StaticResource DarkTB}" Height="30"
+                                     Padding="8,0" FontFamily="Consolas" FontSize="11"/>
+                            <Button Grid.Column="1" Content="Add" Style="{StaticResource BtnGhost}"
+                                    Height="30" Padding="12,0" Margin="6,0,0,0"
+                                    Click="IgnoredAppsAddCustom_Click"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <Button Content="Save" Background="#5B9CF6" Style="{StaticResource BtnPrimary}"
+                                    Height="36" Width="100" Padding="0"
+                                    Click="IgnoredAppsSave_Click"/>
+                            <Button Content="Back" Style="{StaticResource BtnGhost}" Height="36" Width="90" Padding="0"
+                                    Margin="10,0,0,0" Click="SettingsBack_Click"/>
+                        </StackPanel>
                     </StackPanel>
 
                     <StackPanel x:Name="SettingsProfileFormView" Visibility="Collapsed">
