@@ -34,7 +34,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 - **Debounce toggle for scroll bindings** — opt-in per-binding cooldown (200 ms) to suppress rapid repeated scroll firings
 - **Alt+Scroll → Horizontal Scroll** — optional toggle; holding Alt while scrolling fires a horizontal scroll event
 - **Update check on launch** — checks GitHub for a newer release and shows a dismissible download banner
-- **First-run setup wizard** — choose where to install the app; daemon script always goes to `C:\Tools\ShortcutHook`
+- **First-run setup wizard** — choose where to install the app; daemon exe always goes to `C:\Tools\ShortcutHook`
 - **Startup on login** — optional toggle to launch the daemon automatically
 - **Self-contained** — single `.exe`, no installer or runtime prerequisites
 
@@ -77,7 +77,7 @@ That's it. The daemon starts automatically whenever you save.
 | What | Where |
 |------|-------|
 | App (UI exe) | Your chosen folder (default `C:\Tools\ShortcutHook`) |
-| Daemon script | Always `C:\Tools\ShortcutHook\ShortcutHook.ps1` |
+| Daemon exe | Always `C:\Tools\ShortcutHook\ShortcutHookDaemon.exe` |
 | Config | `C:\Tools\ShortcutHook\shortcuts.json` |
 
 ## Config schema
@@ -188,7 +188,7 @@ ShortcutHook supports multiple named profiles, each with its own complete set of
 
 ## Building from source
 
-Requirements: Windows 10/11 · PowerShell 5.1+ · .NET 8 SDK
+Requirements: Windows 10/11 · .NET 8 SDK
 
 ```
 cd ShortcutHookUI
@@ -200,7 +200,7 @@ Output: `build\ShortcutHookUI.exe`
 ## Repository structure
 
 ```
-ShortcutHookScripts/   PowerShell daemon (ShortcutHook.ps1)
+ShortcutHookDaemon/    Pure C# daemon (ShortcutHookDaemon.csproj)
 ShortcutHookUI/        .NET 8 WPF settings UI source
 .github/workflows/     CI pipeline (release.yml — builds and signs on tag push)
 build/                 Local build output (not tracked by Git)
