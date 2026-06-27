@@ -182,16 +182,17 @@ public partial class MainWindow : Window
         [Key.LWin]      = TriggerHelpers.MOD_WIN,   [Key.RWin]       = TriggerHelpers.MOD_WIN,
     };
 
-    // Colors / brushes
-    static readonly Brush AmberBrush = Br("#F0A020");
-    static readonly Brush GreenBrush = Br("#3DBA7B");
-    static readonly Brush RedBrush   = Br("#E85C5C");
-    static readonly Brush DimBrush   = Br("#555555");
-    static readonly Brush TextBrush  = Br("#E8E8E8");
-    static readonly Brush LabelBrush = Br("#CCCCCC");
-    static readonly Brush DarkBorder = Br("#2E2E2E");
-    static readonly Brush BtnHoverBg = Br("#1F1F1F");
-    static readonly Brush AccentBrush = Br("#5B9CF6");
+    // Colors / brushes — values mirror the XAML color token resources
+    static readonly Brush AmberBrush  = Br("#FFC107");   // ColorWarning
+    static readonly Brush GreenBrush  = Br("#4CAF50");   // ColorSuccess
+    static readonly Brush RedBrush    = Br("#E53935");   // ColorDanger
+    static readonly Brush GreyBrush   = Br("#888888");   // ColorSecondary (stopped dot)
+    static readonly Brush DimBrush    = Br("#666666");   // ColorTextMuted
+    static readonly Brush TextBrush   = Br("#E8E8E8");
+    static readonly Brush LabelBrush  = Br("#CCCCCC");   // ColorTextSecondary
+    static readonly Brush DarkBorder  = Br("#2E2E2E");
+    static readonly Brush BtnHoverBg  = Br("#1F1F1F");
+    static readonly Brush AccentBrush = Br("#5B9CF6");   // ColorPrimary
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 
@@ -681,7 +682,8 @@ public partial class MainWindow : Window
             StatusDot.Fill  = AmberBrush;
             StatusText.Text = "Runtime not installed";
             HookBtn.Content = "Start";
-            HookBtn.Background = GreenBrush;
+            HookBtn.Style   = (Style)FindResource("BtnPrimary");
+            HookBtn.Background = AccentBrush;
             HookBtn.IsEnabled = false;
             PausedBadge.Visibility = Visibility.Collapsed;
             return;
@@ -693,15 +695,17 @@ public partial class MainWindow : Window
             StatusDot.Fill  = GreenBrush;
             StatusText.Text = "Running";
             HookBtn.Content = "Stop";
-            HookBtn.Background = RedBrush;
+            HookBtn.Style   = (Style)FindResource("BtnStop");
+            HookBtn.ClearValue(Button.BackgroundProperty);
             PausedBadge.Visibility = IsDaemonPaused() ? Visibility.Visible : Visibility.Collapsed;
         }
         else
         {
-            StatusDot.Fill  = RedBrush;
+            StatusDot.Fill  = GreyBrush;
             StatusText.Text = "Stopped";
             HookBtn.Content = "Start";
-            HookBtn.Background = GreenBrush;
+            HookBtn.Style   = (Style)FindResource("BtnPrimary");
+            HookBtn.Background = AccentBrush;
             PausedBadge.Visibility = Visibility.Collapsed;
         }
 
@@ -1598,7 +1602,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            var arrow = new TextBlock { Text = "↳", Foreground = Br("#555555"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 8, 0, 0) };
+            var arrow = new TextBlock { Text = "↳", Foreground = DimBrush, FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 8, 0, 0) };
             Grid.SetColumn(arrow, 0);
             grid.Children.Add(arrow);
         }
