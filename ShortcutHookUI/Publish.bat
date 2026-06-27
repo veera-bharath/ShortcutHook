@@ -19,10 +19,6 @@ if exist "C:\Tools\ShortcutHook\ShortcutHookDaemon.exe" (
     del /F /Q "C:\Tools\ShortcutHook\ShortcutHookDaemon.exe"
     echo Deleted: C:\Tools\ShortcutHook\ShortcutHookDaemon.exe
 )
-if exist "C:\Tools\ShortcutHook\ShortcutHook.ps1" (
-    del /F /Q "C:\Tools\ShortcutHook\ShortcutHook.ps1"
-    echo Deleted stale: C:\Tools\ShortcutHook\ShortcutHook.ps1
-)
 echo.
 echo Launching new build...
 start "" "..\build\ShortcutHookUI.exe"
