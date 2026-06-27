@@ -14,15 +14,12 @@ copy /Y "bin\Release\net8.0-windows\win-x64\publish\ShortcutHookUI.exe" "..\buil
 echo.
 echo Published: %~dp0..\build\ShortcutHookUI.exe
 echo.
-echo Removing stale daemon...
-if exist "C:\Tools\ShortcutHook\ShortcutHookDaemon.exe" (
-    del /F /Q "C:\Tools\ShortcutHook\ShortcutHookDaemon.exe"
-    echo Deleted: C:\Tools\ShortcutHook\ShortcutHookDaemon.exe
-)
-if exist "C:\Tools\ShortcutHook\ShortcutHook.ps1" (
-    del /F /Q "C:\Tools\ShortcutHook\ShortcutHook.ps1"
-    echo Deleted stale: C:\Tools\ShortcutHook\ShortcutHook.ps1
-)
+echo Installing daemon to C:\Tools\ShortcutHook\...
+if not exist "C:\Tools\ShortcutHook" mkdir "C:\Tools\ShortcutHook"
+copy /Y "..\ShortcutHookDaemon\bin\Release\net8.0-windows\win-x64\publish\ShortcutHookDaemon.exe" "C:\Tools\ShortcutHook\ShortcutHookDaemon.exe" >nul || goto :err
+echo Installed: C:\Tools\ShortcutHook\ShortcutHookDaemon.exe
+if exist "C:\Tools\ShortcutHook\ShortcutHook.ps1" del /F /Q "C:\Tools\ShortcutHook\ShortcutHook.ps1" && echo Removed stale: ShortcutHook.ps1
+if exist "C:\Tools\ShortcutHook\install.cmd"      del /F /Q "C:\Tools\ShortcutHook\install.cmd"      && echo Removed stale: install.cmd
 echo.
 echo Launching new build...
 start "" "..\build\ShortcutHookUI.exe"
