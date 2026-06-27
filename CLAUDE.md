@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Windows-only shortcut-mapping tool. A background PowerShell process installs a low-level mouse hook (`WH_MOUSE_LL`) *and* a low-level keyboard hook (`WH_KEYBOARD_LL`) and maps user-defined triggers (mouse gestures or keyboard combos) to either keyboard chord outputs (VS Code-keybindings style) or shell-execute targets (open an app/file/folder).
+A Windows-only shortcut-mapping tool. A background PowerShell process installs a low-level mouse hook (`WH_MOUSE_LL`) *and* a low-level keyboard hook (`WH_KEYBOARD_LL`) and maps user-defined triggers (mouse gestures, keyboard combos, or process lifecycle events) to outputs: keyboard chords, shell-execute targets, shell commands, text expansion, horizontal scroll, pause/resume, or profile switches.
 
 Two-piece design: **daemon** is a PowerShell script; **settings UI** is a compiled .NET 8 WPF app distributed as a single-file self-contained `.exe`. Requires Windows 10/11, PowerShell 5+. The `.exe` has no runtime prerequisite — the .NET 8 runtime is bundled and the PS1 daemon is embedded as a manifest resource.
 
@@ -21,6 +21,7 @@ No test harness. Verification is manual: run the daemon, perform the trigger, co
 
 - `ShortcutHookScripts/` — Core daemon logic (`ShortcutHook.ps1`). Embedded into the exe as a manifest resource at build time.
 - `ShortcutHookUI/` — .NET 8 WPF project for the settings UI.
+- `.github/workflows/release.yml` — CI pipeline; triggers on `v*.*.*` tag push, runs `dotnet publish`, signs via SignPath (gated until OSS approval), creates GitHub Release.
 - `build/` — Local build output (not tracked by Git; distributed via GitHub Releases).
 - `CLAUDE.md` — Project documentation and AI guidance.
 
@@ -38,26 +39,64 @@ No test harness. Verification is manual: run the daemon, perform the trigger, co
 ```json
 {
   "altHScroll": false,
-  "bindings": [
-    { "trigger": "mouse:left+right",        "output": "Win+Shift+S" },
-    { "trigger": "mouse:right-scroll-down", "output": "Win+D" },
-    { "trigger": "key:Ctrl+Alt+C",          "output": "Ctrl+C" },
-    { "trigger": "key:Ctrl+S+L",            "output": "F12" },
-    { "trigger": "mouse:double-wheel",      "output": "open:C:\\path\\to\\Notepad.lnk" }
+  "activeProfile": "Default",
+  "ignoredApps": ["YourGame.exe", "mstsc.exe"],
+  "profiles": [
+    {
+      "name": "Default",
+      "bindings": [
+        { "trigger": "mouse:left+right",        "outputs": ["Win+Shift+S"] },
+        { "trigger": "mouse:double-right",      "outputs": ["Ctrl+V"] },
+        { "trigger": "mouse:double-right-sel",  "outputs": ["Ctrl+C"] },
+        { "trigger": "mouse:right-scroll-down", "outputs": ["Delete"] },
+        { "trigger": "mouse:alt-scroll-up",     "outputs": ["hscroll:left"] },
+        { "trigger": "mouse:double-wheel",      "outputs": ["open:C:\\path\\to\\app.lnk"] },
+        { "trigger": "key:Ctrl+Alt+C",          "outputs": ["Ctrl+C"] },
+        { "trigger": "key:Ctrl+S+L",            "outputs": ["F12"], "apps": ["Code.exe"] },
+        { "trigger": "key:Ctrl+Alt+E",          "outputs": ["type:user@example.com"], "showToast": true },
+        { "trigger": "key:Ctrl+Alt+P",          "outputs": ["toggle:pause"], "showToast": true },
+        { "trigger": "key:Ctrl+Alt+L",          "outputs": ["cmdw:tasklist"], "enabled": false, "label": "list procs" },
+        { "trigger": "key:Ctrl+Alt+1",          "outputs": ["profile:Gaming"] },
+        { "trigger": "launch:chrome.exe",       "outputs": ["profile:Browser"] },
+        { "trigger": "exit:chrome.exe",         "outputs": ["profile:Default"] },
+        { "trigger": "app-focus:Code.exe",      "outputs": ["profile:Coding"] },
+        { "trigger": "app-blur:Code.exe",       "outputs": ["profile:Default"] }
+      ]
+    }
   ]
 }
 ```
 
-`altHScroll` — boolean feature flag. When `true`, holding Alt while scrolling the mouse wheel fires a horizontal scroll (`MOUSEEVENTF_HWHEEL`) instead of a vertical one. Toggled from the UI (bottom of the mouse section). The injection runs on a background thread — never call `mouse_event`/`SendInput` inline inside a LL mouse hook callback or Windows will time out and silently unhook the entire hook.
+**Top-level fields:**
+- `altHScroll` — when `true`, holding Alt while scrolling fires `MOUSEEVENTF_HWHEEL` instead of vertical scroll. The injection always runs on a background thread — never inline in `MouseCallback`.
+- `activeProfile` — name of the profile whose bindings the daemon loads on startup.
+- `ignoredApps` — array of process names where all triggers are suppressed while that app is focused. Omit or `null` to disable. Checked in both `MouseCallback` and `KbdCallback` after the paused/injected-event guards.
+- `profiles` — array of named binding sets. Older configs with a top-level `bindings` array are auto-migrated into a `"Default"` profile on load.
 
-Trigger prefixes:
-- `mouse:` — one of the seven fixed gesture detectors: `left+right`, `double-right`, `triple-right`, `right-scroll-down`, `right-scroll-up`, `double-wheel`, `triple-wheel`. The last two are double-/triple-click of the middle (wheel) button; the scroll gestures fire while the right button is held. Adding more requires new detection code in `MouseCallback`.
-- `key:` — any `Mod(+Mod…)+Key(+Key…)` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`. Non-modifier keys: A-Z, 0-9, F1-F12, and the named keys in `$vkMap` (Enter, Esc, Tab, Space, Back, Delete, Insert, Home, End, PgUp, PgDn, Left, Right, Up, Down, PrtScr).
-- `launch:<processName>` / `exit:<processName>` — fires when the named process (e.g. `chrome.exe`) starts or exits. Detected by a background `System.Threading.Timer` polling `Process.GetProcesses()` every ~1.5s and diffing against the previous snapshot (no WMI `Win32_ProcessStartTrace` — that needs elevation). App-scope (`apps`/`exceptApps`) doesn't apply to these triggers since the process name *is* the scope; the UI's "APP TRIGGERS" section has no scope picker for them.
+**Trigger prefixes:**
+- `mouse:` — `left+right`, `left+rightx2`, `left+rightx3`, `double-right`, `double-right-sel`, `triple-right`, `single-wheel`, `double-wheel`, `triple-wheel`, `right-scroll-down`, `right-scroll-up`, `shift-scroll-down`, `shift-scroll-up`, `ctrl-shift-scroll-down`, `ctrl-shift-scroll-up`, `alt-scroll-down`, `alt-scroll-up`. Adding a new gesture requires changes in four places — see Gotchas.
+- `key:` — any `Mod(+Mod…)+Key(+Key…)` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`. Non-modifier keys: A-Z, 0-9, F1-F12, and named keys in `$vkMap`. Single-letter global `Ctrl` triggers (e.g. `Ctrl+C`) are blocked by the UI to prevent hijacking standard shortcuts.
+- `launch:<processName>` / `exit:<processName>` — fires when the named process starts or exits. Detected by a background `System.Threading.Timer` polling `Process.GetProcesses()` every ~1.5 s and diffing against the previous snapshot (no WMI — that needs elevation). App-scope (`apps`) doesn't apply; the UI's "APP TRIGGERS" section has no scope picker for these rows.
+- `app-focus:<processName>` / `app-blur:<processName>` — fires when the named process gains or loses foreground focus. Same polling mechanism as `launch:`/`exit:`.
 
-Outputs come in two forms:
-- **Keyboard chord** — `Mod+Key+Key` syntax. Modifiers are emitted in the order they appear in the string (matters for some shortcuts).
-- **Shell-execute** — `open:<path>` where `<path>` is an app `.lnk`, an executable, a file, or a folder. Launched via `Process.Start` with `UseShellExecute = true` on a background thread, so the hook callback never blocks on process startup.
+**Per-binding optional fields:**
+- `outputs` — array of one or more output strings executed in order. Use `outputDelay` to pause between steps.
+- `outputDelay` — ms to wait between chained `outputs` steps.
+- `label` — short user note; UI-only, never sent to daemon. Omitted from JSON when empty.
+- `apps` — array of process names to scope the binding to a specific foreground app; `null`/omit for global.
+- `enabled` — `false` disables without deleting; shown dimmed in UI.
+- `debounce` — `true` on scroll bindings ignores repeated firings within 200 ms.
+- `showToast` — `true` shows a brief on-screen toast when this binding fires.
+
+**Output kinds:**
+- **Keyboard chord** — `Mod+Key` syntax (e.g. `Win+Shift+S`). Modifiers emitted in string order.
+- **Shell-execute** — `open:<path>` — app `.lnk`, exe, file, or folder. `Process.Start` with `UseShellExecute = true` on a background thread.
+- **Hidden command** — `cmd:<command>` — runs via `cmd.exe /c`, no window.
+- **Visible command** — `cmdw:<command>` — opens `cmd.exe` window, stays open after command finishes.
+- **Text expansion** — `type:<text>` — pastes text via clipboard on a background thread.
+- **Horizontal scroll** — `hscroll:left` / `hscroll:right` — fires `WM_MOUSEHWHEEL` on a background thread.
+- **Pause/resume toggle** — `toggle:pause` — suspends or resumes all hook processing; UI shows "Paused" badge.
+- **Profile switch** — `profile:<name>` — validates target profile exists, updates `activeProfile` in `shortcuts.json`, and relaunches the daemon. No-ops if already on that profile. Uses `PostThreadMessage(WM_QUIT)` to exit the `GetMessage` loop, then `ProcessStartInfo` relaunch (no console flash).
 
 Defaults (used if `shortcuts.json` is absent or malformed): Win+Shift+S, Ctrl+C, Ctrl+V on `left+right`, `double-right`, `triple-right`.
 
@@ -128,19 +167,20 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 `ShortcutHookUI/` is a .NET 8 WPF project. Build output: a single-file self-contained `ShortcutHookUI.exe` (68 MB, .NET 8 runtime bundled).
 
 **Project layout:**
-- `ShortcutHookUI.csproj` — `net8.0-windows`, `UseWPF=true`, `UseWindowsForms=true` (needed for `FolderBrowserDialog`), `PublishSingleFile=true`, `SelfContained=true`, `RuntimeIdentifier=win-x64`, `Version=1.0.0`. Depends on `System.Management` NuGet for WMI. Embeds `ShortcutHook.ps1` as a manifest resource (`ShortcutHookUI.Runtime.ShortcutHook.ps1`).
+- `ShortcutHookUI.csproj` — `net8.0-windows`, `UseWPF=true`, `UseWindowsForms=true` (needed for `FolderBrowserDialog`), `PublishSingleFile=true`, `SelfContained=true`, `RuntimeIdentifier=win-x64`. Depends on `System.Management` NuGet for WMI. Embeds `ShortcutHook.ps1` as a manifest resource (`ShortcutHookUI.Runtime.ShortcutHook.ps1`).
 - `App.xaml` / `App.xaml.cs` — minimal WPF app shell.
-- `MainWindow.xaml` — all shared styles (`BtnPrimary`, `BtnGhost`, `DarkTB`, `DarkCB`, `Toggle`, `Card`, `SectionLabel`, `DarkCBItem`) and the main window layout. Keyboard/mouse row grids are constructed in code, not via item templates. Contains an `About` button in the header and a `SetupRoot` overlay for first-run setup.
-- `MainWindow.xaml.cs` — main window behavior. `_appRoot` tracks the user-chosen exe install folder (from registry). All config reads/writes use `InstallService.ScriptRoot` (fixed path). Key state: `_mouseRows`, `_kbdRows`, `_setupComplete`, capture fields.
+- `MainWindow.xaml` — all shared styles (`BtnPrimary`, `BtnGhost`, `DarkTB`, `DarkCB`, `Toggle`, `Card`, `SectionLabel`, `DarkCBItem`) and the main window layout. Keyboard/mouse row grids are constructed in code, not via item templates. Contains a profile dropdown + Settings gear in the header; a search bar above the scroll view; and a `SetupRoot` overlay for first-run setup.
+- `MainWindow.xaml.cs` — main window behavior. `_appRoot` tracks the user-chosen exe install folder (from registry). All config reads/writes use `InstallService.ScriptRoot` (fixed path). Key state: `_mouseRows`, `_kbdRows`, `_appTriggerRows`, `_setupComplete`, capture fields. `ActionKind` enum + `ActionLabels`/`ActionOrder` arrays drive the action-type picker in each chain item.
 - `AboutWindow.xaml` / `AboutWindow.xaml.cs` — small dark modal showing app name, version (read from assembly), author (Veera Bharath), and a GitHub button.
-- `Models.cs` — `AppEntry`, `BindingEntry`, `ConfigRoot`, `MouseGestureDef`, `ParsedKey`.
+- `LogViewerWindow.xaml` / `LogViewerWindow.xaml.cs` — dark resizable window (680×520) that tails `ShortcutHook.log` (last 2000 lines) via `FileSystemWatcher`. Non-modal — stays open while editing bindings. Provides Open Log File, Open Folder, and Clear Log (with confirmation) actions. Opened from Settings → View Logs.
+- `Models.cs` — `AppEntry`, `BindingEntry` (includes `label`, `outputDelay`, `debounce`, `showToast`), `ConfigRoot` (includes `ignoredApps`, `activeProfile`, `profiles`), `MouseGestureDef`, `ParsedKey`, `Profile`.
 - `Services.cs` — all service classes (see below).
 - `Interop.cs` — `DwmApi` (dark title bar P/Invoke), `HookApi` (low-level keyboard hook for key capture).
 - `Publish.bat` — `dotnet publish -c Release` + copy exe to `build/`.
 
 **Services.cs classes:**
-- `TriggerHelpers` — parse, canonicalize, validate shortcut, prefix-of detection.
-- `ConfigService` — read/write `shortcuts.json` at `InstallService.ScriptRoot` via `System.Text.Json`.
+- `TriggerHelpers` — parse, canonicalize, validate shortcut, prefix-of detection. Recognizes all trigger prefixes including `launch:`, `exit:`, `app-focus:`, `app-blur:`. `ValidGestures` is the authoritative list of valid `mouse:` gesture names.
+- `ConfigService` — read/write `shortcuts.json` at `InstallService.ScriptRoot` via `System.Text.Json`. Key methods: `Read()`, `Write(config)`, `SetIgnoredApps(list)`, `SerializeBinding(entry)`, `ParseBinding(json)`, `AddBindingToActiveProfile(entry)`.
 - `InstallService` — install logic with split paths:
   - `ScriptRoot` = `C:\Tools\ShortcutHook` (fixed constant, never changes)
   - `ScriptPath` = `C:\Tools\ShortcutHook\ShortcutHook.ps1` (derived from ScriptRoot)
@@ -167,8 +207,15 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 - State machine: modifier bitmask + ordered non-modifier `Key` list. Non-mod key-down accumulates; any key-up when non-mods are present finalizes. A bare Escape cancels.
 - `e.Key == Key.System` (when Alt is held) resolves to `e.SystemKey` for the actual key.
 
+**Binding search/filter:**
+- A `TextBox` above the scroll view filters `_mouseGestureStacks` and `_kbdCards` by hiding non-matching rows on text change. Matches case-insensitively against gesture/trigger label, all chain output values, and app names. Auto-expands accordion sections while a filter is active; restores previous state on clear. Esc while focused clears; reset on profile switch or config reload.
+
+**Per-row binding export/import:**
+- Each binding row has a `⬆` button that serializes the row to `BindingEntry` JSON via `ConfigService.SerializeBinding` and copies it to the clipboard.
+- An `↓ Import` button reads JSON from the clipboard, validates via `TriggerHelpers`, dedup-checks against the active profile, and appends via `ConfigService.AddBindingToActiveProfile`. Exact duplicates are blocked; prefix pairs produce an amber warning but are allowed.
+
 **Save flow:**
-- Walks the 7 fixed mouse rows + any keyboard rows, runs `TriggerHelpers.CanonicalizeTrigger` for dedup, blocks exact duplicates, validates shortcut outputs. Prefix pairs are allowed but shown as an amber toast (~80 ms latency warning). Writes `shortcuts.json` to `InstallService.ScriptRoot`, then kill + relaunch the daemon if it was running.
+- Walks the 7 fixed mouse rows + any keyboard rows + app-trigger rows, runs `TriggerHelpers.CanonicalizeTrigger` for dedup, blocks exact duplicates, validates shortcut outputs. Prefix pairs are allowed but shown as an amber toast (~80 ms latency warning). Writes `shortcuts.json` to `InstallService.ScriptRoot`, then kill + relaunch the daemon if it was running.
 
 **Daemon interop:**
 - Liveness: `Mutex.OpenExisting(@"Global\ShortcutHook")`.
@@ -185,7 +232,8 @@ When firing a chord, `FireOutput` uses `GetAsyncKeyState` to read which modifier
 - Never do slow work inside either callback — Windows silently unhooks a callback that exceeds `LowLevelHooksTimeout`. The defer timer and the mouse gesture timer run on separate threads for this reason. **Critically: never call `mouse_event` or `SendInput` inline inside `MouseCallback`** — the injected event is dispatched synchronously through the full hook chain before returning, which easily exceeds the timeout and permanently kills the hook for the session. Always fire injections on a background thread (see the `altHScroll` handler as the pattern).
 - PS → C# type bridging: when assigning `byte[]` fields, the value must actually be `[byte[]]`. A bare pipeline output is `object[]`. The `Resolve-OutputChord` and `Resolve-KeyTrigger` helpers return already-cast `byte[]`; preserve this when editing.
 - Adding a new mouse gesture type requires changes in four places: a new detector branch in `MouseCallback`, a new `Binding` field on `ShortcutHook` + assignment in `LoadBindings`, a new entry in `$validGestures` in `ShortcutHook.ps1` and `TriggerHelpers.ValidGestures` in `Services.cs`, and a new entry in `MainWindow.MouseDefs` so the gesture gets a row in the UI.
-- Adding a new output kind (beyond keyboard chords and `open:`) requires: a new nullable field on `ShortcutHook.Binding`, a new branch in `ExecuteBinding`, PS-side parsing in `ShortcutHook.ps1`'s binding-build loop, and UI-side support in `MainWindow.xaml.cs` (`ActionKind` enum + `ActionLabels`/`ActionOrder` arrays, a `SetRowOutput` branch, a `GetRowOutput` branch, and `DetectAction` disambiguation).
+- Adding a new output kind requires: a new nullable field on `ShortcutHook.Binding` (or a new `ChainStep` field), a new branch in `ExecuteBinding`/`ExecuteStep`, PS-side parsing in `ShortcutHook.ps1`'s binding-build loop, and UI-side support in `MainWindow.xaml.cs` (`ActionKind` enum + `ActionLabels`/`ActionOrder` arrays, a `SetChainItemOutput` branch, a `GetChainItemOutput` branch, and `DetectAction` disambiguation). `profile:` outputs skip all `ValidateShortcutOutput` guard blocks in the save flow.
+- The `ignoredApps` check sits in both `MouseCallback` and `KbdCallback`, after the `IsPaused` check and (in kbd) after the injected-event guard. It calls `GetForegroundWindow` → `GetWindowThreadProcessId` → `Process.GetProcessById`. This is safe inside a LL hook only because it's a fast in-process lookup; do not add any blocking I/O around it.
 - The UI's "Stop" kills the daemon process. Because `Start()` blocks in `GetMessage`, there is no graceful shutdown path — kill is the design. The `finally` releases the mutex but won't run on kill; the OS reclaims the mutex on process exit.
 - `InstallService.ScriptRoot` is a hardcoded constant (`C:\Tools\ShortcutHook`). The daemon script and config always live here. The app exe lives at `_appRoot` (user-chosen, stored in registry). Don't conflate the two.
 - When a keyboard combo is a strict prefix of a registered trigger but not itself registered (e.g. only `Ctrl+S+L` is bound, user types `Ctrl+S`), the shorter combo is swallowed while waiting for the longer one. If the longer key never comes, the swallowed key is **replayed** via `prefixSwallowed` tracking — so `Ctrl+S` still works. The replay fires on key-up and only if no binding fired during the wait.
