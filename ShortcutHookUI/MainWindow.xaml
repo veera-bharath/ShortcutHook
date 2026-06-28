@@ -21,6 +21,46 @@
         <SolidColorBrush x:Key="ColorBorder"         Color="#2A2A2A"/>
         <SolidColorBrush x:Key="ColorBorderSubtle"   Color="#222222"/>
 
+        <Style x:Key="BtnTab" TargetType="Button">
+            <Setter Property="Foreground" Value="#888888"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderThickness="0,0,0,2" BorderBrush="Transparent"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Tag" Value="active">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#5B9CF6"/>
+                                <Setter Property="Foreground" Value="#EFEFEF"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="Tag" Value="active"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="#1A1A1A"/>
+                            </MultiTrigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="#161616"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="BtnPrimary" TargetType="Button">
             <Setter Property="Foreground" Value="#FFFFFF"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -519,6 +559,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
@@ -583,11 +624,49 @@
                     </Grid>
                 </Border>
 
+                <!-- Tab bar -->
+                <Border Grid.Row="2" BorderBrush="#1E1E1E" BorderThickness="0,0,0,1" Margin="0,4,0,0">
+                    <StackPanel Orientation="Horizontal" Margin="4,0,0,0">
+                        <Button x:Name="TabAllBtn" Style="{StaticResource BtnTab}" Tag="active"
+                                Click="TabAll_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="All"/>
+                                <TextBlock x:Name="TabAllBadge" Margin="5,0,0,0" FontSize="11"
+                                           Foreground="#555555" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="TabMouseBtn" Style="{StaticResource BtnTab}"
+                                Click="TabMouse_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Mouse"/>
+                                <TextBlock x:Name="TabMouseBadge" Margin="5,0,0,0" FontSize="11"
+                                           Foreground="#555555" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="TabKbdBtn" Style="{StaticResource BtnTab}"
+                                Click="TabKbd_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Keyboard"/>
+                                <TextBlock x:Name="TabKbdBadge" Margin="5,0,0,0" FontSize="11"
+                                           Foreground="#555555" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="TabAppSpecificBtn" Style="{StaticResource BtnTab}"
+                                Click="TabAppSpecific_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="App-specific"/>
+                                <TextBlock x:Name="TabAppSpecificBadge" Margin="5,0,0,0" FontSize="11"
+                                           Foreground="#555555" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
                 <!-- Binding sections -->
-                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="12,4,8,0">
+                <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" Margin="12,4,8,0">
                     <StackPanel Margin="0,0,4,8">
 
-                        <Border Style="{StaticResource Card}">
+                        <Border x:Name="MouseCard" Style="{StaticResource Card}">
                             <StackPanel>
                                 <Grid x:Name="MouseHeader" Cursor="Hand" Background="Transparent"
                                       MouseLeftButtonDown="MouseHeader_Click">
@@ -605,7 +684,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource Card}">
+                        <Border x:Name="KbdCard" Style="{StaticResource Card}">
                             <StackPanel>
                                 <Grid x:Name="KbdHeader" Cursor="Hand" Background="Transparent"
                                       MouseLeftButtonDown="KbdHeader_Click">
@@ -631,7 +710,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource Card}">
+                        <Border x:Name="AppTriggersCard" Style="{StaticResource Card}">
                             <StackPanel>
                                 <Grid x:Name="AppTriggersHeader" Cursor="Hand" Background="Transparent"
                                       MouseLeftButtonDown="AppTriggersHeader_Click">
@@ -657,11 +736,23 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- App-specific flat view (visible only in App-specific tab) -->
+                        <Border x:Name="AppSpecificCard" Style="{StaticResource Card}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="APP-SCOPED BINDINGS" Style="{StaticResource SectionLabel}"/>
+                                <StackPanel x:Name="AppSpecificStack" Margin="0,10,0,0"/>
+                                <TextBlock x:Name="AppSpecificEmpty"
+                                           Text="No bindings with app scoping configured. Add app-specific variants in the Mouse or Keyboard tabs."
+                                           Foreground="#555555" FontSize="12" TextWrapping="Wrap"
+                                           Margin="0,8,0,0" Visibility="Collapsed"/>
+                            </StackPanel>
+                        </Border>
+
                     </StackPanel>
                 </ScrollViewer>
 
                 <!-- ─── SAVE BAR (hidden until dirty) ─── -->
-                <Border Grid.Row="3" x:Name="SaveBar" Visibility="Collapsed"
+                <Border Grid.Row="4" x:Name="SaveBar" Visibility="Collapsed"
                         Background="#141414" BorderBrush="#232323" BorderThickness="0,1,0,0"
                         Padding="14,10">
                     <Grid>
