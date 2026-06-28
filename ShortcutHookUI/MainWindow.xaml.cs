@@ -1454,6 +1454,7 @@ public partial class MainWindow : Window
         {
             var name     = profile.name;
             var isActive = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+            bool isRenaming = false;
 
             var label = new TextBlock
             {
@@ -1465,20 +1466,152 @@ public partial class MainWindow : Window
                 TextTrimming      = TextTrimming.CharacterEllipsis,
             };
 
+            var renameBox = new TextBox
+            {
+                FontSize                 = 12,
+                Visibility               = Visibility.Collapsed,
+                Background               = Br("#252525"),
+                Foreground               = Br("#E8E8E8"),
+                CaretBrush               = Br("#E8E8E8"),
+                SelectionBrush           = AccentBrush,
+                BorderBrush              = AccentBrush,
+                BorderThickness          = new Thickness(1),
+                Padding                  = new Thickness(4, 2, 4, 2),
+                MaxLength                = 32,
+                VerticalContentAlignment = VerticalAlignment.Center,
+            };
+
+            var nameCell = new Grid();
+            nameCell.Children.Add(label);
+            nameCell.Children.Add(renameBox);
+
+            var pencilBtn = new Button
+            {
+                Content    = "✏",
+                Style      = (Style)FindResource("BtnGhost"),
+                Width      = 22, Height = 22,
+                Padding    = new Thickness(0),
+                FontSize   = 11,
+                Margin     = new Thickness(0, 0, 2, 0),
+                ToolTip    = "Rename",
+                Visibility = Visibility.Hidden,
+            };
+            var deleteBtn = new Button
+            {
+                Content    = "✕",
+                Style      = (Style)FindResource("BtnGhost"),
+                Width      = 22, Height = 22,
+                Padding    = new Thickness(0),
+                FontSize   = 10,
+                ToolTip    = "Delete",
+                Visibility = Visibility.Hidden,
+            };
+
+            var actionsPanel = new StackPanel
+            {
+                Orientation       = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            actionsPanel.Children.Add(pencilBtn);
+            actionsPanel.Children.Add(deleteBtn);
+
+            var rowGrid = new Grid();
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(nameCell,     0);
+            Grid.SetColumn(actionsPanel, 1);
+            rowGrid.Children.Add(nameCell);
+            rowGrid.Children.Add(actionsPanel);
+
             var row = new Border
             {
-                Padding         = new Thickness(10, 7, 10, 7),
+                Padding         = new Thickness(10, 7, 6, 7),
                 CornerRadius    = new CornerRadius(6),
                 Background      = isActive ? Br("#1A2A3A") : Transparent,
                 BorderBrush     = isActive ? AccentBrush   : Transparent,
                 BorderThickness = new Thickness(isActive ? 2 : 0, 0, 0, 0),
                 Cursor          = Cursors.Hand,
-                Child           = label,
+                Child           = rowGrid,
                 Margin          = new Thickness(0, 1, 0, 1),
             };
-            row.MouseEnter += (_, __) => { if (!string.Equals(name, _lastKnownActiveProfile, StringComparison.Ordinal)) row.Background = Br("#181818"); };
-            row.MouseLeave += (_, __) => { if (!string.Equals(name, _lastKnownActiveProfile, StringComparison.Ordinal)) row.Background = Transparent; };
-            row.MouseLeftButtonUp += (_, __) => SwitchActiveProfile(name);
+
+            void BeginRename()
+            {
+                if (isRenaming) return;
+                isRenaming = true;
+                label.Visibility     = Visibility.Collapsed;
+                renameBox.Text       = name;
+                renameBox.Visibility = Visibility.Visible;
+                renameBox.Focus();
+                renameBox.SelectAll();
+            }
+
+            void CommitRename()
+            {
+                if (!isRenaming) return;
+                var newName = renameBox.Text.Trim();
+                isRenaming = false;
+                label.Visibility     = Visibility.Visible;
+                renameBox.Visibility = Visibility.Collapsed;
+                if (string.IsNullOrEmpty(newName) || string.Equals(newName, name, StringComparison.Ordinal)) return;
+                var cfg = ConfigService.ReadConfig(InstallService.ScriptRoot);
+                var err = ProfileHelpers.ValidateName(newName, cfg.profiles, name);
+                if (err != null) { ShowFeedback(err, FeedbackKind.Err); return; }
+                ConfigService.RenameProfile(InstallService.ScriptRoot, name, newName);
+                ShowFeedback($"Profile renamed to '{newName}'.", FeedbackKind.Ok);
+                RefreshProfileDropdown();
+            }
+
+            void CancelRename()
+            {
+                if (!isRenaming) return;
+                isRenaming = false;
+                label.Visibility     = Visibility.Visible;
+                renameBox.Visibility = Visibility.Collapsed;
+            }
+
+            row.MouseEnter += (_, __) =>
+            {
+                if (!isActive) row.Background = Br("#181818");
+                pencilBtn.Visibility = Visibility.Visible;
+                deleteBtn.Visibility = Visibility.Visible;
+            };
+            row.MouseLeave += (_, __) =>
+            {
+                if (!isActive) row.Background = Transparent;
+                if (!isRenaming)
+                {
+                    pencilBtn.Visibility = Visibility.Hidden;
+                    deleteBtn.Visibility = Visibility.Hidden;
+                }
+            };
+            row.MouseLeftButtonUp += (_, __) =>
+            {
+                if (isRenaming || actionsPanel.IsMouseOver) return;
+                SwitchActiveProfile(name);
+            };
+
+            pencilBtn.Click += (_, e) => { e.Handled = true; BeginRename(); };
+
+            deleteBtn.Click += (_, e) =>
+            {
+                e.Handled = true;
+                var cfg = ConfigService.ReadConfig(InstallService.ScriptRoot);
+                if (string.Equals(cfg.activeProfile, name, StringComparison.Ordinal))
+                { ShowFeedback("Switch to another profile before deleting.", FeedbackKind.Err); return; }
+                if (cfg.profiles.Count <= 1)
+                { ShowFeedback("At least one profile must remain.", FeedbackKind.Err); return; }
+                ConfigService.DeleteProfile(InstallService.ScriptRoot, name);
+                ShowFeedback($"Profile '{name}' deleted.", FeedbackKind.Ok);
+                RefreshProfileDropdown();
+            };
+
+            renameBox.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Return) { CommitRename(); e.Handled = true; }
+                else if (e.Key == Key.Escape) { CancelRename(); e.Handled = true; }
+            };
+            renameBox.LostFocus += (_, __) => CommitRename();
 
             SidebarProfileStack.Children.Add(row);
         }
