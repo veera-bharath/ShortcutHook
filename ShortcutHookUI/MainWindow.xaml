@@ -431,7 +431,6 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- App title -->
@@ -446,7 +445,7 @@
                 </Border>
 
                 <!-- Status dot + text + hook button -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="{StaticResource ColorSecondary}" VerticalAlignment="Center"/>
                     <TextBlock x:Name="StatusText" Text="Stopped" Foreground="{StaticResource ColorTextDim}" FontSize="12"
                                VerticalAlignment="Center" Margin="7,0,12,0"/>
@@ -454,11 +453,6 @@
                             Style="{StaticResource BtnPrimary}" Height="28" Width="66" Padding="0"
                             FontSize="12" Click="HookBtn_Click"/>
                 </StackPanel>
-
-                <!-- Settings gear -->
-                <Button Grid.Column="3" Content="&#9881;" Style="{StaticResource BtnGhost}"
-                        Height="28" Width="32" Padding="0" FontSize="15" VerticalAlignment="Center"
-                        Click="SettingsBtn_Click"/>
             </Grid>
         </Border>
 
