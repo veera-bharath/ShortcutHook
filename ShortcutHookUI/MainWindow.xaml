@@ -736,46 +736,6 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- App-specific flat view (visible only in App-specific tab) -->
-                        <Border x:Name="AppSpecificCard" Style="{StaticResource Card}" Visibility="Collapsed">
-                            <StackPanel>
-                                <DockPanel>
-                                    <TextBlock Text="APP-SCOPED BINDINGS" Style="{StaticResource SectionLabel}"
-                                               VerticalAlignment="Center"/>
-                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                        <Button x:Name="AppSpecificAddMouseBtn"
-                                                Style="{StaticResource BtnGhost}" Height="24" Padding="8,0"
-                                                ToolTip="Go to Mouse tab to add an app-specific gesture variant"
-                                                Click="AppSpecificAddMouse_Click">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="&#xE962;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                           VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                                <TextBlock Text="Mouse variant" FontFamily="Segoe UI" FontSize="11"
-                                                           VerticalAlignment="Center"/>
-                                            </StackPanel>
-                                        </Button>
-                                        <Button x:Name="AppSpecificAddKbdBtn"
-                                                Style="{StaticResource BtnGhost}" Height="24" Padding="8,0"
-                                                Margin="6,0,0,0"
-                                                ToolTip="Add a new keyboard trigger scoped to an app"
-                                                Click="AppSpecificAddKbd_Click">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="+" FontFamily="Segoe UI" FontSize="14"
-                                                           VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                                <TextBlock Text="Keyboard trigger" FontFamily="Segoe UI" FontSize="11"
-                                                           VerticalAlignment="Center"/>
-                                            </StackPanel>
-                                        </Button>
-                                    </StackPanel>
-                                </DockPanel>
-                                <StackPanel x:Name="AppSpecificStack" Margin="0,10,0,0"/>
-                                <TextBlock x:Name="AppSpecificEmpty"
-                                           Text="No bindings with app scoping configured. Use the buttons above to add app-specific variants."
-                                           Foreground="#555555" FontSize="12" TextWrapping="Wrap"
-                                           Margin="0,8,0,0" Visibility="Collapsed"/>
-                            </StackPanel>
-                        </Border>
-
                     </StackPanel>
                 </ScrollViewer>
 

@@ -425,150 +425,50 @@ public partial class MainWindow : Window
         switch (_activeTab)
         {
             case TabKind.All:
-                MouseCard.Visibility        = Visibility.Visible;
-                KbdCard.Visibility          = Visibility.Visible;
-                AppTriggersCard.Visibility  = Visibility.Visible;
-                AppSpecificCard.Visibility  = Visibility.Collapsed;
+                MouseCard.Visibility       = Visibility.Visible;
+                KbdCard.Visibility         = Visibility.Visible;
+                AppTriggersCard.Visibility = Visibility.Visible;
                 ApplySectionState();
                 break;
 
             case TabKind.Mouse:
-                MouseCard.Visibility        = Visibility.Visible;
-                KbdCard.Visibility          = Visibility.Collapsed;
-                AppTriggersCard.Visibility  = Visibility.Collapsed;
-                AppSpecificCard.Visibility  = Visibility.Collapsed;
-                // Force expand
-                MouseBody.Visibility  = Visibility.Visible;
-                MouseChevron.Text     = "▾";
+                MouseCard.Visibility       = Visibility.Visible;
+                KbdCard.Visibility         = Visibility.Collapsed;
+                AppTriggersCard.Visibility = Visibility.Collapsed;
+                MouseBody.Visibility = Visibility.Visible;
+                MouseChevron.Text    = "▾";
                 break;
 
             case TabKind.Keyboard:
-                MouseCard.Visibility        = Visibility.Collapsed;
-                KbdCard.Visibility          = Visibility.Visible;
-                AppTriggersCard.Visibility  = Visibility.Collapsed;
-                AppSpecificCard.Visibility  = Visibility.Collapsed;
-                KbdBody.Visibility    = Visibility.Visible;
-                KbdChevron.Text       = "▾";
+                MouseCard.Visibility       = Visibility.Collapsed;
+                KbdCard.Visibility         = Visibility.Visible;
+                AppTriggersCard.Visibility = Visibility.Collapsed;
+                KbdBody.Visibility   = Visibility.Visible;
+                KbdChevron.Text      = "▾";
                 break;
 
             case TabKind.AppSpecific:
-                MouseCard.Visibility        = Visibility.Collapsed;
-                KbdCard.Visibility          = Visibility.Collapsed;
-                AppTriggersCard.Visibility  = Visibility.Collapsed;
-                AppSpecificCard.Visibility  = Visibility.Visible;
-                BuildAppSpecificView();
+                MouseCard.Visibility       = Visibility.Collapsed;
+                KbdCard.Visibility         = Visibility.Collapsed;
+                AppTriggersCard.Visibility = Visibility.Visible;
+                AppTriggersBody.Visibility = Visibility.Visible;
+                AppTriggersChevron.Text    = "▾";
                 break;
         }
     }
 
     void UpdateTabBadges()
     {
-        var bindings  = ConfigService.Read(InstallService.ScriptRoot);
-        int mouseCnt  = bindings.Count(b => b.trigger.StartsWith("mouse:", StringComparison.Ordinal));
-        int kbdCnt    = _kbdCards.Count;
-        int appCnt    = _appTriggerCards.Count;
-        int scopedCnt = bindings.Count(b => b.apps?.Count > 0);
-        int allCnt    = mouseCnt + kbdCnt + appCnt;
+        var bindings = ConfigService.Read(InstallService.ScriptRoot);
+        int mouseCnt = bindings.Count(b => b.trigger.StartsWith("mouse:", StringComparison.Ordinal));
+        int kbdCnt   = _kbdCards.Count;
+        int appCnt   = _appTriggerCards.Count;
+        int allCnt   = mouseCnt + kbdCnt + appCnt;
 
-        TabAllBadge.Text          = allCnt    > 0 ? $"({allCnt})"    : "";
-        TabMouseBadge.Text        = mouseCnt  > 0 ? $"({mouseCnt})"  : "";
-        TabKbdBadge.Text          = kbdCnt    > 0 ? $"({kbdCnt})"    : "";
-        TabAppSpecificBadge.Text  = scopedCnt > 0 ? $"({scopedCnt})" : "";
-    }
-
-    void BuildAppSpecificView()
-    {
-        AppSpecificStack.Children.Clear();
-
-        var items = new List<(string trigger, string apps, string output)>();
-
-        // Mouse scoped rows
-        foreach (var def in MouseDefs)
-        {
-            if (!_mouseRows.TryGetValue(def.Gesture, out var rows)) continue;
-            foreach (var row in rows)
-            {
-                if (row.IsGlobal || row.Apps.Count == 0) continue;
-                var appStr    = string.Join(", ", row.Apps);
-                var outputStr = row.Chain.Count > 0
-                    ? string.Join(" → ", row.Chain.Select(c => c.OutputValue ?? "").Where(s => s.Length > 0))
-                    : "—";
-                items.Add((def.Label, appStr, outputStr));
-            }
-        }
-
-        // Keyboard scoped rows
-        foreach (var card in _kbdCards)
-        {
-            foreach (var row in card.Variants)
-            {
-                if (row.IsGlobal || row.Apps.Count == 0) continue;
-                var trigDisplay = card.Trigger.StartsWith("key:", StringComparison.Ordinal)
-                    ? card.Trigger.Substring(4) : card.Trigger;
-                var appStr    = string.Join(", ", row.Apps);
-                var outputStr = row.Chain.Count > 0
-                    ? string.Join(" → ", row.Chain.Select(c => c.OutputValue ?? "").Where(s => s.Length > 0))
-                    : "—";
-                items.Add((trigDisplay, appStr, outputStr));
-            }
-        }
-
-        if (items.Count == 0)
-        {
-            AppSpecificEmpty.Visibility = Visibility.Visible;
-            return;
-        }
-
-        AppSpecificEmpty.Visibility = Visibility.Collapsed;
-
-        foreach (var (trigger, apps, output) in items)
-        {
-            var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(160) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(160) });
-
-            var trigBlk = new TextBlock
-            {
-                Text = trigger, Foreground = Br("#CCCCCC"), FontSize = 12,
-                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis
-            };
-            var appsBlk = new TextBlock
-            {
-                Text = apps, Foreground = Br("#5B9CF6"), FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
-                Margin = new Thickness(8, 0, 8, 0)
-            };
-            var outBlk = new TextBlock
-            {
-                Text = output, Foreground = Br("#888888"), FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis
-            };
-
-            Grid.SetColumn(trigBlk, 0);
-            Grid.SetColumn(appsBlk, 1);
-            Grid.SetColumn(outBlk,  2);
-            row.Children.Add(trigBlk);
-            row.Children.Add(appsBlk);
-            row.Children.Add(outBlk);
-            AppSpecificStack.Children.Add(row);
-        }
-    }
-
-    void AppSpecificAddMouse_Click(object sender, RoutedEventArgs e)
-    {
-        SwitchTab(TabKind.Mouse);
-    }
-
-    void AppSpecificAddKbd_Click(object sender, RoutedEventArgs e)
-    {
-        MarkDirty();
-        AddKbdTriggerCard("", null);
-        SwitchTab(TabKind.Keyboard);
-        // Scroll to the newly added card at the bottom
-        KbdStack.UpdateLayout();
-        if (KbdStack.Children.Count > 0)
-            ((FrameworkElement)KbdStack.Children[^1]).BringIntoView();
+        TabAllBadge.Text         = allCnt   > 0 ? $"({allCnt})"  : "";
+        TabMouseBadge.Text       = mouseCnt > 0 ? $"({mouseCnt})" : "";
+        TabKbdBadge.Text         = kbdCnt   > 0 ? $"({kbdCnt})"  : "";
+        TabAppSpecificBadge.Text = appCnt   > 0 ? $"({appCnt})"  : "";
     }
 
     // =========================================================================
@@ -1050,7 +950,6 @@ public partial class MainWindow : Window
         }
 
         UpdateTabBadges();
-        if (_activeTab == TabKind.AppSpecific) BuildAppSpecificView();
     }
 
     void InstallBtn_Click(object sender, RoutedEventArgs e)
