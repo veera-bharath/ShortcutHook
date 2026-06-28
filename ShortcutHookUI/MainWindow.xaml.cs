@@ -88,6 +88,7 @@ public sealed class KbdTriggerCard
     public Border     CardBorder   = null!;
     public StackPanel VariantStack = null!;
     public Button     CaptureBtn   = null!;
+    public TextBlock  TriggerText  = null!;
     public string     Trigger      = "";
     public List<Row>  Variants     = new();
 }
@@ -271,6 +272,7 @@ public partial class MainWindow : Window
     readonly Dictionary<string, string?> _appProcNameCache = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, List<Row>> _mouseRows = new();
     readonly Dictionary<string, StackPanel> _mouseGestureStacks = new();
+    readonly Dictionary<string, TextBlock> _mouseGestureLabels = new();
     readonly List<KbdTriggerCard> _kbdCards = new();
     readonly List<AppTriggerCard> _appTriggerCards = new();
     string _appRoot;
@@ -577,19 +579,138 @@ public partial class MainWindow : Window
             card.CardBorder.Visibility = !active || RowsMatchFilter(trigDisplay, new List<Row> { card.Row })
                 ? Visibility.Visible : Visibility.Collapsed;
         }
+
+        UpdateHighlights();
+        SortVisibleGestureRows();
+        SortVisibleKbdCards();
     }
 
     bool RowsMatchFilter(string label, List<Row> rows)
     {
-        if (label.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (FuzzyMatch(label, _filterText)) return true;
         foreach (var row in rows)
         {
             foreach (var output in GetRowOutputs(row))
-                if (output.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (FuzzyMatch(output, _filterText)) return true;
             foreach (var app in row.Apps)
-                if (app.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (FuzzyMatch(app, _filterText)) return true;
         }
         return false;
+    }
+
+    static bool FuzzyMatch(string text, string query)
+    {
+        if (string.IsNullOrEmpty(query)) return true;
+        int qi = 0;
+        foreach (char c in text)
+        {
+            if (char.ToUpperInvariant(c) == char.ToUpperInvariant(query[qi]))
+                if (++qi == query.Length) return true;
+        }
+        return false;
+    }
+
+    // Lower score = better match. Uses position of first matched char so that
+    // "Right click x2" (first 'r' at 0) outranks "Left Hold + Right click x1" (first 'r' at 14).
+    static int FuzzyScore(string text, string query)
+    {
+        if (string.IsNullOrEmpty(query)) return 0;
+        char q0 = char.ToUpperInvariant(query[0]);
+        for (int i = 0; i < text.Length; i++)
+            if (char.ToUpperInvariant(text[i]) == q0) return i;
+        return int.MaxValue;
+    }
+
+    void SortVisibleGestureRows()
+    {
+        MouseStack.Children.Clear();
+        if (string.IsNullOrEmpty(_filterText))
+        {
+            foreach (var def in MouseDefs)
+                if (_mouseGestureStacks.TryGetValue(def.Gesture, out var sp)) MouseStack.Children.Add(sp);
+            return;
+        }
+        var ordered = MouseDefs
+            .Where(def => _mouseGestureStacks.ContainsKey(def.Gesture))
+            .OrderBy(def => _mouseGestureStacks[def.Gesture].Visibility == Visibility.Collapsed ? 1 : 0)
+            .ThenBy(def => FuzzyScore(def.Label, _filterText));
+        foreach (var def in ordered) MouseStack.Children.Add(_mouseGestureStacks[def.Gesture]);
+    }
+
+    void SortVisibleKbdCards()
+    {
+        KbdStack.Children.Clear();
+        if (string.IsNullOrEmpty(_filterText))
+        {
+            foreach (var card in _kbdCards) KbdStack.Children.Add(card.CardBorder);
+            return;
+        }
+        var ordered = _kbdCards
+            .OrderBy(card => card.CardBorder.Visibility == Visibility.Collapsed ? 1 : 0)
+            .ThenBy(card => {
+                var trig = card.Trigger.StartsWith("key:", StringComparison.Ordinal)
+                    ? card.Trigger.Substring(4) : card.Trigger;
+                return FuzzyScore(trig, _filterText);
+            });
+        foreach (var card in ordered) KbdStack.Children.Add(card.CardBorder);
+    }
+
+    void ApplyHighlight(TextBlock tb, string text, string query, Brush? normalFg = null)
+    {
+        tb.Inlines.Clear();
+        var fg = normalFg ?? TextBrush;
+        tb.Foreground = fg;
+        if (string.IsNullOrEmpty(query) || !FuzzyMatch(text, query))
+        {
+            tb.Inlines.Add(new System.Windows.Documents.Run(text));
+            return;
+        }
+        var matchPos = new bool[text.Length];
+        int qi = 0;
+        for (int i = 0; i < text.Length && qi < query.Length; i++)
+        {
+            if (char.ToUpperInvariant(text[i]) == char.ToUpperInvariant(query[qi]))
+            {
+                matchPos[i] = true;
+                qi++;
+            }
+        }
+        int start = 0;
+        while (start < text.Length)
+        {
+            if (matchPos[start])
+            {
+                int end = start;
+                while (end < text.Length && matchPos[end]) end++;
+                tb.Inlines.Add(new System.Windows.Documents.Run(text.Substring(start, end - start)) { FontWeight = FontWeights.SemiBold, Foreground = AccentBrush });
+                start = end;
+            }
+            else
+            {
+                int end = start;
+                while (end < text.Length && !matchPos[end]) end++;
+                tb.Inlines.Add(new System.Windows.Documents.Run(text.Substring(start, end - start)) { Foreground = fg });
+                start = end;
+            }
+        }
+    }
+
+    void UpdateHighlights()
+    {
+        foreach (var def in MouseDefs)
+        {
+            if (!_mouseGestureLabels.TryGetValue(def.Gesture, out var lbl)) continue;
+            ApplyHighlight(lbl, def.Label, _filterText, Br("#CCCCCC"));
+        }
+        foreach (var card in _kbdCards)
+        {
+            if (card.TriggerText == null) continue;
+            var disp = !string.IsNullOrEmpty(card.Trigger) && card.Trigger.StartsWith("key:", StringComparison.Ordinal)
+                ? card.Trigger.Substring(4)
+                : (!string.IsNullOrEmpty(card.Trigger) ? card.Trigger : "Click to record trigger...");
+            var fg = !string.IsNullOrEmpty(card.Trigger) ? TextBrush : DimBrush;
+            ApplyHighlight(card.TriggerText, disp, _filterText, fg);
+        }
     }
 
     // =========================================================================
@@ -1757,6 +1878,7 @@ public partial class MainWindow : Window
         MouseStack.Children.Clear();
         _mouseRows.Clear();
         _mouseGestureStacks.Clear();
+        _mouseGestureLabels.Clear();
 
         var configRoot     = ConfigService.ReadConfig(InstallService.ScriptRoot);
         var activeBindings = ConfigService.GetActiveProfile(configRoot).bindings;
@@ -1819,7 +1941,9 @@ public partial class MainWindow : Window
 
         if (isGlobal)
         {
-            var lbl = new TextBlock { Text = def.Label, Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 8, 0, 0) };
+            var lbl = new TextBlock { Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 8, 0, 0) };
+            ApplyHighlight(lbl, def.Label, _filterText, Br("#CCCCCC"));
+            _mouseGestureLabels[def.Gesture] = lbl;
             Grid.SetColumn(lbl, 0);
             grid.Children.Add(lbl);
         }
@@ -2673,8 +2797,11 @@ public partial class MainWindow : Window
 
         var displayTrig = !string.IsNullOrEmpty(trigger) && trigger.StartsWith("key:", StringComparison.Ordinal)
             ? trigger.Substring(4) : "Click to record trigger...";
-        capBtn.Content    = displayTrig;
-        capBtn.Foreground = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
+        var trigText = new TextBlock { FontFamily = new FontFamily("Consolas"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var trigFg = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
+        ApplyHighlight(trigText, displayTrig, _filterText, trigFg);
+        card.TriggerText = trigText;
+        capBtn.Content   = trigText;
 
         capBtn.Click += (_, __) => BeginCapture(
             btn: capBtn,
@@ -3123,9 +3250,16 @@ public partial class MainWindow : Window
     {
         var disp = !string.IsNullOrEmpty(trigger) && trigger.StartsWith("key:", StringComparison.Ordinal)
             ? trigger.Substring(4) : "Click to record...";
-        btn.Content    = disp;
-        btn.Foreground = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
-        btn.Background = Transparent;
+        var fg = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
+        if (btn.Content is TextBlock tb)
+            ApplyHighlight(tb, disp, _filterText, fg);
+        else
+        {
+            var newTb = new TextBlock { FontFamily = new FontFamily("Consolas"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            ApplyHighlight(newTb, disp, _filterText, fg);
+            btn.Content = newTb;
+        }
+        btn.Background  = Transparent;
         btn.BorderBrush = DarkBorder;
     }
 
