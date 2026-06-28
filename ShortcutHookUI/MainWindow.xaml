@@ -477,6 +477,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="PROFILES" Style="{StaticResource SectionLabel}"
@@ -488,7 +489,7 @@
 
                     <Button Grid.Row="2" x:Name="SidebarAddProfileBtn"
                             Style="{StaticResource BtnGhost}" Height="30"
-                            Margin="8,6,8,10" Padding="0"
+                            Margin="8,6,8,4" Padding="0"
                             Click="SidebarAddProfileBtn_Click">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                             <TextBlock Text="+" Foreground="#666666" FontSize="14"
@@ -497,6 +498,22 @@
                                        VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+
+                    <StackPanel Grid.Row="3">
+                        <Border Height="1" Background="#1A1A1A" Margin="8,0"/>
+                        <Button x:Name="SidebarSettingsBtn"
+                                Style="{StaticResource BtnGhost}" Height="30"
+                                Margin="8,4,8,8" Padding="8,0"
+                                HorizontalContentAlignment="Left"
+                                Click="SettingsBtn_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#9881;" FontSize="12" Foreground="#555555"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="Settings" FontFamily="Segoe UI" FontSize="11"
+                                           Foreground="#666666" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </Border>
 
