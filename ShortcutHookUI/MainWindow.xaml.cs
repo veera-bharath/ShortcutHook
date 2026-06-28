@@ -555,6 +555,22 @@ public partial class MainWindow : Window
         }
     }
 
+    void AppSpecificAddMouse_Click(object sender, RoutedEventArgs e)
+    {
+        SwitchTab(TabKind.Mouse);
+    }
+
+    void AppSpecificAddKbd_Click(object sender, RoutedEventArgs e)
+    {
+        MarkDirty();
+        AddKbdTriggerCard("", null);
+        SwitchTab(TabKind.Keyboard);
+        // Scroll to the newly added card at the bottom
+        KbdStack.UpdateLayout();
+        if (KbdStack.Children.Count > 0)
+            ((FrameworkElement)KbdStack.Children[^1]).BringIntoView();
+    }
+
     // =========================================================================
     // Accordion
     // =========================================================================
