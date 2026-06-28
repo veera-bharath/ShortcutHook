@@ -392,6 +392,86 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
+    // Tabs
+    // =========================================================================
+    enum TabKind { All, Mouse, Keyboard, AppSpecific }
+    TabKind _activeTab = TabKind.All;
+
+    void TabAll_Click(object sender, RoutedEventArgs e)         => SwitchTab(TabKind.All);
+    void TabMouse_Click(object sender, RoutedEventArgs e)       => SwitchTab(TabKind.Mouse);
+    void TabKbd_Click(object sender, RoutedEventArgs e)         => SwitchTab(TabKind.Keyboard);
+    void TabAppSpecific_Click(object sender, RoutedEventArgs e) => SwitchTab(TabKind.AppSpecific);
+
+    void SwitchTab(TabKind tab)
+    {
+        if (_activeTab == tab) return;
+        _activeTab = tab;
+
+        // Clear search when switching tabs
+        if (!string.IsNullOrEmpty(SearchBox?.Text))
+            SearchBox.Text = "";
+
+        ApplyTabState();
+    }
+
+    void ApplyTabState()
+    {
+        // Update tab button active indicators
+        TabAllBtn.Tag         = _activeTab == TabKind.All         ? "active" : null;
+        TabMouseBtn.Tag       = _activeTab == TabKind.Mouse       ? "active" : null;
+        TabKbdBtn.Tag         = _activeTab == TabKind.Keyboard    ? "active" : null;
+        TabAppSpecificBtn.Tag = _activeTab == TabKind.AppSpecific ? "active" : null;
+
+        switch (_activeTab)
+        {
+            case TabKind.All:
+                MouseCard.Visibility       = Visibility.Visible;
+                KbdCard.Visibility         = Visibility.Visible;
+                AppTriggersCard.Visibility = Visibility.Visible;
+                ApplySectionState();
+                break;
+
+            case TabKind.Mouse:
+                MouseCard.Visibility       = Visibility.Visible;
+                KbdCard.Visibility         = Visibility.Collapsed;
+                AppTriggersCard.Visibility = Visibility.Collapsed;
+                MouseBody.Visibility = Visibility.Visible;
+                MouseChevron.Text    = "▾";
+                break;
+
+            case TabKind.Keyboard:
+                MouseCard.Visibility       = Visibility.Collapsed;
+                KbdCard.Visibility         = Visibility.Visible;
+                AppTriggersCard.Visibility = Visibility.Collapsed;
+                KbdBody.Visibility   = Visibility.Visible;
+                KbdChevron.Text      = "▾";
+                break;
+
+            case TabKind.AppSpecific:
+                MouseCard.Visibility       = Visibility.Collapsed;
+                KbdCard.Visibility         = Visibility.Collapsed;
+                AppTriggersCard.Visibility = Visibility.Visible;
+                AppTriggersBody.Visibility = Visibility.Visible;
+                AppTriggersChevron.Text    = "▾";
+                break;
+        }
+    }
+
+    void UpdateTabBadges()
+    {
+        var bindings = ConfigService.Read(InstallService.ScriptRoot);
+        int mouseCnt = bindings.Count(b => b.trigger.StartsWith("mouse:", StringComparison.Ordinal));
+        int kbdCnt   = _kbdCards.Count;
+        int appCnt   = _appTriggerCards.Count;
+        int allCnt   = mouseCnt + kbdCnt + appCnt;
+
+        TabAllBadge.Text         = allCnt   > 0 ? $"({allCnt})"  : "";
+        TabMouseBadge.Text       = mouseCnt > 0 ? $"({mouseCnt})" : "";
+        TabKbdBadge.Text         = kbdCnt   > 0 ? $"({kbdCnt})"  : "";
+        TabAppSpecificBadge.Text = appCnt   > 0 ? $"({appCnt})"  : "";
+    }
+
+    // =========================================================================
     // Accordion
     // =========================================================================
     void MouseHeader_Click(object sender, System.Windows.Input.MouseButtonEventArgs e) => ToggleSection(Section.Mouse);
@@ -445,27 +525,35 @@ public partial class MainWindow : Window
 
         SearchClearBtn.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
 
-        if (active)
+        // Expand/collapse accordion state management only applies in the All tab.
+        if (_activeTab == TabKind.All)
         {
-            if (!_filterWasActive)
+            if (active)
             {
-                _preFilterMouseExpanded = _mouseExpanded;
-                _preFilterKbdExpanded   = _kbdExpanded;
-                _preFilterAppTriggersExpanded = _appTriggersExpanded;
-                _filterWasActive = true;
+                if (!_filterWasActive)
+                {
+                    _preFilterMouseExpanded        = _mouseExpanded;
+                    _preFilterKbdExpanded          = _kbdExpanded;
+                    _preFilterAppTriggersExpanded  = _appTriggersExpanded;
+                    _filterWasActive = true;
+                }
+                _mouseExpanded       = true;
+                _kbdExpanded         = true;
+                _appTriggersExpanded = true;
+                ApplySectionState();
             }
-            _mouseExpanded = true;
-            _kbdExpanded   = true;
-            _appTriggersExpanded = true;
-            ApplySectionState();
+            else if (_filterWasActive)
+            {
+                _mouseExpanded       = _preFilterMouseExpanded;
+                _kbdExpanded         = _preFilterKbdExpanded;
+                _appTriggersExpanded = _preFilterAppTriggersExpanded;
+                _filterWasActive     = false;
+                ApplySectionState();
+            }
         }
-        else if (_filterWasActive)
+        else
         {
-            _mouseExpanded = _preFilterMouseExpanded;
-            _kbdExpanded   = _preFilterKbdExpanded;
-            _appTriggersExpanded = _preFilterAppTriggersExpanded;
             _filterWasActive = false;
-            ApplySectionState();
         }
 
         foreach (var def in MouseDefs)
@@ -860,6 +948,8 @@ public partial class MainWindow : Window
                 .ToList();
             AddKbdTriggerCard(trig, variants);
         }
+
+        UpdateTabBadges();
     }
 
     void InstallBtn_Click(object sender, RoutedEventArgs e)
