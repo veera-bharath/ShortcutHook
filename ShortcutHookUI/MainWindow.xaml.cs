@@ -3120,6 +3120,25 @@ public partial class MainWindow : Window
         }
 
         var rawKey = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        // Command palette: Ctrl+K opens, arrow/enter/esc handled here so they work
+        // even when focus is inside the TextBox (which would otherwise consume them).
+        if (CommandPaletteRoot.Visibility == Visibility.Visible)
+        {
+            if (rawKey == Key.Escape)  { CloseCommandPalette(); e.Handled = true; return; }
+            if (rawKey == Key.Down)    { MovePaletteSelection(+1); e.Handled = true; return; }
+            if (rawKey == Key.Up)      { MovePaletteSelection(-1); e.Handled = true; return; }
+            if (rawKey == Key.Return)  { ExecuteSelectedPaletteItem(); e.Handled = true; return; }
+            return;
+        }
+
+        if (rawKey == Key.K && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && !_captureActive)
+        {
+            OpenCommandPalette();
+            e.Handled = true;
+            return;
+        }
+
         if (rawKey == Key.Escape && SearchBox.IsFocused && !string.IsNullOrEmpty(SearchBox.Text))
         {
             ClearSearch();
@@ -3962,5 +3981,266 @@ public partial class MainWindow : Window
             ShowFeedback(savedPrefix + " " + string.Join(" ", warnParts), FeedbackKind.Warn);
         else if (wasRunning) ShowFeedback("Saved — daemon restarting.", FeedbackKind.Ok);
         else                 ShowFeedback("Settings saved.", FeedbackKind.Ok);
+    }
+
+    // =========================================================================
+    // Command palette
+    // =========================================================================
+
+    sealed class PaletteItem
+    {
+        public string   Label    { get; init; } = "";
+        public string   Subtitle { get; init; } = "";
+        public int      Score    { get; set; }
+        public Border?  Row      { get; set; }
+        public Action?  Execute  { get; init; }
+    }
+
+    readonly List<PaletteItem> _paletteItems = new();
+    int _paletteSelectedIndex = -1;
+
+    void OpenCommandPalette()
+    {
+        PaletteSearchBox.Text = "";
+        PaletteSearchPlaceholder.Visibility = Visibility.Visible;
+        UpdatePaletteResults("");
+        CommandPaletteRoot.Visibility = Visibility.Visible;
+        PaletteSearchBox.Focus();
+    }
+
+    void CloseCommandPalette()
+    {
+        CommandPaletteRoot.Visibility = Visibility.Collapsed;
+        PaletteResultsStack.Children.Clear();
+        _paletteItems.Clear();
+        _paletteSelectedIndex = -1;
+    }
+
+    void CommandPaletteRoot_MouseDown(object sender, MouseButtonEventArgs e) => CloseCommandPalette();
+    void CommandPaletteCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    void PaletteSearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        PaletteSearchPlaceholder.Visibility = PaletteSearchBox.Text.Length > 0
+            ? Visibility.Collapsed : Visibility.Visible;
+        UpdatePaletteResults(PaletteSearchBox.Text);
+    }
+
+    void PaletteSearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        // Arrow / Enter / Esc are already handled in OnWindowPreviewKeyDown before the
+        // TextBox sees them, so this handler is a safety net only.
+        if (e.Key == Key.Down)   { MovePaletteSelection(+1); e.Handled = true; }
+        else if (e.Key == Key.Up) { MovePaletteSelection(-1); e.Handled = true; }
+    }
+
+    void UpdatePaletteResults(string raw)
+    {
+        var query = raw.Trim();
+        PaletteResultsStack.Children.Clear();
+        _paletteItems.Clear();
+        _paletteSelectedIndex = -1;
+
+        // ── Binding results ─────────────────────────────────────────────────
+        var bindingItems = new List<PaletteItem>();
+
+        // Mouse
+        foreach (var def in MouseDefs)
+        {
+            if (!_mouseRows.TryGetValue(def.Gesture, out var rows) || rows.Count == 0) continue;
+            var outputs = GetRowOutputs(rows[0]);
+            if (!string.IsNullOrEmpty(query) && !FuzzyMatch(def.Label, query) && !outputs.Any(o => FuzzyMatch(o, query))) continue;
+            var sub   = outputs.Count > 0 ? string.Join(", ", outputs.Take(2)) : "";
+            int score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(def.Label, query);
+            if (!_mouseGestureStacks.TryGetValue(def.Gesture, out var gsp)) continue;
+            var gspCapture = gsp;
+            bindingItems.Add(new PaletteItem { Label = def.Label, Subtitle = sub, Score = score,
+                Execute = () => NavigateToPaletteBinding(Section.Mouse, gspCapture, null) });
+        }
+
+        // Keyboard
+        foreach (var card in _kbdCards)
+        {
+            var trig    = card.Trigger.StartsWith("key:", StringComparison.Ordinal) ? card.Trigger[4..] : card.Trigger;
+            var outputs = card.Variants.SelectMany(v => GetRowOutputs(v)).Distinct().ToList();
+            if (!string.IsNullOrEmpty(query) && !FuzzyMatch(trig, query) && !outputs.Any(o => FuzzyMatch(o, query))) continue;
+            var sub   = outputs.Count > 0 ? string.Join(", ", outputs.Take(2)) : "";
+            int score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(trig, query);
+            var cb    = card;
+            bindingItems.Add(new PaletteItem { Label = trig, Subtitle = sub, Score = score,
+                Execute = () => NavigateToPaletteBinding(Section.Kbd, null, cb.CardBorder) });
+        }
+
+        // App triggers
+        foreach (var card in _appTriggerCards)
+        {
+            var kindLabel = card.KindCombo.SelectedIndex switch { 1 => "App exits", 2 => "App focus", 3 => "App blur", _ => "App launches" };
+            var apps      = card.SelectedApps;
+            var label     = apps.Count > 0 ? $"{kindLabel}: {apps[0]}" : kindLabel;
+            var outputs   = GetRowOutputs(card.Row);
+            if (!string.IsNullOrEmpty(query) && !FuzzyMatch(label, query) && !outputs.Any(o => FuzzyMatch(o, query))) continue;
+            var sub   = outputs.Count > 0 ? string.Join(", ", outputs.Take(2)) : "";
+            int score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(label, query);
+            var ac    = card;
+            bindingItems.Add(new PaletteItem { Label = label, Subtitle = sub, Score = score,
+                Execute = () => NavigateToPaletteBinding(Section.AppTriggers, null, ac.CardBorder) });
+        }
+
+        if (!string.IsNullOrEmpty(query))
+            bindingItems = [.. bindingItems.OrderBy(x => x.Score)];
+
+        // ── Action results ───────────────────────────────────────────────────
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        bool daemonRunning = DaemonService.IsRunning();
+
+        var actionDefs = new List<(string label, string sub, Action execute)>
+        {
+            ("Add shortcut",   "Record a new keyboard binding",
+                () => {
+                    CloseCommandPalette();
+                    SwitchTab(TabKind.All);
+                    _kbdExpanded = true; ApplySectionState();
+                    AddKbdTriggerCard("", null); MarkDirty();
+                    Dispatcher.InvokeAsync(() => { if (_kbdCards.Count > 0) _kbdCards[^1].CardBorder.BringIntoView(); },
+                        DispatcherPriority.Loaded);
+                }),
+            ("Open settings",  "Open the settings panel",        () => { CloseCommandPalette(); SettingsBtn_Click(null!, null!); }),
+            (daemonRunning ? "Stop daemon" : "Start daemon",
+             daemonRunning ? "Stop the hook daemon" : "Start the hook daemon",
+                () => { CloseCommandPalette(); HookBtn_Click(null!, null!); }),
+            ("Import binding", "Paste a binding JSON from the clipboard", () => { CloseCommandPalette(); ImportBindingFromClipboard(); }),
+        };
+
+        foreach (var p in config.profiles)
+        {
+            var pName  = p.name;
+            var active = string.Equals(pName, config.activeProfile, StringComparison.Ordinal);
+            actionDefs.Add(($"Switch to profile: {pName}", active ? "Currently active" : "Switch active profile",
+                () => { CloseCommandPalette(); if (!active) SwitchActiveProfile(pName); }));
+        }
+
+        var actionItems = actionDefs
+            .Where(a => string.IsNullOrEmpty(query) || FuzzyMatch(a.label, query) || FuzzyMatch(a.sub, query))
+            .Select(a => new PaletteItem { Label = a.label, Subtitle = a.sub, Score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(a.label, query), Execute = a.execute })
+            .ToList();
+
+        if (!string.IsNullOrEmpty(query))
+            actionItems = [.. actionItems.OrderBy(x => x.Score)];
+
+        // ── Render ───────────────────────────────────────────────────────────
+        void AddCategoryHeader(string text)
+        {
+            PaletteResultsStack.Children.Add(new TextBlock
+            {
+                Text = text, Foreground = Br("#505050"), FontSize = 10,
+                FontWeight = FontWeights.SemiBold, Margin = new Thickness(12, 8, 12, 3),
+            });
+        }
+
+        var limit = bindingItems.Count > 0 && actionItems.Count > 0 ? 6 : 10;
+        if (bindingItems.Count > 0) { AddCategoryHeader("BINDINGS"); foreach (var item in bindingItems.Take(limit)) AddPaletteRow(item); }
+        if (actionItems.Count  > 0) { AddCategoryHeader("ACTIONS");  foreach (var item in actionItems)              AddPaletteRow(item); }
+
+        if (_paletteItems.Count == 0)
+        {
+            PaletteResultsStack.Children.Add(new TextBlock
+            {
+                Text = "No results",
+                Foreground = Br("#444444"), FontSize = 13,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 18, 0, 18),
+            });
+        }
+        else SetPaletteSelection(0);
+    }
+
+    void AddPaletteRow(PaletteItem item)
+    {
+        var labelTb = new TextBlock
+        {
+            Text = item.Label, Foreground = Br("#E0E0E0"), FontSize = 13,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var stack = new StackPanel();
+        stack.Children.Add(labelTb);
+        if (!string.IsNullOrEmpty(item.Subtitle))
+            stack.Children.Add(new TextBlock
+            {
+                Text = item.Subtitle, Foreground = Br("#505050"), FontSize = 11,
+                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+            });
+
+        var row = new Border
+        {
+            Padding     = new Thickness(12, 8, 12, 8),
+            CornerRadius = new CornerRadius(6),
+            Cursor      = Cursors.Hand,
+            Child       = stack,
+            Margin      = new Thickness(0, 1, 0, 1),
+        };
+        item.Row = row;
+        _paletteItems.Add(item);
+
+        var idx = _paletteItems.Count - 1;
+        row.MouseEnter        += (_, __) => SetPaletteSelection(idx);
+        row.MouseLeftButtonDown += (_, e)  => { ExecutePaletteItem(_paletteItems[idx]); e.Handled = true; };
+
+        PaletteResultsStack.Children.Add(row);
+    }
+
+    void SetPaletteSelection(int index)
+    {
+        if (index < 0 || index >= _paletteItems.Count) return;
+        if (_paletteSelectedIndex >= 0 && _paletteSelectedIndex < _paletteItems.Count)
+            _paletteItems[_paletteSelectedIndex].Row!.Background = Transparent;
+        _paletteSelectedIndex = index;
+        var row = _paletteItems[index].Row!;
+        row.Background = Br("#1A3050");
+        row.BringIntoView();
+    }
+
+    void MovePaletteSelection(int delta)
+    {
+        if (_paletteItems.Count == 0) return;
+        SetPaletteSelection(Math.Clamp(_paletteSelectedIndex + delta, 0, _paletteItems.Count - 1));
+    }
+
+    void ExecuteSelectedPaletteItem()
+    {
+        if (_paletteSelectedIndex >= 0 && _paletteSelectedIndex < _paletteItems.Count)
+            ExecutePaletteItem(_paletteItems[_paletteSelectedIndex]);
+    }
+
+    void ExecutePaletteItem(PaletteItem item) => item.Execute?.Invoke();
+
+    void NavigateToPaletteBinding(Section section, FrameworkElement? gestureStack, Border? cardBorder)
+    {
+        CloseCommandPalette();
+        SwitchTab(TabKind.All);
+        switch (section)
+        {
+            case Section.Mouse:       _mouseExpanded       = true; break;
+            case Section.Kbd:         _kbdExpanded         = true; break;
+            case Section.AppTriggers: _appTriggersExpanded = true; break;
+        }
+        ApplySectionState();
+        var target = (FrameworkElement?)cardBorder ?? gestureStack;
+        if (target == null) return;
+        Dispatcher.InvokeAsync(() =>
+        {
+            target.BringIntoView();
+            FlashPaletteTarget(target);
+        }, DispatcherPriority.Loaded);
+    }
+
+    void FlashPaletteTarget(FrameworkElement el)
+    {
+        var border = el as Border ?? (el is Panel p ? p.Children.OfType<Border>().FirstOrDefault() : null);
+        if (border == null) return;
+        var origBrush = border.BorderBrush;
+        border.BorderBrush = AccentBrush;
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        t.Tick += (_, __) => { border.BorderBrush = origBrush; t.Stop(); };
+        t.Start();
     }
 }
