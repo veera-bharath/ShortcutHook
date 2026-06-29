@@ -13,6 +13,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 
@@ -297,6 +298,7 @@ public partial class MainWindow : Window
     bool _appTriggersExpanded = false;
 
     bool   _hasUnsavedChanges    = false;
+    Border? _activeSidebarRow    = null;
 
     string _filterText           = "";
     bool   _filterWasActive      = false;
@@ -1426,7 +1428,7 @@ public partial class MainWindow : Window
                 Margin       = new Thickness(0, 0, 0, 4),
                 Child        = grid,
             };
-            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; if (!isSelected) row.Background = Br("#1F1F1F"); };
+            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; if (!isSelected) row.Background = Br("#242424"); };
             row.MouseLeave += (_, __) => { actionsPanel.Visibility = Visibility.Collapsed; if (!isSelected) row.Background = Transparent; };
             row.MouseLeftButtonDown += (_, __) => { _selectedProfileForExport = name; BuildProfileList(); };
 
@@ -1448,6 +1450,7 @@ public partial class MainWindow : Window
         ConfigService.SetActiveProfile(InstallService.ScriptRoot, name);
         ReloadBindingsFromConfig();
         RefreshProfileDropdown();
+        FlashActiveSidebarRow();
         ClearDirty();
         RestartDaemonIfRunning();
         ShowFeedback($"Switched to '{name}'.", FeedbackKind.Ok);
@@ -1858,8 +1861,24 @@ public partial class MainWindow : Window
             };
             renameBox.LostFocus += (_, __) => CommitRename();
 
+            if (isActive) _activeSidebarRow = row;
             SidebarProfileStack.Children.Add(row);
         }
+    }
+
+    void FlashActiveSidebarRow()
+    {
+        if (_activeSidebarRow == null) return;
+        var row   = _activeSidebarRow;
+        var flash = new SolidColorBrush(Color.FromRgb(0x2A, 0x5A, 0x8A));
+        row.Background = flash;
+        var anim = new System.Windows.Media.Animation.ColorAnimation
+        {
+            To             = Color.FromRgb(0x1A, 0x2A, 0x3A),
+            Duration       = new Duration(TimeSpan.FromMilliseconds(350)),
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+        };
+        flash.BeginAnimation(SolidColorBrush.ColorProperty, anim);
     }
 
     void SidebarAddProfileBtn_Click(object sender, RoutedEventArgs e)
@@ -1873,8 +1892,12 @@ public partial class MainWindow : Window
     // =========================================================================
     void MarkDirty()
     {
-        _hasUnsavedChanges        = true;
-        SaveBar.Visibility        = Visibility.Visible;
+        _hasUnsavedChanges = true;
+        if (SaveBar.Visibility != Visibility.Visible)
+        {
+            SaveBar.Visibility = Visibility.Visible;
+            ((Storyboard)FindResource("SaveBarSlideIn")).Begin(SaveBar);
+        }
     }
 
     void ClearDirty()
@@ -2866,6 +2889,8 @@ public partial class MainWindow : Window
             MarkDirty();
         };
 
+        cardBorder.MouseEnter += (_, __) => cardBorder.Background = Br("#1E1E1E");
+        cardBorder.MouseLeave += (_, __) => cardBorder.Background = Br("#181818");
         KbdStack.Children.Add(cardBorder);
         _kbdCards.Add(card);
 
@@ -3051,6 +3076,8 @@ public partial class MainWindow : Window
             MarkDirty();
         };
 
+        cardBorder.MouseEnter += (_, __) => cardBorder.Background = Br("#1E1E1E");
+        cardBorder.MouseLeave += (_, __) => cardBorder.Background = Br("#181818");
         AppTriggersStack.Children.Add(cardBorder);
         _appTriggerCards.Add(card);
     }
