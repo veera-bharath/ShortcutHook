@@ -1158,20 +1158,59 @@ public partial class MainWindow : Window
     // =========================================================================
     // Settings overlay
     // =========================================================================
+    Border? _activeNavBorder;
+
+    static readonly System.Windows.Media.SolidColorBrush NavActiveBg =
+        new(System.Windows.Media.Color.FromRgb(0x1F, 0x2A, 0x3A));
+
     void SettingsBtn_Click(object sender, RoutedEventArgs e)
     {
         ShowSettingsMenu();
         SettingsRoot.Visibility = Visibility.Visible;
     }
 
-    void ShowSettingsMenu()
+    void ShowSettingsMenu() => ActivateNavItem(NavItemDaemon, SettingsDaemonView);
+
+    void ActivateNavItem(Border nav, UIElement content)
     {
-        SettingsMenuView.Visibility          = Visibility.Visible;
+        // deactivate previous
+        if (_activeNavBorder != null)
+            _activeNavBorder.ClearValue(Border.BackgroundProperty);
+
+        // activate new
+        nav.Background = NavActiveBg;
+        _activeNavBorder = nav;
+
+        // show only the selected content panel
+        SettingsDaemonView.Visibility        = Visibility.Collapsed;
         SettingsProfilesView.Visibility      = Visibility.Collapsed;
         SettingsIgnoredAppsView.Visibility   = Visibility.Collapsed;
         SettingsAboutView.Visibility         = Visibility.Collapsed;
         SettingsProfileFormView.Visibility   = Visibility.Collapsed;
         SettingsProfileDeleteView.Visibility = Visibility.Collapsed;
+        content.Visibility = Visibility.Visible;
+
+        if (ReferenceEquals(content, SettingsDaemonView))
+            RefreshDaemonStatusDetail();
+    }
+
+    void RefreshDaemonStatusDetail()
+    {
+        if (!InstallService.IsInstalled())
+        {
+            DaemonStatusDetail.Text = "Runtime not installed";
+            DaemonStatusDot.Fill    = AmberBrush;
+        }
+        else if (DaemonService.IsRunning())
+        {
+            DaemonStatusDetail.Text = "Running";
+            DaemonStatusDot.Fill    = GreenBrush;
+        }
+        else
+        {
+            DaemonStatusDetail.Text = "Stopped";
+            DaemonStatusDot.Fill    = GreyBrush;
+        }
     }
 
     void CloseSettings() => SettingsRoot.Visibility = Visibility.Collapsed;
@@ -1180,27 +1219,31 @@ public partial class MainWindow : Window
 
     void SettingsCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
 
-    void ManageProfilesOption_Click(object sender, MouseButtonEventArgs e) => OpenProfilesView();
+    void NavDaemon_Click(object sender, MouseButtonEventArgs e) =>
+        ActivateNavItem(NavItemDaemon, SettingsDaemonView);
 
-    void OpenProfilesView()
+    void NavProfiles_Click(object sender, MouseButtonEventArgs e) => OpenProfilesView();
+
+    void NavIgnoredApps_Click(object sender, MouseButtonEventArgs e)
     {
-        ShowSettingsMenu();
-        SettingsMenuView.Visibility      = Visibility.Collapsed;
-        SettingsProfilesView.Visibility  = Visibility.Visible;
-        BuildProfileList();
-        SettingsRoot.Visibility = Visibility.Visible;
+        ActivateNavItem(NavItemIgnoredApps, SettingsIgnoredAppsView);
+        BuildIgnoredAppsList();
     }
 
-    void LogViewOption_Click(object sender, MouseButtonEventArgs e)
+    void NavLogs_Click(object sender, MouseButtonEventArgs e)
     {
         CloseSettings();
         new LogViewerWindow { Owner = this }.Show();
     }
 
-    void AboutOption_Click(object sender, MouseButtonEventArgs e)
+    void NavAbout_Click(object sender, MouseButtonEventArgs e) =>
+        ActivateNavItem(NavItemAbout, SettingsAboutView);
+
+    void OpenProfilesView()
     {
-        SettingsMenuView.Visibility  = Visibility.Collapsed;
-        SettingsAboutView.Visibility = Visibility.Visible;
+        ActivateNavItem(NavItemProfiles, SettingsProfilesView);
+        BuildProfileList();
+        SettingsRoot.Visibility = Visibility.Visible;
     }
 
     // =========================================================================
@@ -1208,14 +1251,8 @@ public partial class MainWindow : Window
     // =========================================================================
     List<(CheckBox Cb, string Name)> _ignoredAppCheckBoxes = new();
 
-    void IgnoredAppsOption_Click(object sender, MouseButtonEventArgs e)
-    {
-        ShowSettingsMenu();
-        SettingsMenuView.Visibility        = Visibility.Collapsed;
-        SettingsIgnoredAppsView.Visibility = Visibility.Visible;
-        BuildIgnoredAppsList();
-        SettingsRoot.Visibility = Visibility.Visible;
-    }
+    void IgnoredAppsCancel_Click(object sender, RoutedEventArgs e) =>
+        ActivateNavItem(NavItemDaemon, SettingsDaemonView);
 
     void BuildIgnoredAppsList()
     {
@@ -1290,11 +1327,8 @@ public partial class MainWindow : Window
         ConfigService.SetIgnoredApps(InstallService.ScriptRoot, selected);
         RestartDaemonIfRunning();
         ShowFeedback("Ignored apps saved.", FeedbackKind.Ok);
-        ShowSettingsMenu();
         CloseSettings();
     }
-
-    void SettingsBack_Click(object sender, RoutedEventArgs e) => ShowSettingsMenu();
 
     void SettingsGitHubBtn_Click(object sender, RoutedEventArgs e) =>
         Process.Start(new ProcessStartInfo("https://github.com/veera-bharath/ShortcutHook")
