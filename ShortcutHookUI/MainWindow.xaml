@@ -758,7 +758,7 @@
                 </Border>
 
                 <!-- Binding sections -->
-                <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" Margin="12,4,8,0">
+                <ScrollViewer x:Name="BindingsScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto" Margin="12,4,8,0">
                     <StackPanel Margin="0,0,4,8">
 
                         <Border x:Name="MouseCard" Style="{StaticResource Card}">
