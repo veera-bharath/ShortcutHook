@@ -591,7 +591,7 @@ internal static class StartupService
             s.TargetPath       = daemon;
             s.Arguments        = "";
             s.WorkingDirectory = InstallService.ScriptRoot;
-            s.WindowStyle      = 7; // minimized
+            s.WindowStyle      = 0; // hidden — no console window on startup
             s.Save();
         }
         else

@@ -2144,7 +2144,7 @@ public partial class MainWindow : Window
         actionCB.SelectionChanged += (_, __) =>
         {
             var idx = actionCB.SelectedIndex;
-            if (idx >= 0 && idx < capturedActions.Length) SetChainItemOutput(row, item, capturedActions[idx].Kind);
+            if (idx >= 0 && idx < capturedActions.Length) { SetChainItemOutput(row, item, capturedActions[idx].Kind); MarkDirty(); }
         };
 
         delBtn.Click += (_, __) =>
@@ -2154,6 +2154,7 @@ public partial class MainWindow : Window
             row.ChainStack.Children.Remove(itemGrid);
             RefreshChainDeleteButtons(row);
             RefreshChainFooter(row);
+            MarkDirty();
         };
 
         row.Chain.Add(item);
@@ -2228,6 +2229,7 @@ public partial class MainWindow : Window
         {
             row.NoteLabel = noteBox.Text;
             notePlaceholder.Visibility = string.IsNullOrEmpty(noteBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+            MarkDirty();
         };
         noteGrid.Children.Add(noteBox);
         noteGrid.Children.Add(notePlaceholder);
@@ -2269,8 +2271,8 @@ public partial class MainWindow : Window
         };
         row.EnabledToggle = enableToggle;
         row.Enabled       = enabled;
-        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
-        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
+        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0;  MarkDirty(); };
+        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; MarkDirty(); };
         toggleRow.Children.Add(enableLbl);
         toggleRow.Children.Add(enableToggle);
 
@@ -2291,8 +2293,8 @@ public partial class MainWindow : Window
             ToolTip   = "Show a brief on-screen toast when this binding fires",
         };
         row.ToastToggle = toastToggle;
-        toastToggle.Checked   += (_, __) => row.ShowToast = true;
-        toastToggle.Unchecked += (_, __) => row.ShowToast = false;
+        toastToggle.Checked   += (_, __) => { row.ShowToast = true;  MarkDirty(); };
+        toastToggle.Unchecked += (_, __) => { row.ShowToast = false; MarkDirty(); };
         toggleRow.Children.Add(toastLbl);
         toggleRow.Children.Add(toastToggle);
 
@@ -2315,8 +2317,8 @@ public partial class MainWindow : Window
                 ToolTip   = "Ignore repeated scroll firings within 200 ms",
             };
             row.DebounceToggle = debounceToggle;
-            debounceToggle.Checked   += (_, __) => row.Debounce = true;
-            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
+            debounceToggle.Checked   += (_, __) => { row.Debounce = true;  MarkDirty(); };
+            debounceToggle.Unchecked += (_, __) => { row.Debounce = false; MarkDirty(); };
             toggleRow.Children.Add(debounceLbl);
             toggleRow.Children.Add(debounceToggle);
         }
@@ -2340,7 +2342,7 @@ public partial class MainWindow : Window
             ToolTip  = "Add another action to this chain",
         };
         Grid.SetColumn(addBtn, 0);
-        addBtn.Click += (_, __) => AddChainItem(row, "", rebuild: true);
+        addBtn.Click += (_, __) => { AddChainItem(row, "", rebuild: true); MarkDirty(); };
 
         var delayLbl = new TextBlock
         {
@@ -2366,6 +2368,7 @@ public partial class MainWindow : Window
         {
             if (int.TryParse(delayTB.Text, out var ms) && ms >= 0)
                 row.OutputDelay = ms;
+            MarkDirty();
         };
         Grid.SetColumn(delayTB, 2);
 
