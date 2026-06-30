@@ -459,6 +459,7 @@ public partial class MainWindow : Window
                 AppTriggersChevron.Text    = "▾";
                 break;
         }
+        BindingsScroll.ScrollToTop();
     }
 
     void UpdateTabBadges()
@@ -2781,9 +2782,9 @@ public partial class MainWindow : Window
     // =========================================================================
     // Keyboard trigger cards
     // =========================================================================
-    void AddKbdBtn_Click(object sender, RoutedEventArgs e) { MarkDirty(); AddKbdTriggerCard("", null); }
+    void AddKbdBtn_Click(object sender, RoutedEventArgs e) { AddKbdTriggerCard("", null, insertAtTop: true); }
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants, bool insertAtTop = false)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -2894,8 +2895,8 @@ public partial class MainWindow : Window
 
         cardBorder.MouseEnter += (_, __) => cardBorder.Background = Br("#1E1E1E");
         cardBorder.MouseLeave += (_, __) => cardBorder.Background = Br("#181818");
-        KbdStack.Children.Add(cardBorder);
-        _kbdCards.Add(card);
+        if (insertAtTop) { KbdStack.Children.Insert(0, cardBorder); _kbdCards.Insert(0, card); }
+        else             { KbdStack.Children.Add(cardBorder);       _kbdCards.Add(card); }
 
         if (variants is { Count: > 0 })
             foreach (var (o, d, isG, apps, ex, e, st, nl) in variants) AddKbdVariantRow(card, o, d, isG, apps, ex, e, st, nl);
@@ -2982,9 +2983,9 @@ public partial class MainWindow : Window
     // App-launch / app-exit trigger cards
     // =========================================================================
     void AddAppTriggerBtn_Click(object sender, RoutedEventArgs e)
-    { MarkDirty(); AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, ""); }
+    { MarkDirty(); AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, "", insertAtTop: true); }
 
-    void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, int outputDelay, bool enabled, bool showToast, string noteLabel)
+    void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, int outputDelay, bool enabled, bool showToast, string noteLabel, bool insertAtTop = false)
     {
         var card = new AppTriggerCard();
 
@@ -3081,8 +3082,8 @@ public partial class MainWindow : Window
 
         cardBorder.MouseEnter += (_, __) => cardBorder.Background = Br("#1E1E1E");
         cardBorder.MouseLeave += (_, __) => cardBorder.Background = Br("#181818");
-        AppTriggersStack.Children.Add(cardBorder);
-        _appTriggerCards.Add(card);
+        if (insertAtTop) { AppTriggersStack.Children.Insert(0, cardBorder); _appTriggerCards.Insert(0, card); }
+        else             { AppTriggersStack.Children.Add(cardBorder);       _appTriggerCards.Add(card); }
     }
 
     static string AppTriggerPrefix(int kindComboIndex) => kindComboIndex switch
@@ -4103,8 +4104,8 @@ public partial class MainWindow : Window
                     CloseCommandPalette();
                     SwitchTab(TabKind.All);
                     _kbdExpanded = true; ApplySectionState();
-                    AddKbdTriggerCard("", null); MarkDirty();
-                    Dispatcher.InvokeAsync(() => { if (_kbdCards.Count > 0) _kbdCards[^1].CardBorder.BringIntoView(); },
+                    AddKbdTriggerCard("", null, insertAtTop: true);
+                    Dispatcher.InvokeAsync(() => { if (_kbdCards.Count > 0) _kbdCards[0].CardBorder.BringIntoView(); },
                         DispatcherPriority.Loaded);
                 }),
             ("Open settings",  "Open the settings panel",        () => { CloseCommandPalette(); SettingsBtn_Click(null!, null!); }),
