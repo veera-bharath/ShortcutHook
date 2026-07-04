@@ -363,7 +363,20 @@ public partial class MainWindow : Window
         StartupToggle.IsChecked = _setupComplete && StartupService.IsEnabled();
         UpdateSetupState();
         _pollTimer.Start();
-        if (_setupComplete) _ = CheckForUpdateAsync();
+        if (_setupComplete)
+        {
+            var runningVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+            var installedVersion = InstallService.GetInstalledVersion() ?? new Version(0, 0, 0);
+
+            if (!InstallService.IsRunningFromInstalledLocation(_appRoot) || runningVersion > installedVersion)
+            {
+                ShowUpdateOverlay();
+            }
+            else
+            {
+                _ = CheckForUpdateAsync();
+            }
+        }
     }
 
     // =========================================================================
@@ -393,6 +406,59 @@ public partial class MainWindow : Window
     {
         if (_updateInfo != null) InstallService.SetDismissedUpdateVersion(_updateInfo.Value.Tag);
         UpdateBanner.Visibility = Visibility.Collapsed;
+    }
+
+    void ShowUpdateOverlay()
+    {
+        var runningVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        var installedVersion = InstallService.GetInstalledVersion();
+        
+        string msg;
+        if (installedVersion != null)
+        {
+            msg = $"You're running a newer version of ShortcutHook. This will update your installation from v{installedVersion.Major}.{installedVersion.Minor}.{installedVersion.Build} to v{runningVersion.Major}.{runningVersion.Minor}.{runningVersion.Build}.";
+        }
+        else
+        {
+            msg = $"You're running a newer version of ShortcutHook. This will update your installation to v{runningVersion.Major}.{runningVersion.Minor}.{runningVersion.Build}.";
+        }
+
+        UpdateOverlayMessageText.Text = msg;
+        UpdateOverlayPathText.Text = $"Target location: {_appRoot}";
+        UpdateOverlay.Visibility = Visibility.Visible;
+    }
+
+    void UpdateOverlayCancelBtn_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    void UpdateOverlayInstallBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            DaemonService.Stop();
+            InstallService.Install(_appRoot);
+            DaemonService.Start();
+
+            ShowFeedback("Update installed successfully.", FeedbackKind.Ok);
+
+            if (!InstallService.IsRunningFromInstalledLocation(_appRoot))
+            {
+                InstallService.LaunchInstalledApp(_appRoot);
+                Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
+            }
+            else
+            {
+                UpdateOverlay.Visibility = Visibility.Collapsed;
+                RefreshInstallState();
+                UpdateSetupState();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Update failed: {ex.Message}", FeedbackKind.Err);
+        }
     }
 
     // =========================================================================

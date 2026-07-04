@@ -375,10 +375,11 @@ internal static class ProfileHelpers
 
 internal static class InstallService
 {
-    const string RegistryKeyPath      = @"Software\ShortcutHook";
-    const string AppInstallPathValue  = "AppInstallPath";
-    const string SetupCompleteValue   = "SetupComplete";
-    const string DismissedUpdateValue = "DismissedUpdateVersion";
+    const string RegistryKeyPath       = @"Software\ShortcutHook";
+    const string AppInstallPathValue   = "AppInstallPath";
+    const string SetupCompleteValue    = "SetupComplete";
+    const string DismissedUpdateValue  = "DismissedUpdateVersion";
+    const string InstalledVersionValue = "InstalledVersion";
     const string ScriptResourceName   = "ShortcutHookUI.Runtime.ShortcutHookDaemon.exe";
     const string ScriptFileName       = "ShortcutHookDaemon.exe";
     const string UiExeFileName        = "ShortcutHookUI.exe";
@@ -442,6 +443,21 @@ internal static class InstallService
         key.SetValue(DismissedUpdateValue, tag);
     }
 
+    public static Version? GetInstalledVersion()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath);
+        var val = key?.GetValue(InstalledVersionValue) as string;
+        if (Version.TryParse(val, out var version))
+            return version;
+        return null;
+    }
+
+    public static void SaveInstalledVersion(Version version)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath);
+        key.SetValue(InstalledVersionValue, version.ToString());
+    }
+
     // Script check uses fixed ScriptRoot — no arg needed.
     public static bool IsInstalled() => File.Exists(ScriptPath);
 
@@ -471,6 +487,10 @@ internal static class InstallService
             ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
 
         SaveAppRoot(appRoot);
+
+        // 4. Save installed version to registry.
+        var version = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        SaveInstalledVersion(version);
     }
 
     public static void OpenScriptFolder()
@@ -562,7 +582,12 @@ internal static class DaemonService
     {
         foreach (var p in Process.GetProcessesByName("ShortcutHookDaemon"))
         {
-            try { p.Kill(); } catch { }
+            try
+            {
+                p.Kill();
+                p.WaitForExit(3000);
+            }
+            catch { }
             p.Dispose();
         }
     }
