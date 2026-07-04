@@ -965,6 +965,30 @@
             </Border>
         </Grid>
 
+        <!-- ═══════════ UPDATE OVERLAY ═══════════ -->
+        <Border x:Name="UpdateOverlay" Grid.Row="0" Grid.RowSpan="2" Background="#CC000000" Visibility="Collapsed">
+            <Grid Margin="28,24,28,24">
+                <Border Style="{StaticResource Card}" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="24,22">
+                    <StackPanel>
+                        <TextBlock Text="App Update Available" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold"/>
+                        <TextBlock x:Name="UpdateOverlayMessageText" Text="You're running a newer version of ShortcutHook. This will update the app and daemon."
+                                   Foreground="#CCCCCC" FontSize="13" Margin="0,12,0,0" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="UpdateOverlayPathText" Text="Target location: C:\Tools\ShortcutHook"
+                                   Foreground="#777777" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        
+                        <StackPanel Orientation="Horizontal" Margin="0,24,0,0" HorizontalAlignment="Right">
+                            <Button x:Name="UpdateOverlayCancelBtn" Content="Run Without Updating"
+                                    Style="{StaticResource BtnGhost}" Height="36" Padding="16,0"
+                                    Click="UpdateOverlayCancelBtn_Click"/>
+                            <Button x:Name="UpdateOverlayInstallBtn" Content="Install Update"
+                                    Background="#5B9CF6" Style="{StaticResource BtnPrimary}" Height="36" Padding="20,0" Margin="12,0,0,0"
+                                    Click="UpdateOverlayInstallBtn_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
         <!-- ═══════════ SETTINGS OVERLAY ═══════════ -->
         <Border x:Name="SettingsRoot" Grid.Row="0" Grid.RowSpan="2" Background="#CC000000" Visibility="Collapsed"
                 MouseDown="SettingsRoot_MouseDown">
