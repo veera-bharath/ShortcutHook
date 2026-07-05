@@ -45,14 +45,21 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 <details>
 <summary>Mouse gestures section</summary>
 
-![Mouse Section](ShortcutHookUI/Assets/ShortcutHookMouseSection.png)
+![Mouse gestures](ShortcutHookUI/Assets/mouse-right-click.gif)
 
 </details>
 
 <details>
 <summary>Keyboard bindings section</summary>
 
-![Keyboard Section](ShortcutHookUI/Assets/ShortcutHookKeyboardSection.png)
+![Keyboard actions](ShortcutHookUI/Assets/keyboard-action.gif)
+
+</details>
+
+<details>
+<summary>Profiles & active switching section</summary>
+
+![Profile switching](ShortcutHookUI/Assets/profiles.gif)
 
 </details>
 
