@@ -32,7 +32,21 @@ jobs:
       - name: Restore
         run: dotnet restore ShortcutHookUI/ShortcutHookUI.csproj
 
-      - name: Publish
+      - name: Publish daemon
+        run: >
+          dotnet publish ShortcutHookDaemon/ShortcutHookDaemon.csproj
+          -c Release
+          -v minimal
+          /p:Version=${{ steps.version.outputs.version }}
+
+      - name: Copy daemon into UI Resources
+        shell: bash
+        run: |
+          mkdir -p ShortcutHookUI/Resources
+          cp ShortcutHookDaemon/bin/Release/net8.0-windows/win-x64/publish/ShortcutHookDaemon.exe \
+             ShortcutHookUI/Resources/ShortcutHookDaemon.exe
+
+      - name: Publish UI
         run: >
           dotnet publish ShortcutHookUI/ShortcutHookUI.csproj
           -c Release

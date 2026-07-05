@@ -28,14 +28,14 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 - **Per-row binding export/import** — copy any binding row as JSON (⬆ button) or paste one in from the clipboard (↓ Import); validates and dedup-checks before applying
 - **On-screen toast feedback** — optional per-binding toast shown briefly when a binding fires
 - **Global pause/resume** — a `toggle:pause` output suspends all hook processing until toggled again; the UI shows a "Paused" badge while suspended
-- **Profiles** — switch between multiple sets of bindings via a dropdown in the header; create, rename, duplicate, delete, and import/export profiles as JSON from the Settings screen
+- **Profiles** — switch between multiple sets of bindings via the left sidebar; create, rename, duplicate, delete, and import/export profiles as JSON from the Settings screen
 - **Hotkey conflict detection** — on save, keyboard combos are probed against Windows-registered hotkeys; an amber warning is shown if a combo is already claimed by another app
 - **Modifier-scroll gestures** — Shift+Wheel, Ctrl+Shift+Wheel, and Alt+Wheel (up/down) as configurable triggers; Alt+Wheel defaults to horizontal scroll
 - **Debounce toggle for scroll bindings** — opt-in per-binding cooldown (200 ms) to suppress rapid repeated scroll firings
 - **Alt+Scroll → Horizontal Scroll** — optional toggle; holding Alt while scrolling fires a horizontal scroll event
 - **Update check on launch** — checks GitHub for a newer release and shows a dismissible download banner
-- **First-run setup wizard** — choose where to install the app; daemon script always goes to `C:\Tools\ShortcutHook`
-- **Startup on login** — optional toggle to launch the daemon automatically
+- **First-run setup wizard** — choose where to install the app; daemon exe always goes to `C:\Tools\ShortcutHook`
+- **Startup on login** — optional toggle in Settings to launch the daemon automatically on Windows login
 - **Self-contained** — single `.exe`, no installer or runtime prerequisites
 
 ## Preview
@@ -60,12 +60,12 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
 
-- 🚀 [Download v1.7.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.7.0/ShortcutHookUI-1.7.0.exe)
+- 🚀 [Download v2.0.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v2.0.0/ShortcutHookUI-2.0.0.exe)
 - 📦 [Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)
 
 1. Run `ShortcutHookUI.exe`
 2. The setup wizard appears on first launch — choose an app folder (default `C:\Tools\ShortcutHook`) and click **Finish Setup**
-3. Configure your shortcuts and hit **Save Changes**
+3. Configure your shortcuts — a **Save Changes** bar slides up at the bottom when you have unsaved edits
 
 That's it. The daemon starts automatically whenever you save.
 
@@ -77,7 +77,7 @@ That's it. The daemon starts automatically whenever you save.
 | What | Where |
 |------|-------|
 | App (UI exe) | Your chosen folder (default `C:\Tools\ShortcutHook`) |
-| Daemon script | Always `C:\Tools\ShortcutHook\ShortcutHook.ps1` |
+| Daemon exe | Always `C:\Tools\ShortcutHook\ShortcutHookDaemon.exe` |
 | Config | `C:\Tools\ShortcutHook\shortcuts.json` |
 
 ## Config schema
@@ -182,13 +182,13 @@ The app filter is configured via the scope button in each row of the settings UI
 
 ShortcutHook supports multiple named profiles, each with its own complete set of bindings. The daemon always runs the bindings from the **active profile** (`activeProfile` in `shortcuts.json`).
 
-- **Switch profiles** — use the dropdown in the header to pick the active profile. Saving while a different profile is active relaunches the daemon with that profile's bindings.
+- **Switch profiles** — click a profile in the left sidebar to make it active. The active profile is highlighted and the daemon restarts with its bindings.
 - **Manage profiles** — open the gear icon (Settings) → **Manage Profiles** to create, rename, duplicate, or delete profiles (up to 10).
 - **Import/export** — export a profile to a `.json` file to share or back up, and import one back in from the same screen.
 
 ## Building from source
 
-Requirements: Windows 10/11 · PowerShell 5.1+ · .NET 8 SDK
+Requirements: Windows 10/11 · .NET 8 SDK
 
 ```
 cd ShortcutHookUI
@@ -200,7 +200,7 @@ Output: `build\ShortcutHookUI.exe`
 ## Repository structure
 
 ```
-ShortcutHookScripts/   PowerShell daemon (ShortcutHook.ps1)
+ShortcutHookDaemon/    Pure C# daemon (ShortcutHookDaemon.csproj)
 ShortcutHookUI/        .NET 8 WPF settings UI source
 .github/workflows/     CI pipeline (release.yml — builds and signs on tag push)
 build/                 Local build output (not tracked by Git)

@@ -13,6 +13,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 
@@ -88,6 +89,7 @@ public sealed class KbdTriggerCard
     public Border     CardBorder   = null!;
     public StackPanel VariantStack = null!;
     public Button     CaptureBtn   = null!;
+    public TextBlock  TriggerText  = null!;
     public string     Trigger      = "";
     public List<Row>  Variants     = new();
 }
@@ -182,16 +184,17 @@ public partial class MainWindow : Window
         [Key.LWin]      = TriggerHelpers.MOD_WIN,   [Key.RWin]       = TriggerHelpers.MOD_WIN,
     };
 
-    // Colors / brushes
-    static readonly Brush AmberBrush = Br("#F0A020");
-    static readonly Brush GreenBrush = Br("#3DBA7B");
-    static readonly Brush RedBrush   = Br("#E85C5C");
-    static readonly Brush DimBrush   = Br("#555555");
-    static readonly Brush TextBrush  = Br("#E8E8E8");
-    static readonly Brush LabelBrush = Br("#CCCCCC");
-    static readonly Brush DarkBorder = Br("#2E2E2E");
-    static readonly Brush BtnHoverBg = Br("#1F1F1F");
-    static readonly Brush AccentBrush = Br("#5B9CF6");
+    // Colors / brushes — values mirror the XAML color token resources
+    static readonly Brush AmberBrush  = Br("#FFC107");   // ColorWarning
+    static readonly Brush GreenBrush  = Br("#4CAF50");   // ColorSuccess
+    static readonly Brush RedBrush    = Br("#E53935");   // ColorDanger
+    static readonly Brush GreyBrush   = Br("#888888");   // ColorSecondary (stopped dot)
+    static readonly Brush DimBrush    = Br("#666666");   // ColorTextMuted
+    static readonly Brush TextBrush   = Br("#E8E8E8");
+    static readonly Brush LabelBrush  = Br("#CCCCCC");   // ColorTextSecondary
+    static readonly Brush DarkBorder  = Br("#2E2E2E");
+    static readonly Brush BtnHoverBg  = Br("#1F1F1F");
+    static readonly Brush AccentBrush = Br("#5B9CF6");   // ColorPrimary
     static readonly Brush Transparent = System.Windows.Media.Brushes.Transparent;
     static Brush Br(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
 
@@ -270,6 +273,7 @@ public partial class MainWindow : Window
     readonly Dictionary<string, string?> _appProcNameCache = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, List<Row>> _mouseRows = new();
     readonly Dictionary<string, StackPanel> _mouseGestureStacks = new();
+    readonly Dictionary<string, TextBlock> _mouseGestureLabels = new();
     readonly List<KbdTriggerCard> _kbdCards = new();
     readonly List<AppTriggerCard> _appTriggerCards = new();
     string _appRoot;
@@ -293,6 +297,9 @@ public partial class MainWindow : Window
     bool _kbdExpanded   = false;
     bool _appTriggersExpanded = false;
 
+    bool   _hasUnsavedChanges    = false;
+    Border? _activeSidebarRow    = null;
+
     string _filterText           = "";
     bool   _filterWasActive      = false;
     bool   _preFilterMouseExpanded = true;
@@ -315,7 +322,12 @@ public partial class MainWindow : Window
         _pollTimer.Tick += (_, __) => UpdateHookStatus();
 
         _feedbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
-        _feedbackTimer.Tick += (_, __) => { FeedbackMsg.Visibility = Visibility.Collapsed; _feedbackTimer.Stop(); };
+        _feedbackTimer.Tick += (_, __) =>
+        {
+            FeedbackMsg.Visibility = Visibility.Collapsed;
+            _feedbackTimer.Stop();
+            if (!_hasUnsavedChanges) SaveBar.Visibility = Visibility.Collapsed;
+        };
 
         SourceInitialized += OnSourceInitialized;
         Loaded            += OnLoaded;
@@ -351,7 +363,20 @@ public partial class MainWindow : Window
         StartupToggle.IsChecked = _setupComplete && StartupService.IsEnabled();
         UpdateSetupState();
         _pollTimer.Start();
-        if (_setupComplete) _ = CheckForUpdateAsync();
+        if (_setupComplete)
+        {
+            var runningVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+            var installedVersion = InstallService.GetInstalledVersion() ?? new Version(0, 0, 0);
+
+            if (!InstallService.IsRunningFromInstalledLocation(_appRoot) || runningVersion > installedVersion)
+            {
+                ShowUpdateOverlay();
+            }
+            else
+            {
+                _ = CheckForUpdateAsync();
+            }
+        }
     }
 
     // =========================================================================
@@ -381,6 +406,140 @@ public partial class MainWindow : Window
     {
         if (_updateInfo != null) InstallService.SetDismissedUpdateVersion(_updateInfo.Value.Tag);
         UpdateBanner.Visibility = Visibility.Collapsed;
+    }
+
+    void ShowUpdateOverlay()
+    {
+        var runningVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        var installedVersion = InstallService.GetInstalledVersion();
+        
+        string msg;
+        if (installedVersion != null)
+        {
+            msg = $"You're running a newer version of ShortcutHook. This will update your installation from v{installedVersion.Major}.{installedVersion.Minor}.{installedVersion.Build} to v{runningVersion.Major}.{runningVersion.Minor}.{runningVersion.Build}.";
+        }
+        else
+        {
+            msg = $"You're running a newer version of ShortcutHook. This will update your installation to v{runningVersion.Major}.{runningVersion.Minor}.{runningVersion.Build}.";
+        }
+
+        UpdateOverlayMessageText.Text = msg;
+        UpdateOverlayPathText.Text = $"Target location: {_appRoot}";
+        UpdateOverlay.Visibility = Visibility.Visible;
+    }
+
+    void UpdateOverlayCancelBtn_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    void UpdateOverlayInstallBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            DaemonService.Stop();
+            InstallService.Install(_appRoot);
+            DaemonService.Start();
+
+            ShowFeedback("Update installed successfully.", FeedbackKind.Ok);
+
+            if (!InstallService.IsRunningFromInstalledLocation(_appRoot))
+            {
+                InstallService.LaunchInstalledApp(_appRoot);
+                Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
+            }
+            else
+            {
+                UpdateOverlay.Visibility = Visibility.Collapsed;
+                RefreshInstallState();
+                UpdateSetupState();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowFeedback($"Update failed: {ex.Message}", FeedbackKind.Err);
+        }
+    }
+
+    // =========================================================================
+    // Tabs
+    // =========================================================================
+    enum TabKind { All, Mouse, Keyboard, AppSpecific }
+    TabKind _activeTab = TabKind.All;
+
+    void TabAll_Click(object sender, RoutedEventArgs e)         => SwitchTab(TabKind.All);
+    void TabMouse_Click(object sender, RoutedEventArgs e)       => SwitchTab(TabKind.Mouse);
+    void TabKbd_Click(object sender, RoutedEventArgs e)         => SwitchTab(TabKind.Keyboard);
+    void TabAppSpecific_Click(object sender, RoutedEventArgs e) => SwitchTab(TabKind.AppSpecific);
+
+    void SwitchTab(TabKind tab)
+    {
+        if (_activeTab == tab) return;
+        _activeTab = tab;
+
+        // Clear search when switching tabs
+        if (!string.IsNullOrEmpty(SearchBox?.Text))
+            SearchBox.Text = "";
+
+        ApplyTabState();
+    }
+
+    void ApplyTabState()
+    {
+        // Update tab button active indicators
+        TabAllBtn.Tag         = _activeTab == TabKind.All         ? "active" : null;
+        TabMouseBtn.Tag       = _activeTab == TabKind.Mouse       ? "active" : null;
+        TabKbdBtn.Tag         = _activeTab == TabKind.Keyboard    ? "active" : null;
+        TabAppSpecificBtn.Tag = _activeTab == TabKind.AppSpecific ? "active" : null;
+
+        switch (_activeTab)
+        {
+            case TabKind.All:
+                MouseCard.Visibility       = Visibility.Visible;
+                KbdCard.Visibility         = Visibility.Visible;
+                AppTriggersCard.Visibility = Visibility.Visible;
+                ApplySectionState();
+                break;
+
+            case TabKind.Mouse:
+                MouseCard.Visibility       = Visibility.Visible;
+                KbdCard.Visibility         = Visibility.Collapsed;
+                AppTriggersCard.Visibility = Visibility.Collapsed;
+                MouseBody.Visibility = Visibility.Visible;
+                MouseChevron.Text    = "▾";
+                break;
+
+            case TabKind.Keyboard:
+                MouseCard.Visibility       = Visibility.Collapsed;
+                KbdCard.Visibility         = Visibility.Visible;
+                AppTriggersCard.Visibility = Visibility.Collapsed;
+                KbdBody.Visibility   = Visibility.Visible;
+                KbdChevron.Text      = "▾";
+                break;
+
+            case TabKind.AppSpecific:
+                MouseCard.Visibility       = Visibility.Collapsed;
+                KbdCard.Visibility         = Visibility.Collapsed;
+                AppTriggersCard.Visibility = Visibility.Visible;
+                AppTriggersBody.Visibility = Visibility.Visible;
+                AppTriggersChevron.Text    = "▾";
+                break;
+        }
+        BindingsScroll.ScrollToTop();
+    }
+
+    void UpdateTabBadges()
+    {
+        var bindings = ConfigService.Read(InstallService.ScriptRoot);
+        int mouseCnt = bindings.Count(b => b.trigger.StartsWith("mouse:", StringComparison.Ordinal));
+        int kbdCnt   = _kbdCards.Count;
+        int appCnt   = _appTriggerCards.Count;
+        int allCnt   = mouseCnt + kbdCnt + appCnt;
+
+        TabAllBadge.Text         = allCnt   > 0 ? $"({allCnt})"  : "";
+        TabMouseBadge.Text       = mouseCnt > 0 ? $"({mouseCnt})" : "";
+        TabKbdBadge.Text         = kbdCnt   > 0 ? $"({kbdCnt})"  : "";
+        TabAppSpecificBadge.Text = appCnt   > 0 ? $"({appCnt})"  : "";
     }
 
     // =========================================================================
@@ -437,27 +596,35 @@ public partial class MainWindow : Window
 
         SearchClearBtn.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
 
-        if (active)
+        // Expand/collapse accordion state management only applies in the All tab.
+        if (_activeTab == TabKind.All)
         {
-            if (!_filterWasActive)
+            if (active)
             {
-                _preFilterMouseExpanded = _mouseExpanded;
-                _preFilterKbdExpanded   = _kbdExpanded;
-                _preFilterAppTriggersExpanded = _appTriggersExpanded;
-                _filterWasActive = true;
+                if (!_filterWasActive)
+                {
+                    _preFilterMouseExpanded        = _mouseExpanded;
+                    _preFilterKbdExpanded          = _kbdExpanded;
+                    _preFilterAppTriggersExpanded  = _appTriggersExpanded;
+                    _filterWasActive = true;
+                }
+                _mouseExpanded       = true;
+                _kbdExpanded         = true;
+                _appTriggersExpanded = true;
+                ApplySectionState();
             }
-            _mouseExpanded = true;
-            _kbdExpanded   = true;
-            _appTriggersExpanded = true;
-            ApplySectionState();
+            else if (_filterWasActive)
+            {
+                _mouseExpanded       = _preFilterMouseExpanded;
+                _kbdExpanded         = _preFilterKbdExpanded;
+                _appTriggersExpanded = _preFilterAppTriggersExpanded;
+                _filterWasActive     = false;
+                ApplySectionState();
+            }
         }
-        else if (_filterWasActive)
+        else
         {
-            _mouseExpanded = _preFilterMouseExpanded;
-            _kbdExpanded   = _preFilterKbdExpanded;
-            _appTriggersExpanded = _preFilterAppTriggersExpanded;
             _filterWasActive = false;
-            ApplySectionState();
         }
 
         foreach (var def in MouseDefs)
@@ -481,19 +648,138 @@ public partial class MainWindow : Window
             card.CardBorder.Visibility = !active || RowsMatchFilter(trigDisplay, new List<Row> { card.Row })
                 ? Visibility.Visible : Visibility.Collapsed;
         }
+
+        UpdateHighlights();
+        SortVisibleGestureRows();
+        SortVisibleKbdCards();
     }
 
     bool RowsMatchFilter(string label, List<Row> rows)
     {
-        if (label.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (FuzzyMatch(label, _filterText)) return true;
         foreach (var row in rows)
         {
             foreach (var output in GetRowOutputs(row))
-                if (output.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (FuzzyMatch(output, _filterText)) return true;
             foreach (var app in row.Apps)
-                if (app.IndexOf(_filterText, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (FuzzyMatch(app, _filterText)) return true;
         }
         return false;
+    }
+
+    static bool FuzzyMatch(string text, string query)
+    {
+        if (string.IsNullOrEmpty(query)) return true;
+        int qi = 0;
+        foreach (char c in text)
+        {
+            if (char.ToUpperInvariant(c) == char.ToUpperInvariant(query[qi]))
+                if (++qi == query.Length) return true;
+        }
+        return false;
+    }
+
+    // Lower score = better match. Uses position of first matched char so that
+    // "Right click x2" (first 'r' at 0) outranks "Left Hold + Right click x1" (first 'r' at 14).
+    static int FuzzyScore(string text, string query)
+    {
+        if (string.IsNullOrEmpty(query)) return 0;
+        char q0 = char.ToUpperInvariant(query[0]);
+        for (int i = 0; i < text.Length; i++)
+            if (char.ToUpperInvariant(text[i]) == q0) return i;
+        return int.MaxValue;
+    }
+
+    void SortVisibleGestureRows()
+    {
+        MouseStack.Children.Clear();
+        if (string.IsNullOrEmpty(_filterText))
+        {
+            foreach (var def in MouseDefs)
+                if (_mouseGestureStacks.TryGetValue(def.Gesture, out var sp)) MouseStack.Children.Add(sp);
+            return;
+        }
+        var ordered = MouseDefs
+            .Where(def => _mouseGestureStacks.ContainsKey(def.Gesture))
+            .OrderBy(def => _mouseGestureStacks[def.Gesture].Visibility == Visibility.Collapsed ? 1 : 0)
+            .ThenBy(def => FuzzyScore(def.Label, _filterText));
+        foreach (var def in ordered) MouseStack.Children.Add(_mouseGestureStacks[def.Gesture]);
+    }
+
+    void SortVisibleKbdCards()
+    {
+        KbdStack.Children.Clear();
+        if (string.IsNullOrEmpty(_filterText))
+        {
+            foreach (var card in _kbdCards) KbdStack.Children.Add(card.CardBorder);
+            return;
+        }
+        var ordered = _kbdCards
+            .OrderBy(card => card.CardBorder.Visibility == Visibility.Collapsed ? 1 : 0)
+            .ThenBy(card => {
+                var trig = card.Trigger.StartsWith("key:", StringComparison.Ordinal)
+                    ? card.Trigger.Substring(4) : card.Trigger;
+                return FuzzyScore(trig, _filterText);
+            });
+        foreach (var card in ordered) KbdStack.Children.Add(card.CardBorder);
+    }
+
+    void ApplyHighlight(TextBlock tb, string text, string query, Brush? normalFg = null)
+    {
+        tb.Inlines.Clear();
+        var fg = normalFg ?? TextBrush;
+        tb.Foreground = fg;
+        if (string.IsNullOrEmpty(query) || !FuzzyMatch(text, query))
+        {
+            tb.Inlines.Add(new System.Windows.Documents.Run(text));
+            return;
+        }
+        var matchPos = new bool[text.Length];
+        int qi = 0;
+        for (int i = 0; i < text.Length && qi < query.Length; i++)
+        {
+            if (char.ToUpperInvariant(text[i]) == char.ToUpperInvariant(query[qi]))
+            {
+                matchPos[i] = true;
+                qi++;
+            }
+        }
+        int start = 0;
+        while (start < text.Length)
+        {
+            if (matchPos[start])
+            {
+                int end = start;
+                while (end < text.Length && matchPos[end]) end++;
+                tb.Inlines.Add(new System.Windows.Documents.Run(text.Substring(start, end - start)) { FontWeight = FontWeights.SemiBold, Foreground = AccentBrush });
+                start = end;
+            }
+            else
+            {
+                int end = start;
+                while (end < text.Length && !matchPos[end]) end++;
+                tb.Inlines.Add(new System.Windows.Documents.Run(text.Substring(start, end - start)) { Foreground = fg });
+                start = end;
+            }
+        }
+    }
+
+    void UpdateHighlights()
+    {
+        foreach (var def in MouseDefs)
+        {
+            if (!_mouseGestureLabels.TryGetValue(def.Gesture, out var lbl)) continue;
+            ApplyHighlight(lbl, def.Label, _filterText, Br("#CCCCCC"));
+        }
+        foreach (var card in _kbdCards)
+        {
+            if (card.TriggerText == null) continue;
+            var disp = !string.IsNullOrEmpty(card.Trigger) && card.Trigger.StartsWith("key:", StringComparison.Ordinal)
+                ? card.Trigger.Substring(4)
+                : (!string.IsNullOrEmpty(card.Trigger) ? card.Trigger : "Click to record trigger...");
+            var fg = !string.IsNullOrEmpty(card.Trigger) ? TextBrush : DimBrush;
+            ApplyHighlight(card.TriggerText, disp, _filterText, fg);
+        }
     }
 
     // =========================================================================
@@ -674,7 +960,8 @@ public partial class MainWindow : Window
             StatusDot.Fill  = AmberBrush;
             StatusText.Text = "Runtime not installed";
             HookBtn.Content = "Start";
-            HookBtn.Background = GreenBrush;
+            HookBtn.Style   = (Style)FindResource("BtnPrimary");
+            HookBtn.Background = AccentBrush;
             HookBtn.IsEnabled = false;
             PausedBadge.Visibility = Visibility.Collapsed;
             return;
@@ -686,15 +973,17 @@ public partial class MainWindow : Window
             StatusDot.Fill  = GreenBrush;
             StatusText.Text = "Running";
             HookBtn.Content = "Stop";
-            HookBtn.Background = RedBrush;
+            HookBtn.Style   = (Style)FindResource("BtnStop");
+            HookBtn.ClearValue(Button.BackgroundProperty);
             PausedBadge.Visibility = IsDaemonPaused() ? Visibility.Visible : Visibility.Collapsed;
         }
         else
         {
-            StatusDot.Fill  = RedBrush;
+            StatusDot.Fill  = GreyBrush;
             StatusText.Text = "Stopped";
             HookBtn.Content = "Start";
-            HookBtn.Background = GreenBrush;
+            HookBtn.Style   = (Style)FindResource("BtnPrimary");
+            HookBtn.Background = AccentBrush;
             PausedBadge.Visibility = Visibility.Collapsed;
         }
 
@@ -849,6 +1138,8 @@ public partial class MainWindow : Window
                 .ToList();
             AddKbdTriggerCard(trig, variants);
         }
+
+        UpdateTabBadges();
     }
 
     void InstallBtn_Click(object sender, RoutedEventArgs e)
@@ -936,20 +1227,59 @@ public partial class MainWindow : Window
     // =========================================================================
     // Settings overlay
     // =========================================================================
+    Border? _activeNavBorder;
+
+    static readonly System.Windows.Media.SolidColorBrush NavActiveBg =
+        new(System.Windows.Media.Color.FromRgb(0x1F, 0x2A, 0x3A));
+
     void SettingsBtn_Click(object sender, RoutedEventArgs e)
     {
         ShowSettingsMenu();
         SettingsRoot.Visibility = Visibility.Visible;
     }
 
-    void ShowSettingsMenu()
+    void ShowSettingsMenu() => ActivateNavItem(NavItemDaemon, SettingsDaemonView);
+
+    void ActivateNavItem(Border nav, UIElement content)
     {
-        SettingsMenuView.Visibility          = Visibility.Visible;
+        // deactivate previous
+        if (_activeNavBorder != null)
+            _activeNavBorder.ClearValue(Border.BackgroundProperty);
+
+        // activate new
+        nav.Background = NavActiveBg;
+        _activeNavBorder = nav;
+
+        // show only the selected content panel
+        SettingsDaemonView.Visibility        = Visibility.Collapsed;
         SettingsProfilesView.Visibility      = Visibility.Collapsed;
         SettingsIgnoredAppsView.Visibility   = Visibility.Collapsed;
         SettingsAboutView.Visibility         = Visibility.Collapsed;
         SettingsProfileFormView.Visibility   = Visibility.Collapsed;
         SettingsProfileDeleteView.Visibility = Visibility.Collapsed;
+        content.Visibility = Visibility.Visible;
+
+        if (ReferenceEquals(content, SettingsDaemonView))
+            RefreshDaemonStatusDetail();
+    }
+
+    void RefreshDaemonStatusDetail()
+    {
+        if (!InstallService.IsInstalled())
+        {
+            DaemonStatusDetail.Text = "Runtime not installed";
+            DaemonStatusDot.Fill    = AmberBrush;
+        }
+        else if (DaemonService.IsRunning())
+        {
+            DaemonStatusDetail.Text = "Running";
+            DaemonStatusDot.Fill    = GreenBrush;
+        }
+        else
+        {
+            DaemonStatusDetail.Text = "Stopped";
+            DaemonStatusDot.Fill    = GreyBrush;
+        }
     }
 
     void CloseSettings() => SettingsRoot.Visibility = Visibility.Collapsed;
@@ -958,27 +1288,31 @@ public partial class MainWindow : Window
 
     void SettingsCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
 
-    void ManageProfilesOption_Click(object sender, MouseButtonEventArgs e) => OpenProfilesView();
+    void NavDaemon_Click(object sender, MouseButtonEventArgs e) =>
+        ActivateNavItem(NavItemDaemon, SettingsDaemonView);
 
-    void OpenProfilesView()
+    void NavProfiles_Click(object sender, MouseButtonEventArgs e) => OpenProfilesView();
+
+    void NavIgnoredApps_Click(object sender, MouseButtonEventArgs e)
     {
-        ShowSettingsMenu();
-        SettingsMenuView.Visibility      = Visibility.Collapsed;
-        SettingsProfilesView.Visibility  = Visibility.Visible;
-        BuildProfileList();
-        SettingsRoot.Visibility = Visibility.Visible;
+        ActivateNavItem(NavItemIgnoredApps, SettingsIgnoredAppsView);
+        BuildIgnoredAppsList();
     }
 
-    void LogViewOption_Click(object sender, MouseButtonEventArgs e)
+    void NavLogs_Click(object sender, MouseButtonEventArgs e)
     {
         CloseSettings();
         new LogViewerWindow { Owner = this }.Show();
     }
 
-    void AboutOption_Click(object sender, MouseButtonEventArgs e)
+    void NavAbout_Click(object sender, MouseButtonEventArgs e) =>
+        ActivateNavItem(NavItemAbout, SettingsAboutView);
+
+    void OpenProfilesView()
     {
-        SettingsMenuView.Visibility  = Visibility.Collapsed;
-        SettingsAboutView.Visibility = Visibility.Visible;
+        ActivateNavItem(NavItemProfiles, SettingsProfilesView);
+        BuildProfileList();
+        SettingsRoot.Visibility = Visibility.Visible;
     }
 
     // =========================================================================
@@ -986,14 +1320,8 @@ public partial class MainWindow : Window
     // =========================================================================
     List<(CheckBox Cb, string Name)> _ignoredAppCheckBoxes = new();
 
-    void IgnoredAppsOption_Click(object sender, MouseButtonEventArgs e)
-    {
-        ShowSettingsMenu();
-        SettingsMenuView.Visibility        = Visibility.Collapsed;
-        SettingsIgnoredAppsView.Visibility = Visibility.Visible;
-        BuildIgnoredAppsList();
-        SettingsRoot.Visibility = Visibility.Visible;
-    }
+    void IgnoredAppsCancel_Click(object sender, RoutedEventArgs e) =>
+        ActivateNavItem(NavItemDaemon, SettingsDaemonView);
 
     void BuildIgnoredAppsList()
     {
@@ -1068,11 +1396,8 @@ public partial class MainWindow : Window
         ConfigService.SetIgnoredApps(InstallService.ScriptRoot, selected);
         RestartDaemonIfRunning();
         ShowFeedback("Ignored apps saved.", FeedbackKind.Ok);
-        ShowSettingsMenu();
         CloseSettings();
     }
-
-    void SettingsBack_Click(object sender, RoutedEventArgs e) => ShowSettingsMenu();
 
     void SettingsGitHubBtn_Click(object sender, RoutedEventArgs e) =>
         Process.Start(new ProcessStartInfo("https://github.com/veera-bharath/ShortcutHook")
@@ -1170,7 +1495,7 @@ public partial class MainWindow : Window
                 Margin       = new Thickness(0, 0, 0, 4),
                 Child        = grid,
             };
-            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; if (!isSelected) row.Background = Br("#1F1F1F"); };
+            row.MouseEnter += (_, __) => { actionsPanel.Visibility = Visibility.Visible; if (!isSelected) row.Background = Br("#242424"); };
             row.MouseLeave += (_, __) => { actionsPanel.Visibility = Visibility.Collapsed; if (!isSelected) row.Background = Transparent; };
             row.MouseLeftButtonDown += (_, __) => { _selectedProfileForExport = name; BuildProfileList(); };
 
@@ -1192,6 +1517,8 @@ public partial class MainWindow : Window
         ConfigService.SetActiveProfile(InstallService.ScriptRoot, name);
         ReloadBindingsFromConfig();
         RefreshProfileDropdown();
+        FlashActiveSidebarRow();
+        ClearDirty();
         RestartDaemonIfRunning();
         ShowFeedback($"Switched to '{name}'.", FeedbackKind.Ok);
     }
@@ -1429,85 +1756,223 @@ public partial class MainWindow : Window
     }
 
     // =========================================================================
-    // Header profile switcher
+    // Sidebar profile list
     // =========================================================================
-    void ProfileSwitcherBtn_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProfileSwitcherPopup.IsOpen) { ProfileSwitcherPopup.IsOpen = false; return; }
-        RefreshProfileDropdown();
-        ProfileSwitcherPopup.IsOpen = true;
-    }
-
     void RefreshProfileDropdown()
     {
         var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
         _lastKnownActiveProfile = config.activeProfile;
-        ProfileSwitcherLabel.Text = config.activeProfile;
 
-        ProfileSwitcherList.Children.Clear();
+        SidebarProfileStack.Children.Clear();
 
         foreach (var profile in config.profiles)
         {
             var name     = profile.name;
             var isActive = string.Equals(name, config.activeProfile, StringComparison.Ordinal);
+            bool isRenaming = false;
 
-            var text = new TextBlock
+            var label = new TextBlock
             {
-                Text              = (isActive ? "✓  " : "    ") + name,
-                Foreground        = isActive ? AccentBrush : TextBrush,
+                Text              = name,
+                Foreground        = isActive ? AccentBrush : Br("#AAAAAA"),
                 FontSize          = 12,
+                FontWeight        = isActive ? FontWeights.SemiBold : FontWeights.Normal,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming      = TextTrimming.CharacterEllipsis,
+            };
+
+            var renameBox = new TextBox
+            {
+                FontSize                 = 12,
+                Visibility               = Visibility.Collapsed,
+                Background               = Br("#252525"),
+                Foreground               = Br("#E8E8E8"),
+                CaretBrush               = Br("#E8E8E8"),
+                SelectionBrush           = AccentBrush,
+                BorderBrush              = AccentBrush,
+                BorderThickness          = new Thickness(1),
+                Padding                  = new Thickness(4, 2, 4, 2),
+                MaxLength                = 32,
+                VerticalContentAlignment = VerticalAlignment.Center,
+            };
+
+            var nameCell = new Grid();
+            nameCell.Children.Add(label);
+            nameCell.Children.Add(renameBox);
+
+            var pencilBtn = new Button
+            {
+                Content    = "✏",
+                Style      = (Style)FindResource("BtnGhost"),
+                Width      = 22, Height = 22,
+                Padding    = new Thickness(0),
+                FontSize   = 11,
+                Margin     = new Thickness(0, 0, 2, 0),
+                ToolTip    = "Rename",
+                Visibility = Visibility.Hidden,
+            };
+            var deleteBtn = new Button
+            {
+                Content    = "✕",
+                Style      = (Style)FindResource("BtnGhost"),
+                Width      = 22, Height = 22,
+                Padding    = new Thickness(0),
+                FontSize   = 10,
+                ToolTip    = "Delete",
+                Visibility = Visibility.Hidden,
+            };
+
+            var actionsPanel = new StackPanel
+            {
+                Orientation       = Orientation.Horizontal,
                 VerticalAlignment = VerticalAlignment.Center,
             };
+            actionsPanel.Children.Add(pencilBtn);
+            actionsPanel.Children.Add(deleteBtn);
+
+            var rowGrid = new Grid();
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(nameCell,     0);
+            Grid.SetColumn(actionsPanel, 1);
+            rowGrid.Children.Add(nameCell);
+            rowGrid.Children.Add(actionsPanel);
 
             var row = new Border
             {
-                Padding      = new Thickness(10, 7, 10, 7),
-                CornerRadius = new CornerRadius(4),
-                Background   = Transparent,
-                Cursor       = Cursors.Hand,
-                Child        = text,
+                Padding         = new Thickness(10, 7, 6, 7),
+                CornerRadius    = new CornerRadius(6),
+                Background      = isActive ? Br("#1A2A3A") : Transparent,
+                BorderBrush     = isActive ? AccentBrush   : Transparent,
+                BorderThickness = new Thickness(isActive ? 2 : 0, 0, 0, 0),
+                Cursor          = Cursors.Hand,
+                Child           = rowGrid,
+                Margin          = new Thickness(0, 1, 0, 1),
             };
-            row.MouseEnter += (_, __) => row.Background = BtnHoverBg;
-            row.MouseLeave += (_, __) => row.Background = Transparent;
+
+            void BeginRename()
+            {
+                if (isRenaming) return;
+                isRenaming = true;
+                label.Visibility     = Visibility.Collapsed;
+                renameBox.Text       = name;
+                renameBox.Visibility = Visibility.Visible;
+                renameBox.Focus();
+                renameBox.SelectAll();
+            }
+
+            void CommitRename()
+            {
+                if (!isRenaming) return;
+                var newName = renameBox.Text.Trim();
+                isRenaming = false;
+                label.Visibility     = Visibility.Visible;
+                renameBox.Visibility = Visibility.Collapsed;
+                if (string.IsNullOrEmpty(newName) || string.Equals(newName, name, StringComparison.Ordinal)) return;
+                var cfg = ConfigService.ReadConfig(InstallService.ScriptRoot);
+                var err = ProfileHelpers.ValidateName(newName, cfg.profiles, name);
+                if (err != null) { ShowFeedback(err, FeedbackKind.Err); return; }
+                ConfigService.RenameProfile(InstallService.ScriptRoot, name, newName);
+                ShowFeedback($"Profile renamed to '{newName}'.", FeedbackKind.Ok);
+                RefreshProfileDropdown();
+            }
+
+            void CancelRename()
+            {
+                if (!isRenaming) return;
+                isRenaming = false;
+                label.Visibility     = Visibility.Visible;
+                renameBox.Visibility = Visibility.Collapsed;
+            }
+
+            row.MouseEnter += (_, __) =>
+            {
+                if (!isActive) row.Background = Br("#181818");
+                pencilBtn.Visibility = Visibility.Visible;
+                deleteBtn.Visibility = Visibility.Visible;
+            };
+            row.MouseLeave += (_, __) =>
+            {
+                if (!isActive) row.Background = Transparent;
+                if (!isRenaming)
+                {
+                    pencilBtn.Visibility = Visibility.Hidden;
+                    deleteBtn.Visibility = Visibility.Hidden;
+                }
+            };
             row.MouseLeftButtonUp += (_, __) =>
             {
-                ProfileSwitcherPopup.IsOpen = false;
+                if (isRenaming || actionsPanel.IsMouseOver) return;
                 SwitchActiveProfile(name);
             };
 
-            ProfileSwitcherList.Children.Add(row);
+            pencilBtn.Click += (_, e) => { e.Handled = true; BeginRename(); };
+
+            deleteBtn.Click += (_, e) =>
+            {
+                e.Handled = true;
+                var cfg = ConfigService.ReadConfig(InstallService.ScriptRoot);
+                if (string.Equals(cfg.activeProfile, name, StringComparison.Ordinal))
+                { ShowFeedback("Switch to another profile before deleting.", FeedbackKind.Err); return; }
+                if (cfg.profiles.Count <= 1)
+                { ShowFeedback("At least one profile must remain.", FeedbackKind.Err); return; }
+                ConfigService.DeleteProfile(InstallService.ScriptRoot, name);
+                ShowFeedback($"Profile '{name}' deleted.", FeedbackKind.Ok);
+                RefreshProfileDropdown();
+            };
+
+            renameBox.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Return) { CommitRename(); e.Handled = true; }
+                else if (e.Key == Key.Escape) { CancelRename(); e.Handled = true; }
+            };
+            renameBox.LostFocus += (_, __) => CommitRename();
+
+            if (isActive) _activeSidebarRow = row;
+            SidebarProfileStack.Children.Add(row);
         }
+    }
 
-        ProfileSwitcherList.Children.Add(new Border
+    void FlashActiveSidebarRow()
+    {
+        if (_activeSidebarRow == null) return;
+        var row   = _activeSidebarRow;
+        var flash = new SolidColorBrush(Color.FromRgb(0x2A, 0x5A, 0x8A));
+        row.Background = flash;
+        var anim = new System.Windows.Media.Animation.ColorAnimation
         {
-            Height     = 1,
-            Background = Br("#3A3A3A"),
-            Margin     = new Thickness(4, 4, 4, 4),
-        });
+            To             = Color.FromRgb(0x1A, 0x2A, 0x3A),
+            Duration       = new Duration(TimeSpan.FromMilliseconds(350)),
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+        };
+        flash.BeginAnimation(SolidColorBrush.ColorProperty, anim);
+    }
 
-        var manageText = new TextBlock
+    void SidebarAddProfileBtn_Click(object sender, RoutedEventArgs e)
+    {
+        OpenProfilesView();
+        ShowProfileForm(null);
+    }
+
+    // =========================================================================
+    // Dirty tracking / save bar
+    // =========================================================================
+    void MarkDirty()
+    {
+        _hasUnsavedChanges = true;
+        if (SaveBar.Visibility != Visibility.Visible)
         {
-            Text              = "Manage Profiles →",
-            Foreground        = AccentBrush,
-            FontSize          = 12,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var manageRow = new Border
-        {
-            Padding      = new Thickness(10, 7, 10, 7),
-            CornerRadius = new CornerRadius(4),
-            Background   = Transparent,
-            Cursor       = Cursors.Hand,
-            Child        = manageText,
-        };
-        manageRow.MouseEnter += (_, __) => manageRow.Background = BtnHoverBg;
-        manageRow.MouseLeave += (_, __) => manageRow.Background = Transparent;
-        manageRow.MouseLeftButtonUp += (_, __) =>
-        {
-            ProfileSwitcherPopup.IsOpen = false;
-            OpenProfilesView();
-        };
-        ProfileSwitcherList.Children.Add(manageRow);
+            SaveBar.Visibility = Visibility.Visible;
+            ((Storyboard)FindResource("SaveBarSlideIn")).Begin(SaveBar);
+        }
+    }
+
+    void ClearDirty()
+    {
+        _hasUnsavedChanges = false;
+        // Save bar hides after feedback timer fires; if no feedback is pending, hide now.
+        if (FeedbackMsg.Visibility == Visibility.Collapsed)
+            SaveBar.Visibility = Visibility.Collapsed;
     }
 
     // =========================================================================
@@ -1524,6 +1989,7 @@ public partial class MainWindow : Window
         };
         FeedbackMsg.Text = msg;
         FeedbackMsg.Visibility = Visibility.Visible;
+        SaveBar.Visibility     = Visibility.Visible;
         _feedbackTimer.Stop();
         _feedbackTimer.Start();
     }
@@ -1536,6 +2002,7 @@ public partial class MainWindow : Window
         MouseStack.Children.Clear();
         _mouseRows.Clear();
         _mouseGestureStacks.Clear();
+        _mouseGestureLabels.Clear();
 
         var configRoot     = ConfigService.ReadConfig(InstallService.ScriptRoot);
         var activeBindings = ConfigService.GetActiveProfile(configRoot).bindings;
@@ -1598,13 +2065,15 @@ public partial class MainWindow : Window
 
         if (isGlobal)
         {
-            var lbl = new TextBlock { Text = def.Label, Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 8, 0, 0) };
+            var lbl = new TextBlock { Foreground = Br("#CCCCCC"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 8, 0, 0) };
+            ApplyHighlight(lbl, def.Label, _filterText, Br("#CCCCCC"));
+            _mouseGestureLabels[def.Gesture] = lbl;
             Grid.SetColumn(lbl, 0);
             grid.Children.Add(lbl);
         }
         else
         {
-            var arrow = new TextBlock { Text = "↳", Foreground = Br("#555555"), FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 8, 0, 0) };
+            var arrow = new TextBlock { Text = "↳", Foreground = DimBrush, FontSize = 12, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10, 8, 0, 0) };
             Grid.SetColumn(arrow, 0);
             grid.Children.Add(arrow);
         }
@@ -1742,7 +2211,7 @@ public partial class MainWindow : Window
         actionCB.SelectionChanged += (_, __) =>
         {
             var idx = actionCB.SelectedIndex;
-            if (idx >= 0 && idx < capturedActions.Length) SetChainItemOutput(row, item, capturedActions[idx].Kind);
+            if (idx >= 0 && idx < capturedActions.Length) { SetChainItemOutput(row, item, capturedActions[idx].Kind); MarkDirty(); }
         };
 
         delBtn.Click += (_, __) =>
@@ -1752,6 +2221,7 @@ public partial class MainWindow : Window
             row.ChainStack.Children.Remove(itemGrid);
             RefreshChainDeleteButtons(row);
             RefreshChainFooter(row);
+            MarkDirty();
         };
 
         row.Chain.Add(item);
@@ -1826,6 +2296,7 @@ public partial class MainWindow : Window
         {
             row.NoteLabel = noteBox.Text;
             notePlaceholder.Visibility = string.IsNullOrEmpty(noteBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+            MarkDirty();
         };
         noteGrid.Children.Add(noteBox);
         noteGrid.Children.Add(notePlaceholder);
@@ -1867,8 +2338,8 @@ public partial class MainWindow : Window
         };
         row.EnabledToggle = enableToggle;
         row.Enabled       = enabled;
-        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0; };
-        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; };
+        enableToggle.Checked   += (_, __) => { row.Enabled = true;  row.Container.Opacity = 1.0;  MarkDirty(); };
+        enableToggle.Unchecked += (_, __) => { row.Enabled = false; row.Container.Opacity = 0.45; MarkDirty(); };
         toggleRow.Children.Add(enableLbl);
         toggleRow.Children.Add(enableToggle);
 
@@ -1889,8 +2360,8 @@ public partial class MainWindow : Window
             ToolTip   = "Show a brief on-screen toast when this binding fires",
         };
         row.ToastToggle = toastToggle;
-        toastToggle.Checked   += (_, __) => row.ShowToast = true;
-        toastToggle.Unchecked += (_, __) => row.ShowToast = false;
+        toastToggle.Checked   += (_, __) => { row.ShowToast = true;  MarkDirty(); };
+        toastToggle.Unchecked += (_, __) => { row.ShowToast = false; MarkDirty(); };
         toggleRow.Children.Add(toastLbl);
         toggleRow.Children.Add(toastToggle);
 
@@ -1913,8 +2384,8 @@ public partial class MainWindow : Window
                 ToolTip   = "Ignore repeated scroll firings within 200 ms",
             };
             row.DebounceToggle = debounceToggle;
-            debounceToggle.Checked   += (_, __) => row.Debounce = true;
-            debounceToggle.Unchecked += (_, __) => row.Debounce = false;
+            debounceToggle.Checked   += (_, __) => { row.Debounce = true;  MarkDirty(); };
+            debounceToggle.Unchecked += (_, __) => { row.Debounce = false; MarkDirty(); };
             toggleRow.Children.Add(debounceLbl);
             toggleRow.Children.Add(debounceToggle);
         }
@@ -1938,7 +2409,7 @@ public partial class MainWindow : Window
             ToolTip  = "Add another action to this chain",
         };
         Grid.SetColumn(addBtn, 0);
-        addBtn.Click += (_, __) => AddChainItem(row, "", rebuild: true);
+        addBtn.Click += (_, __) => { AddChainItem(row, "", rebuild: true); MarkDirty(); };
 
         var delayLbl = new TextBlock
         {
@@ -1964,6 +2435,7 @@ public partial class MainWindow : Window
         {
             if (int.TryParse(delayTB.Text, out var ms) && ms >= 0)
                 row.OutputDelay = ms;
+            MarkDirty();
         };
         Grid.SetColumn(delayTB, 2);
 
@@ -2376,9 +2848,9 @@ public partial class MainWindow : Window
     // =========================================================================
     // Keyboard trigger cards
     // =========================================================================
-    void AddKbdBtn_Click(object sender, RoutedEventArgs e) => AddKbdTriggerCard("", null);
+    void AddKbdBtn_Click(object sender, RoutedEventArgs e) { AddKbdTriggerCard("", null, insertAtTop: true); }
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants, bool insertAtTop = false)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -2452,8 +2924,11 @@ public partial class MainWindow : Window
 
         var displayTrig = !string.IsNullOrEmpty(trigger) && trigger.StartsWith("key:", StringComparison.Ordinal)
             ? trigger.Substring(4) : "Click to record trigger...";
-        capBtn.Content    = displayTrig;
-        capBtn.Foreground = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
+        var trigText = new TextBlock { FontFamily = new FontFamily("Consolas"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var trigFg = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
+        ApplyHighlight(trigText, displayTrig, _filterText, trigFg);
+        card.TriggerText = trigText;
+        capBtn.Content   = trigText;
 
         capBtn.Click += (_, __) => BeginCapture(
             btn: capBtn,
@@ -2481,10 +2956,13 @@ public partial class MainWindow : Window
             if (_captureActive && _captureBtn == capBtn) EndCapture();
             KbdStack.Children.Remove(cardBorder);
             _kbdCards.Remove(card);
+            MarkDirty();
         };
 
-        KbdStack.Children.Add(cardBorder);
-        _kbdCards.Add(card);
+        cardBorder.MouseEnter += (_, __) => cardBorder.Background = Br("#1E1E1E");
+        cardBorder.MouseLeave += (_, __) => cardBorder.Background = Br("#181818");
+        if (insertAtTop) { KbdStack.Children.Insert(0, cardBorder); _kbdCards.Insert(0, card); }
+        else             { KbdStack.Children.Add(cardBorder);       _kbdCards.Add(card); }
 
         if (variants is { Count: > 0 })
             foreach (var (o, d, isG, apps, ex, e, st, nl) in variants) AddKbdVariantRow(card, o, d, isG, apps, ex, e, st, nl);
@@ -2570,10 +3048,10 @@ public partial class MainWindow : Window
     // =========================================================================
     // App-launch / app-exit trigger cards
     // =========================================================================
-    void AddAppTriggerBtn_Click(object sender, RoutedEventArgs e) =>
-        AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, "");
+    void AddAppTriggerBtn_Click(object sender, RoutedEventArgs e)
+    { MarkDirty(); AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, "", insertAtTop: true); }
 
-    void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, int outputDelay, bool enabled, bool showToast, string noteLabel)
+    void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, int outputDelay, bool enabled, bool showToast, string noteLabel, bool insertAtTop = false)
     {
         var card = new AppTriggerCard();
 
@@ -2665,10 +3143,13 @@ public partial class MainWindow : Window
         {
             AppTriggersStack.Children.Remove(cardBorder);
             _appTriggerCards.Remove(card);
+            MarkDirty();
         };
 
-        AppTriggersStack.Children.Add(cardBorder);
-        _appTriggerCards.Add(card);
+        cardBorder.MouseEnter += (_, __) => cardBorder.Background = Br("#1E1E1E");
+        cardBorder.MouseLeave += (_, __) => cardBorder.Background = Br("#181818");
+        if (insertAtTop) { AppTriggersStack.Children.Insert(0, cardBorder); _appTriggerCards.Insert(0, card); }
+        else             { AppTriggersStack.Children.Add(cardBorder);       _appTriggerCards.Add(card); }
     }
 
     static string AppTriggerPrefix(int kindComboIndex) => kindComboIndex switch
@@ -2709,6 +3190,25 @@ public partial class MainWindow : Window
         }
 
         var rawKey = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        // Command palette: Ctrl+K opens, arrow/enter/esc handled here so they work
+        // even when focus is inside the TextBox (which would otherwise consume them).
+        if (CommandPaletteRoot.Visibility == Visibility.Visible)
+        {
+            if (rawKey == Key.Escape)  { CloseCommandPalette(); e.Handled = true; return; }
+            if (rawKey == Key.Down)    { MovePaletteSelection(+1); e.Handled = true; return; }
+            if (rawKey == Key.Up)      { MovePaletteSelection(-1); e.Handled = true; return; }
+            if (rawKey == Key.Return)  { ExecuteSelectedPaletteItem(); e.Handled = true; return; }
+            return;
+        }
+
+        if (rawKey == Key.K && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && !_captureActive)
+        {
+            OpenCommandPalette();
+            e.Handled = true;
+            return;
+        }
+
         if (rawKey == Key.Escape && SearchBox.IsFocused && !string.IsNullOrEmpty(SearchBox.Text))
         {
             ClearSearch();
@@ -2875,6 +3375,7 @@ public partial class MainWindow : Window
         var onCommit = _captureOnCommit;
         ClearCaptureState();
         onCommit?.Invoke(s);
+        MarkDirty();
     }
 
     void EndCapture()
@@ -2899,9 +3400,16 @@ public partial class MainWindow : Window
     {
         var disp = !string.IsNullOrEmpty(trigger) && trigger.StartsWith("key:", StringComparison.Ordinal)
             ? trigger.Substring(4) : "Click to record...";
-        btn.Content    = disp;
-        btn.Foreground = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
-        btn.Background = Transparent;
+        var fg = !string.IsNullOrEmpty(trigger) ? TextBrush : DimBrush;
+        if (btn.Content is TextBlock tb)
+            ApplyHighlight(tb, disp, _filterText, fg);
+        else
+        {
+            var newTb = new TextBlock { FontFamily = new FontFamily("Consolas"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            ApplyHighlight(newTb, disp, _filterText, fg);
+            btn.Content = newTb;
+        }
+        btn.Background  = Transparent;
         btn.BorderBrush = DarkBorder;
     }
 
@@ -3537,9 +4045,272 @@ public partial class MainWindow : Window
         if (conflicts.Count > 0)
             warnParts.Add("Hotkey conflict(s): " + string.Join(", ", conflicts) + ". Will still fire via low-level hook but may behave inconsistently.");
 
+        ClearDirty();
+
         if (warnParts.Count > 0)
             ShowFeedback(savedPrefix + " " + string.Join(" ", warnParts), FeedbackKind.Warn);
         else if (wasRunning) ShowFeedback("Saved — daemon restarting.", FeedbackKind.Ok);
         else                 ShowFeedback("Settings saved.", FeedbackKind.Ok);
+    }
+
+    // =========================================================================
+    // Command palette
+    // =========================================================================
+
+    sealed class PaletteItem
+    {
+        public string   Label    { get; init; } = "";
+        public string   Subtitle { get; init; } = "";
+        public int      Score    { get; set; }
+        public Border?  Row      { get; set; }
+        public Action?  Execute  { get; init; }
+    }
+
+    readonly List<PaletteItem> _paletteItems = new();
+    int _paletteSelectedIndex = -1;
+
+    void OpenCommandPalette()
+    {
+        PaletteSearchBox.Text = "";
+        PaletteSearchPlaceholder.Visibility = Visibility.Visible;
+        UpdatePaletteResults("");
+        CommandPaletteRoot.Visibility = Visibility.Visible;
+        PaletteSearchBox.Focus();
+    }
+
+    void CloseCommandPalette()
+    {
+        CommandPaletteRoot.Visibility = Visibility.Collapsed;
+        PaletteResultsStack.Children.Clear();
+        _paletteItems.Clear();
+        _paletteSelectedIndex = -1;
+    }
+
+    void CommandPaletteRoot_MouseDown(object sender, MouseButtonEventArgs e) => CloseCommandPalette();
+    void CommandPaletteCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    void PaletteSearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        PaletteSearchPlaceholder.Visibility = PaletteSearchBox.Text.Length > 0
+            ? Visibility.Collapsed : Visibility.Visible;
+        UpdatePaletteResults(PaletteSearchBox.Text);
+    }
+
+    void PaletteSearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        // Arrow / Enter / Esc are already handled in OnWindowPreviewKeyDown before the
+        // TextBox sees them, so this handler is a safety net only.
+        if (e.Key == Key.Down)   { MovePaletteSelection(+1); e.Handled = true; }
+        else if (e.Key == Key.Up) { MovePaletteSelection(-1); e.Handled = true; }
+    }
+
+    void UpdatePaletteResults(string raw)
+    {
+        var query = raw.Trim();
+        PaletteResultsStack.Children.Clear();
+        _paletteItems.Clear();
+        _paletteSelectedIndex = -1;
+
+        // ── Binding results ─────────────────────────────────────────────────
+        var bindingItems = new List<PaletteItem>();
+
+        // Mouse
+        foreach (var def in MouseDefs)
+        {
+            if (!_mouseRows.TryGetValue(def.Gesture, out var rows) || rows.Count == 0) continue;
+            var outputs = GetRowOutputs(rows[0]);
+            if (!string.IsNullOrEmpty(query) && !FuzzyMatch(def.Label, query) && !outputs.Any(o => FuzzyMatch(o, query))) continue;
+            var sub   = outputs.Count > 0 ? string.Join(", ", outputs.Take(2)) : "";
+            int score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(def.Label, query);
+            if (!_mouseGestureStacks.TryGetValue(def.Gesture, out var gsp)) continue;
+            var gspCapture = gsp;
+            bindingItems.Add(new PaletteItem { Label = def.Label, Subtitle = sub, Score = score,
+                Execute = () => NavigateToPaletteBinding(Section.Mouse, gspCapture, null) });
+        }
+
+        // Keyboard
+        foreach (var card in _kbdCards)
+        {
+            var trig    = card.Trigger.StartsWith("key:", StringComparison.Ordinal) ? card.Trigger[4..] : card.Trigger;
+            var outputs = card.Variants.SelectMany(v => GetRowOutputs(v)).Distinct().ToList();
+            if (!string.IsNullOrEmpty(query) && !FuzzyMatch(trig, query) && !outputs.Any(o => FuzzyMatch(o, query))) continue;
+            var sub   = outputs.Count > 0 ? string.Join(", ", outputs.Take(2)) : "";
+            int score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(trig, query);
+            var cb    = card;
+            bindingItems.Add(new PaletteItem { Label = trig, Subtitle = sub, Score = score,
+                Execute = () => NavigateToPaletteBinding(Section.Kbd, null, cb.CardBorder) });
+        }
+
+        // App triggers
+        foreach (var card in _appTriggerCards)
+        {
+            var kindLabel = card.KindCombo.SelectedIndex switch { 1 => "App exits", 2 => "App focus", 3 => "App blur", _ => "App launches" };
+            var apps      = card.SelectedApps;
+            var label     = apps.Count > 0 ? $"{kindLabel}: {apps[0]}" : kindLabel;
+            var outputs   = GetRowOutputs(card.Row);
+            if (!string.IsNullOrEmpty(query) && !FuzzyMatch(label, query) && !outputs.Any(o => FuzzyMatch(o, query))) continue;
+            var sub   = outputs.Count > 0 ? string.Join(", ", outputs.Take(2)) : "";
+            int score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(label, query);
+            var ac    = card;
+            bindingItems.Add(new PaletteItem { Label = label, Subtitle = sub, Score = score,
+                Execute = () => NavigateToPaletteBinding(Section.AppTriggers, null, ac.CardBorder) });
+        }
+
+        if (!string.IsNullOrEmpty(query))
+            bindingItems = [.. bindingItems.OrderBy(x => x.Score)];
+
+        // ── Action results ───────────────────────────────────────────────────
+        var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
+        bool daemonRunning = DaemonService.IsRunning();
+
+        var actionDefs = new List<(string label, string sub, Action execute)>
+        {
+            ("Add shortcut",   "Record a new keyboard binding",
+                () => {
+                    CloseCommandPalette();
+                    SwitchTab(TabKind.All);
+                    _kbdExpanded = true; ApplySectionState();
+                    AddKbdTriggerCard("", null, insertAtTop: true);
+                    Dispatcher.InvokeAsync(() => { if (_kbdCards.Count > 0) _kbdCards[0].CardBorder.BringIntoView(); },
+                        DispatcherPriority.Loaded);
+                }),
+            ("Open settings",  "Open the settings panel",        () => { CloseCommandPalette(); SettingsBtn_Click(null!, null!); }),
+            (daemonRunning ? "Stop daemon" : "Start daemon",
+             daemonRunning ? "Stop the hook daemon" : "Start the hook daemon",
+                () => { CloseCommandPalette(); HookBtn_Click(null!, null!); }),
+            ("Import binding", "Paste a binding JSON from the clipboard", () => { CloseCommandPalette(); ImportBindingFromClipboard(); }),
+        };
+
+        foreach (var p in config.profiles)
+        {
+            var pName  = p.name;
+            var active = string.Equals(pName, config.activeProfile, StringComparison.Ordinal);
+            actionDefs.Add(($"Switch to profile: {pName}", active ? "Currently active" : "Switch active profile",
+                () => { CloseCommandPalette(); if (!active) SwitchActiveProfile(pName); }));
+        }
+
+        var actionItems = actionDefs
+            .Where(a => string.IsNullOrEmpty(query) || FuzzyMatch(a.label, query) || FuzzyMatch(a.sub, query))
+            .Select(a => new PaletteItem { Label = a.label, Subtitle = a.sub, Score = string.IsNullOrEmpty(query) ? 0 : FuzzyScore(a.label, query), Execute = a.execute })
+            .ToList();
+
+        if (!string.IsNullOrEmpty(query))
+            actionItems = [.. actionItems.OrderBy(x => x.Score)];
+
+        // ── Render ───────────────────────────────────────────────────────────
+        void AddCategoryHeader(string text)
+        {
+            PaletteResultsStack.Children.Add(new TextBlock
+            {
+                Text = text, Foreground = Br("#505050"), FontSize = 10,
+                FontWeight = FontWeights.SemiBold, Margin = new Thickness(12, 8, 12, 3),
+            });
+        }
+
+        var limit = bindingItems.Count > 0 && actionItems.Count > 0 ? 6 : 10;
+        if (bindingItems.Count > 0) { AddCategoryHeader("BINDINGS"); foreach (var item in bindingItems.Take(limit)) AddPaletteRow(item); }
+        if (actionItems.Count  > 0) { AddCategoryHeader("ACTIONS");  foreach (var item in actionItems)              AddPaletteRow(item); }
+
+        if (_paletteItems.Count == 0)
+        {
+            PaletteResultsStack.Children.Add(new TextBlock
+            {
+                Text = "No results",
+                Foreground = Br("#444444"), FontSize = 13,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 18, 0, 18),
+            });
+        }
+        else SetPaletteSelection(0);
+    }
+
+    void AddPaletteRow(PaletteItem item)
+    {
+        var labelTb = new TextBlock
+        {
+            Text = item.Label, Foreground = Br("#E0E0E0"), FontSize = 13,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var stack = new StackPanel();
+        stack.Children.Add(labelTb);
+        if (!string.IsNullOrEmpty(item.Subtitle))
+            stack.Children.Add(new TextBlock
+            {
+                Text = item.Subtitle, Foreground = Br("#505050"), FontSize = 11,
+                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+            });
+
+        var row = new Border
+        {
+            Padding     = new Thickness(12, 8, 12, 8),
+            CornerRadius = new CornerRadius(6),
+            Cursor      = Cursors.Hand,
+            Child       = stack,
+            Margin      = new Thickness(0, 1, 0, 1),
+        };
+        item.Row = row;
+        _paletteItems.Add(item);
+
+        var idx = _paletteItems.Count - 1;
+        row.MouseEnter        += (_, __) => SetPaletteSelection(idx);
+        row.MouseLeftButtonDown += (_, e)  => { ExecutePaletteItem(_paletteItems[idx]); e.Handled = true; };
+
+        PaletteResultsStack.Children.Add(row);
+    }
+
+    void SetPaletteSelection(int index)
+    {
+        if (index < 0 || index >= _paletteItems.Count) return;
+        if (_paletteSelectedIndex >= 0 && _paletteSelectedIndex < _paletteItems.Count)
+            _paletteItems[_paletteSelectedIndex].Row!.Background = Transparent;
+        _paletteSelectedIndex = index;
+        var row = _paletteItems[index].Row!;
+        row.Background = Br("#1A3050");
+        row.BringIntoView();
+    }
+
+    void MovePaletteSelection(int delta)
+    {
+        if (_paletteItems.Count == 0) return;
+        SetPaletteSelection(Math.Clamp(_paletteSelectedIndex + delta, 0, _paletteItems.Count - 1));
+    }
+
+    void ExecuteSelectedPaletteItem()
+    {
+        if (_paletteSelectedIndex >= 0 && _paletteSelectedIndex < _paletteItems.Count)
+            ExecutePaletteItem(_paletteItems[_paletteSelectedIndex]);
+    }
+
+    void ExecutePaletteItem(PaletteItem item) => item.Execute?.Invoke();
+
+    void NavigateToPaletteBinding(Section section, FrameworkElement? gestureStack, Border? cardBorder)
+    {
+        CloseCommandPalette();
+        SwitchTab(TabKind.All);
+        switch (section)
+        {
+            case Section.Mouse:       _mouseExpanded       = true; break;
+            case Section.Kbd:         _kbdExpanded         = true; break;
+            case Section.AppTriggers: _appTriggersExpanded = true; break;
+        }
+        ApplySectionState();
+        var target = (FrameworkElement?)cardBorder ?? gestureStack;
+        if (target == null) return;
+        Dispatcher.InvokeAsync(() =>
+        {
+            target.BringIntoView();
+            FlashPaletteTarget(target);
+        }, DispatcherPriority.Loaded);
+    }
+
+    void FlashPaletteTarget(FrameworkElement el)
+    {
+        var border = el as Border ?? (el is Panel p ? p.Children.OfType<Border>().FirstOrDefault() : null);
+        if (border == null) return;
+        var origBrush = border.BorderBrush;
+        border.BorderBrush = AccentBrush;
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        t.Tick += (_, __) => { border.BorderBrush = origBrush; t.Stop(); };
+        t.Start();
     }
 }

@@ -1,29 +1,3 @@
-# ShortcutHook.ps1  v4.0
-# System-wide low-level hook that maps mouse gestures and keyboard combos to
-# configurable outputs: keyboard chords OR shell-execute (open app/file/folder).
-#
-# Mouse gestures: left+right, left+rightx2, left+rightx3,
-#                 double-right, double-right-sel, triple-right,
-#                 right-scroll-down, right-scroll-up,
-#                 single-wheel, double-wheel, triple-wheel
-# Key triggers:   key:Ctrl+S  |  key:Ctrl+Alt+F5  |  key:Ctrl+S+L
-# App triggers:   launch:chrome.exe  |  exit:chrome.exe  |  focus:chrome.exe  |  blur:chrome.exe  (polled on a background timer)
-#                 Multiple process names may be comma-separated, e.g. launch:chrome.exe,notepad.exe
-#
-# Output formats in shortcuts.json:
-#   "Win+Shift+S"           keyboard chord
-#   "open:C:\path\to\thing" shell-execute (app .lnk, file, or folder)
-#   "type:Some text"        paste a literal string via the clipboard (text expansion)
-#
-# Requirements: Windows 10/11, PowerShell 5+, .NET Framework 4.5+
-
-$logPath = Join-Path $PSScriptRoot 'ShortcutHook.log'
-function Write-Log([string]$msg) {
-    "$(Get-Date -f 'yyyy-MM-dd HH:mm:ss')  $msg" | Out-File $logPath -Append -Encoding UTF8
-}
-Write-Log "=== Start (PS $($PSVersionTable.PSVersion), PID $PID) ==="
-
-try { Add-Type -ReferencedAssemblies @('System.Windows.Forms.dll','System.Drawing.dll') -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -32,6 +6,8 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
+
+namespace ShortcutHookDaemon;
 
 public class ShortcutHook {
 
@@ -82,7 +58,7 @@ public class ShortcutHook {
     // Global pause: while true, both hooks pass events through untouched except
     // for keyboard bindings that toggle this flag back off (see KbdCallback).
     public static volatile bool IsPaused = false;
-    private static readonly string PauseStatePath = @"$PSScriptRoot\pause.state";
+    public static string PauseStatePath = Path.Combine(AppContext.BaseDirectory, "pause.state");
 
     public static volatile string SwitchProfileRequest = null;
     public static string CurrentProfileName = "";
@@ -396,7 +372,7 @@ public class ShortcutHook {
             while ((format = EnumClipboardFormats(format)) != 0) {
                 IntPtr hData = GetClipboardData(format);
                 if (hData == IntPtr.Zero) continue;
-                
+
                 if (format == 2) { // CF_BITMAP
                     IntPtr hCopy = CopyImage(hData, 0, 0, 0, 0); // IMAGE_BITMAP = 0
                     if (hCopy != IntPtr.Zero) {
@@ -511,7 +487,7 @@ public class ShortcutHook {
             int pFiles = BitConverter.ToInt32(dropFilesData, 0);
             bool fWide = dropFilesData[16] != 0;
             if (pFiles < 0 || pFiles >= dropFilesData.Length) return files;
-            
+
             if (fWide) {
                 int i = pFiles;
                 while (i < dropFilesData.Length - 1) {
@@ -569,43 +545,43 @@ public class ShortcutHook {
         try {
             IntPtr fgHwnd = GetForegroundWindow();
             if (fgHwnd == IntPtr.Zero) return -1;
-            
+
             Type shellAppType = Type.GetTypeFromProgID("Shell.Application");
             if (shellAppType == null) return -1;
-            
+
             object shell = Activator.CreateInstance(shellAppType);
             if (shell == null) return -1;
-            
-            object windows = shellAppType.InvokeMember("Windows", 
+
+            object windows = shellAppType.InvokeMember("Windows",
                 System.Reflection.BindingFlags.InvokeMethod, null, shell, null);
             if (windows == null) return -1;
-            
-            int count = (int)windows.GetType().InvokeMember("Count", 
+
+            int count = (int)windows.GetType().InvokeMember("Count",
                 System.Reflection.BindingFlags.GetProperty, null, windows, null);
-                
+
             for (int i = 0; i < count; i++) {
-                object window = windows.GetType().InvokeMember("Item", 
+                object window = windows.GetType().InvokeMember("Item",
                     System.Reflection.BindingFlags.InvokeMethod, null, windows, new object[] { i });
                 if (window == null) continue;
-                
-                object hwndObj = window.GetType().InvokeMember("HWND", 
+
+                object hwndObj = window.GetType().InvokeMember("HWND",
                     System.Reflection.BindingFlags.GetProperty, null, window, null);
-                    
+
                 IntPtr hwnd = IntPtr.Zero;
                 if (hwndObj is int) hwnd = new IntPtr((int)hwndObj);
                 else if (hwndObj is long) hwnd = new IntPtr((long)hwndObj);
-                
+
                 if (hwnd == fgHwnd) {
-                    string name = (string)window.GetType().InvokeMember("Name", 
+                    string name = (string)window.GetType().InvokeMember("Name",
                         System.Reflection.BindingFlags.GetProperty, null, window, null);
                     if (name != null && name.ToLower().Contains("explorer")) {
-                        object document = window.GetType().InvokeMember("Document", 
+                        object document = window.GetType().InvokeMember("Document",
                             System.Reflection.BindingFlags.GetProperty, null, window, null);
                         if (document != null) {
-                            object selectedItems = document.GetType().InvokeMember("SelectedItems", 
+                            object selectedItems = document.GetType().InvokeMember("SelectedItems",
                                 System.Reflection.BindingFlags.InvokeMethod, null, document, null);
                             if (selectedItems != null) {
-                                int selCount = (int)selectedItems.GetType().InvokeMember("Count", 
+                                int selCount = (int)selectedItems.GetType().InvokeMember("Count",
                                     System.Reflection.BindingFlags.GetProperty, null, selectedItems, null);
                                 return selCount;
                             }
@@ -624,7 +600,7 @@ public class ShortcutHook {
         if (explorerSelCount >= 0) {
             return explorerSelCount > 0;
         }
-        
+
         // Fallback selection detection (text, files, etc. in other apps)
         var saved = BackupClipboard();
         ClearClipboard();
@@ -633,7 +609,7 @@ public class ShortcutHook {
         keybd_event(0x43, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         Thread.Sleep(CLIP_WAIT_MS);
-        
+
         bool hasSel = ClipboardHasData();
         if (hasSel) {
             // Check if it's an Explorer default/invisible selection (e.g. $RECYCLE.BIN)
@@ -872,14 +848,10 @@ public class ShortcutHook {
         // Give the target app time to read the clipboard before we restore it.
         Thread.Sleep(CLIP_WAIT_MS);
         RestoreClipboard(saved);
-
-        // Restore the modifiers that were held before typing started.
-        if (uAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
-        if (uShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
-        if (uCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-
-        if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
-        else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
+        // Modifiers are NOT re-pressed here. TypeText runs on a background thread and
+        // CLIP_WAIT_MS is long enough that the user has already released the physical
+        // trigger keys. Synthetically re-pressing them creates ghost key-down events
+        // with no matching key-up, leaving Ctrl/Shift stuck for all subsequent input.
     }
 
     static void SetClipboardText(string text) {
@@ -1405,300 +1377,4 @@ public class ShortcutHook {
         if (ProcessPollTimer != null) { ProcessPollTimer.Dispose(); ProcessPollTimer = null; }
         UnhookWindowsHookEx(kbdHookId); UnhookWindowsHookEx(mouseHookId);
     }
-}
-"@
-} catch { Write-Log "Add-Type failed: $_"; exit 1 }
-Write-Log 'Add-Type OK.'
-
-# ---------------------------------------------------------------------------
-# Key parsing helpers
-# ---------------------------------------------------------------------------
-$vkMap = @{
-    'ENTER'=[byte]0x0D; 'RETURN'=[byte]0x0D; 'ESC'=[byte]0x1B; 'ESCAPE'=[byte]0x1B
-    'TAB'=[byte]0x09; 'SPACE'=[byte]0x20; 'BACK'=[byte]0x08; 'BACKSPACE'=[byte]0x08
-    'DELETE'=[byte]0x2E; 'DEL'=[byte]0x2E; 'INSERT'=[byte]0x2D; 'INS'=[byte]0x2D
-    'HOME'=[byte]0x24; 'END'=[byte]0x23; 'PGUP'=[byte]0x21; 'PAGEUP'=[byte]0x21
-    'PGDN'=[byte]0x22; 'PAGEDOWN'=[byte]0x22; 'LEFT'=[byte]0x25; 'UP'=[byte]0x26
-    'RIGHT'=[byte]0x27; 'DOWN'=[byte]0x28; 'PRTSCR'=[byte]0x2C; 'PRINTSCREEN'=[byte]0x2C
-    'F1'=[byte]0x70; 'F2'=[byte]0x71; 'F3'=[byte]0x72; 'F4'=[byte]0x73
-    'F5'=[byte]0x74; 'F6'=[byte]0x75; 'F7'=[byte]0x76; 'F8'=[byte]0x77
-    'F9'=[byte]0x78; 'F10'=[byte]0x79; 'F11'=[byte]0x7A; 'F12'=[byte]0x7B
-}
-$outModMap = @{
-    'WIN'=[byte]0x5B; 'LWIN'=[byte]0x5B; 'RWIN'=[byte]0x5C
-    'SHIFT'=[byte]0x10; 'LSHIFT'=[byte]0xA0; 'RSHIFT'=[byte]0xA1
-    'CTRL'=[byte]0x11; 'CONTROL'=[byte]0x11; 'LCTRL'=[byte]0xA2; 'RCTRL'=[byte]0xA3
-    'ALT'=[byte]0x12; 'MENU'=[byte]0x12
-}
-
-function Resolve-SingleKey([string]$k) {
-    $u = $k.Trim().ToUpper()
-    if ($vkMap.ContainsKey($u))                   { return $vkMap[$u] }
-    if ($u.Length -eq 1 -and $u -match '^[A-Z]$') { return [byte][int][char]$u }
-    if ($u.Length -eq 1 -and $u -match '^[0-9]$') { return [byte](0x30 + [int]::Parse($u)) }
-    throw "Unknown key '$k'"
-}
-
-function Resolve-OutputChord([string]$combo) {
-    $out = foreach ($tok in ($combo -split '\+' | ForEach-Object { $_.Trim().ToUpper() })) {
-        if ($outModMap.ContainsKey($tok))                          { $outModMap[$tok] }
-        elseif ($vkMap.ContainsKey($tok))                          { $vkMap[$tok] }
-        elseif ($tok.Length -eq 1 -and $tok -match '^[A-Z]$')     { [byte][int][char]$tok }
-        elseif ($tok.Length -eq 1 -and $tok -match '^[0-9]$')     { [byte](0x30 + [int]::Parse($tok)) }
-        else { throw "Unknown key '$tok' in '$combo'" }
-    }
-    ,[byte[]]$out
-}
-
-function Resolve-KeyTrigger([string]$combo) {
-    $mods = 0; $keys = New-Object System.Collections.Generic.List[byte]
-    foreach ($tok in ($combo -split '\+' | ForEach-Object { $_.Trim().ToUpper() })) {
-        switch ($tok) {
-            'CTRL'    { $mods = $mods -bor 1; continue } 'CONTROL' { $mods = $mods -bor 1; continue }
-            'SHIFT'   { $mods = $mods -bor 2; continue } 'ALT'     { $mods = $mods -bor 4; continue }
-            'MENU'    { $mods = $mods -bor 4; continue } 'WIN'     { $mods = $mods -bor 8; continue }
-            default   { $keys.Add( (Resolve-SingleKey $tok) ) }
-        }
-    }
-    if ($keys.Count -eq 0) { throw "No non-modifier key in '$combo'" }
-    $arr = $keys.ToArray(); [Array]::Sort($arr)
-    if ($mods -eq 1 -and $arr.Length -eq 1 -and $arr[0] -ge 0x41 -and $arr[0] -le 0x5A) {
-        throw "Trigger '$combo' is restricted because 'Ctrl + single letter' conflicts with standard system shortcuts. Please use a multi-key combo (e.g. Ctrl+K+C) or add another modifier (e.g. Ctrl+Shift+C)."
-    }
-    [pscustomobject]@{ Mods = $mods; Keys = [byte[]]$arr }
-}
-
-# ---------------------------------------------------------------------------
-# Load shortcuts.json
-# ---------------------------------------------------------------------------
-$defaults = @(
-    [pscustomobject]@{ trigger = 'mouse:left+right';   output = 'Win+Shift+S' },
-    [pscustomobject]@{ trigger = 'mouse:double-right'; output = 'Ctrl+C'      },
-    [pscustomobject]@{ trigger = 'mouse:triple-right'; output = 'Ctrl+V'      }
-)
-
-$configPath = Join-Path $PSScriptRoot 'shortcuts.json'
-$activeProfileName = $null
-if (Test-Path $configPath) {
-    try {
-        $json = Get-Content $configPath -Raw | ConvertFrom-Json
-        $profiles = @($json.profiles)
-        if ($profiles.Count -gt 0) {
-            $activeProfileName = $json.activeProfile
-            $activeProfile = $profiles | Where-Object { $_.name -eq $activeProfileName } | Select-Object -First 1
-            if ($activeProfile) {
-                # Active profile found -- use its bindings as-is, even if empty
-                # (an empty profile intentionally has no shortcuts).
-                $rawBindings = @($activeProfile.bindings)
-            } else {
-                $rawBindings = $defaults
-                Write-Log 'Active profile not found -- using defaults.'
-            }
-        } else {
-            # Old format (not yet migrated) -- fall back to top-level bindings.
-            $activeProfileName = 'Default'
-            $rawBindings = @($json.bindings)
-            if ($rawBindings.Count -eq 0) { $rawBindings = $defaults; Write-Log 'No bindings -- using defaults.' }
-        }
-    } catch { Write-Log "Bad shortcuts.json -- using defaults. ($_)"; $rawBindings = $defaults }
-} else {
-    Write-Log 'shortcuts.json not found -- using defaults.'
-    $rawBindings = $defaults
-}
-
-if ($activeProfileName) { Write-Log "Active profile: $activeProfileName" }
-
-# Load ignoredApps into the C# HashSet
-if (Test-Path $configPath) {
-    try {
-        $cfgForIgnored = Get-Content $configPath -Raw | ConvertFrom-Json
-        if ($cfgForIgnored.PSObject.Properties.Name -contains 'ignoredApps' -and $cfgForIgnored.ignoredApps) {
-            foreach ($app in @($cfgForIgnored.ignoredApps)) {
-                if ($app) { [ShortcutHook]::IgnoredApps.Add($app) | Out-Null }
-            }
-            if ([ShortcutHook]::IgnoredApps.Count -gt 0) {
-                Write-Log ("Ignored apps: {0}" -f ([ShortcutHook]::IgnoredApps -join ', '))
-            }
-        }
-    } catch { Write-Log "Failed to load ignoredApps: $_" }
-}
-
-# ---------------------------------------------------------------------------
-# Build Binding objects
-# ---------------------------------------------------------------------------
-$validGestures = @('left+right','left+rightx2','left+rightx3','double-right','double-right-sel','triple-right','right-scroll-down','right-scroll-up','shift-scroll-down','shift-scroll-up','ctrl-shift-scroll-down','ctrl-shift-scroll-up','alt-scroll-down','alt-scroll-up','single-wheel','double-wheel','triple-wheel')
-$built = New-Object System.Collections.Generic.List[ShortcutHook+Binding]
-
-foreach ($b in $rawBindings) {
-    try {
-        if ($b.PSObject.Properties.Name -contains 'enabled' -and $b.enabled -eq $false) {
-            Write-Log "Skip disabled binding: $($b.trigger)"; continue
-        }
-        $nb = [ShortcutHook+Binding]::new()
-        if ($b.trigger -match '^mouse:(.+)$') {
-            $g = $Matches[1].ToLower()
-            if ($validGestures -notcontains $g) { Write-Log "Skip unknown gesture '$g'"; continue }
-            $nb.Kind = 'mouse'; $nb.MouseGesture = $g
-        } elseif ($b.trigger -match '^key:(.+)$') {
-            $parsed = Resolve-KeyTrigger $Matches[1]
-            $nb.Kind = 'key'; $nb.Mods = $parsed.Mods; $nb.Keys = $parsed.Keys
-            $nb.Signature = [ShortcutHook]::MakeSignature($parsed.Mods, $parsed.Keys)
-        } elseif ($b.trigger -match '^launch:(.+)$') {
-            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-            if ($appNames.Count -eq 0) { Write-Log "Skip launch trigger with empty app name"; continue }
-            $nb.Kind = 'launch'; $nb.AppNames = $appNames
-        } elseif ($b.trigger -match '^exit:(.+)$') {
-            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-            if ($appNames.Count -eq 0) { Write-Log "Skip exit trigger with empty app name"; continue }
-            $nb.Kind = 'exit'; $nb.AppNames = $appNames
-        } elseif ($b.trigger -match '^focus:(.+)$') {
-            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-            if ($appNames.Count -eq 0) { Write-Log "Skip focus trigger with empty app name"; continue }
-            $nb.Kind = 'focus'; $nb.AppNames = $appNames
-        } elseif ($b.trigger -match '^blur:(.+)$') {
-            $appNames = [string[]]@($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-            if ($appNames.Count -eq 0) { Write-Log "Skip blur trigger with empty app name"; continue }
-            $nb.Kind = 'blur'; $nb.AppNames = $appNames
-        } else {
-            Write-Log "Skip unknown trigger prefix: $($b.trigger)"; continue
-        }
-
-        # Resolve outputs: prefer 'outputs' array, fall back to legacy 'output' string.
-        $outputsList = $null
-        if ($b.PSObject.Properties.Name -contains 'outputs' -and $b.outputs -and @($b.outputs).Count -gt 0) {
-            $outputsList = @($b.outputs)
-        } elseif ($b.PSObject.Properties.Name -contains 'output' -and $b.output) {
-            $outputsList = @($b.output)
-        }
-        if (-not $outputsList -or $outputsList.Count -eq 0) { Write-Log "Skip no-output binding: $($b.trigger)"; continue }
-
-        $steps = New-Object System.Collections.Generic.List[ShortcutHook+ChainStep]
-        foreach ($outStr in $outputsList) {
-            $step = [ShortcutHook+ChainStep]::new()
-            if ($outStr -match '^open:(.+)$') {
-                $step.OpenPath = $Matches[1].Trim()
-            } elseif ($outStr -match '^cmdw:(.+)$') {
-                $step.CmdLine = $Matches[1].Trim(); $step.CmdShow = $true
-            } elseif ($outStr -match '^cmd:(.+)$') {
-                $cmdVal = $Matches[1].Trim()
-                if ($cmdVal -match '^cmd:(.+)$') { $cmdVal = $Matches[1].Trim() }
-                $step.CmdLine = $cmdVal; $step.CmdShow = $false
-            } elseif ($outStr -match '^hscroll:(left|right)$') {
-                $step.IsHScroll = $true
-                $step.HScrollDelta = if ($Matches[1] -eq 'left') { [int]-120 } else { [int]120 }
-            } elseif ($outStr -match '^toggle:pause$') {
-                $step.IsTogglePause = $true
-            } elseif ($outStr -match '^profile:(.+)$') {
-                $step.SwitchToProfile = $Matches[1].Trim()
-            } elseif ($outStr -match '^type:([\s\S]+)$') {
-                $step.TypeText = $Matches[1]
-            } else {
-                $step.Output = Resolve-OutputChord $outStr
-            }
-            $steps.Add($step)
-        }
-        $nb.Steps = $steps.ToArray()
-
-        if ($b.PSObject.Properties.Name -contains 'outputDelay' -and $b.outputDelay -gt 0) {
-            $nb.OutputDelay = [int]$b.outputDelay
-        }
-        # apps[] (multi-app) takes precedence; fall back to legacy app string
-        if ($b.PSObject.Properties.Name -contains 'apps' -and $b.apps -and @($b.apps).Count -gt 0) {
-            $nb.Apps = [string[]]@($b.apps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        } elseif ($b.PSObject.Properties.Name -contains 'app' -and $b.app) {
-            $nb.Apps = [string[]]@($b.app.Trim())
-        }
-        if ($b.PSObject.Properties.Name -contains 'exceptApps' -and $b.exceptApps -and @($b.exceptApps).Count -gt 0) {
-            $nb.ExceptApps = [string[]]@($b.exceptApps | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        }
-        if ($b.PSObject.Properties.Name -contains 'debounce' -and $b.debounce -eq $true) {
-            $nb.Debounce = $true
-        }
-        if ($b.PSObject.Properties.Name -contains 'showToast' -and $b.showToast -eq $true) {
-            $nb.ShowToast = $true
-            $nb.ToastText = if ($b.trigger -match '^(?:mouse|key):(.+)$') { $Matches[1] } else { $b.trigger }
-        }
-        $built.Add($nb)
-    } catch {
-        $outRef = if ($b.PSObject.Properties.Name -contains 'outputs') { ($b.outputs -join ', ') } else { $b.output }
-        Write-Log "Skip '$($b.trigger)' -> '$outRef': $_"
-    }
-}
-
-try {
-    [ShortcutHook]::LoadBindings($built.ToArray())
-    [ShortcutHook]::CurrentProfileName = if ($activeProfileName) { $activeProfileName } else { '' }
-    Write-Log ("Loaded {0} binding(s)." -f $built.Count)
-    foreach ($x in $built) {
-        $stepDescs = @()
-        foreach ($s in $x.Steps) {
-            if ($s.OpenPath) { $stepDescs += "open:$($s.OpenPath)" }
-            elseif ($s.CmdLine) {
-                if ($s.CmdShow) { $stepDescs += "cmdw:$($s.CmdLine)" }
-                else { $stepDescs += "cmd:$($s.CmdLine)" }
-            } elseif ($s.IsTogglePause) { $stepDescs += "toggle:pause" }
-            elseif ($s.SwitchToProfile) { $stepDescs += "profile:$($s.SwitchToProfile)" }
-            elseif ($s.TypeText) { $stepDescs += "type:$($s.TypeText)" }
-            else { $stepDescs += ("[{0}]" -f ($s.Output -join ',')) }
-        }
-        $dest  = [string]::Join(' -> ', $stepDescs)
-        $delay = if ($x.OutputDelay -gt 0) { " [delay:$($x.OutputDelay)ms]" } else { '' }
-        $scope = if ($x.Apps -and $x.Apps.Length -gt 0) { " [apps:$($x.Apps -join ',')]" } else { '' }
-        if ($x.Kind -eq 'mouse') { Write-Log ("  mouse:{0} -> {1}{2}{3}" -f $x.MouseGesture, $dest, $delay, $scope) }
-        elseif ($x.Kind -eq 'key') { Write-Log ("  key:mods={0} keys=[{1}] -> {2}{3}{4}" -f $x.Mods, ($x.Keys -join ','), $dest, $delay, $scope) }
-        else { Write-Log ("  {0}:{1} -> {2}{3}" -f $x.Kind, ($x.AppNames -join ','), $dest, $delay) }
-    }
-} catch { Write-Log "LoadBindings failed: $_"; exit 1 }
-
-# ---------------------------------------------------------------------------
-# Single-instance guard
-# ---------------------------------------------------------------------------
-$mutexCreated = $false
-$mutex = New-Object System.Threading.Mutex($true, 'Global\ShortcutHook', [ref]$mutexCreated)
-if (-not $mutexCreated) { Write-Log 'Already running.'; exit }
-
-$mutexReleased = $false
-try {
-    Write-Host 'ShortcutHook active:' -ForegroundColor Green
-    foreach ($b in $rawBindings) {
-        $outDisplay = $b.output
-        if ($b.PSObject.Properties.Name -contains 'outputs' -and $b.outputs) {
-            $outDisplay = [string]::Join(' -> ', @($b.outputs))
-        }
-        $appDisplay = ''
-        if ($b.PSObject.Properties.Name -contains 'app' -and $b.app) { $appDisplay = "  [app:$($b.app)]" }
-        Write-Host ("  {0,-28} ->  {1}{2}" -f $b.trigger, $outDisplay, $appDisplay) -ForegroundColor Cyan
-    }
-    Write-Host 'Ctrl+C to stop.' -ForegroundColor DarkGray
-    [ShortcutHook]::Start()
-    Write-Log 'Message loop exited normally.'
-    $profileSwitch = [ShortcutHook]::SwitchProfileRequest
-    if ($profileSwitch -ne $null) {
-        Write-Log "Profile switch requested: $profileSwitch"
-        try {
-            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
-            $exists = $cfg.profiles | Where-Object { $_.name -eq $profileSwitch } | Select-Object -First 1
-            if ($exists) {
-                $cfg.activeProfile = $profileSwitch
-                $cfg | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
-                Write-Log "Switched active profile to: $profileSwitch"
-                $mutexReleased = $true; $mutex.ReleaseMutex(); $mutex.Dispose()
-                $psi = New-Object System.Diagnostics.ProcessStartInfo
-                $psi.FileName = 'powershell.exe'
-                $psi.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-                $psi.WorkingDirectory = $PSScriptRoot
-                $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-                $psi.CreateNoWindow = $true
-                $psi.UseShellExecute = $false
-                [System.Diagnostics.Process]::Start($psi) | Out-Null
-                exit
-            } else {
-                Write-Log "Profile switch target not found: $profileSwitch"
-            }
-        } catch { Write-Log "Profile switch failed: $_" }
-    }
-} catch {
-    Write-Log "ERROR: $_"; Write-Host "ERROR: $_" -ForegroundColor Red; Read-Host 'Press Enter to exit'
-} finally {
-    if (-not $mutexReleased) { $mutex.ReleaseMutex(); $mutex.Dispose() }
 }

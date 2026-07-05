@@ -11,9 +11,9 @@
     <RootNamespace>ShortcutHookUI</RootNamespace>
     <AssemblyName>ShortcutHookUI</AssemblyName>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.7.0</Version>
-    <AssemblyVersion>1.7.0.0</AssemblyVersion>
-    <FileVersion>1.7.0.0</FileVersion>
+    <Version>2.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
     <Product>ShortcutHook</Product>
     <Authors>veerabharath123</Authors>
     <Company>veerabharath123</Company>
@@ -31,17 +31,23 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="8.0.0"/>
-  </ItemGroup>
-
-  <ItemGroup>
     <Resource Include="Assets\ShortcutHook.ico" />
     <Resource Include="Assets\ShortcutHook.png" />
   </ItemGroup>
 
+  <!-- Auto-build daemon before UI in Release mode -->
+  <Target Name="BuildDaemon" BeforeTargets="PrepareForBuild" Condition="'$(Configuration)' == 'Release'">
+    <Message Text="Building ShortcutHookDaemon..." Importance="high" />
+    <Exec Command="dotnet publish $(MSBuildThisFileDirectory)..\ShortcutHookDaemon\ShortcutHookDaemon.csproj -c Release -v minimal" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\ShortcutHookDaemon\bin\Release\net8.0-windows\win-x64\publish\ShortcutHookDaemon.exe"
+          DestinationFolder="$(MSBuildThisFileDirectory)Resources\" />
+  </Target>
+
+  <!-- Embed daemon exe (produced by BuildDaemon target above) -->
   <ItemGroup>
-    <EmbeddedResource Include="..\ShortcutHookScripts\ShortcutHook.ps1"
-                      LogicalName="ShortcutHookUI.Runtime.ShortcutHook.ps1" />
+    <EmbeddedResource Include="Resources\ShortcutHookDaemon.exe"
+                      LogicalName="ShortcutHookUI.Runtime.ShortcutHookDaemon.exe"
+                      Condition="Exists('Resources\ShortcutHookDaemon.exe')" />
   </ItemGroup>
 
 </Project>
