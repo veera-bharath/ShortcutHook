@@ -16,7 +16,7 @@
 
 ---
 
-ShortcutHook maps mouse gestures and keyboard chords to custom actions, shell commands, or text expansions. It runs as a lightweight, unmanaged background daemon coupled with a modern WPF settings user interface.
+ShortcutHook maps mouse gestures and keyboard chords to custom actions, shell commands, or text expansions. It runs as a lightweight background daemon coupled with a modern WPF settings user interface.
 
 ## 🚀 Key Features
 
@@ -25,7 +25,7 @@ ShortcutHook maps mouse gestures and keyboard chords to custom actions, shell co
 * 🎯 **Context-Aware Scoping** — Bindings can target specific foreground applications or trigger on process launch, exit, focus, or blur events.
 * 📋 **Selection-Aware Triggers** — Advanced double-right-click actions that dynamically handle selected text/files vs unselected paste states natively.
 * 📂 **Multi-Profile Management** — Group your hotkeys into profiles (e.g. Default, Coding, Gaming) and switch active layouts instantly.
-* ⚡ **Offline & Lightweight** — Built entirely in pure C# (.NET 8) with native unmanaged Win32 hooks. Zero cloud dependencies, zero tracking, self-contained single `.exe`.
+* ⚡ **Offline & Lightweight** — Built entirely in pure C# (.NET 8) with native Win32 hooks. Zero cloud dependencies, zero tracking, self-contained single `.exe`.
 
 ---
 
@@ -146,7 +146,7 @@ Grab the latest **ShortcutHookUI.exe** directly or browse all available versions
 
 ### Selection-Aware Double-Right Detail
 * **File Explorer Native Query**: If the active foreground window is File Explorer or the Desktop, the daemon uses dynamic COM Automation Reflection to query `SelectedItems.Count` natively. If there is no selection, it executes Paste instantly with zero clipboard clearing.
-* **High-Fidelity Clipboard Backup & Restoration**: For other applications, the daemon performs a simulated `Ctrl+C` check. It utilizes unmanaged Win32 APIs (`EnumClipboardFormats`, `GetClipboardData`, `GlobalAlloc`) to create a format-preserving binary-level backup of the clipboard (supporting text, copied files, HTML, rich text, and unmanaged GDI bitmap handles like `CF_BITMAP`).
+* **High-Fidelity Clipboard Backup & Restoration**: For other applications, the daemon performs a simulated `Ctrl+C` check. It utilizes native Win32 APIs (`EnumClipboardFormats`, `GetClipboardData`, `GlobalAlloc`) to create a format-preserving binary-level backup of the clipboard (supporting text, copied files, HTML, rich text, and native GDI bitmap handles like `CF_BITMAP`).
 </details>
 
 ---
