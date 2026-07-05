@@ -60,7 +60,7 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
 
-- 🚀 [Download v1.7.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v1.7.0/ShortcutHookUI-1.7.0.exe)
+- 🚀 [Download v2.0.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v2.0.0/ShortcutHookUI-2.0.0.exe)
 - 📦 [Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)
 
 1. Run `ShortcutHookUI.exe`
