@@ -5,7 +5,7 @@
 <h1 align="center">ShortcutHook</h1>
 
 <p align="center">
-  <strong>A modern, offline-first Windows utility to map mouse gestures and keyboard combos to shortcuts, files, and commands.</strong>
+  <strong>A lightweight Windows utility to map mouse gestures, keyboard combos, and chords to custom actions. Runs as a background daemon with a modern WPF settings UI.</strong>
 </p>
 
 <p align="center">
@@ -15,8 +15,6 @@
 </p>
 
 ---
-
-ShortcutHook maps mouse gestures and keyboard chords to custom actions, shell commands, or text expansions. It runs as a lightweight background daemon coupled with a modern WPF settings user interface.
 
 ## 🚀 Key Features
 
