@@ -40,28 +40,19 @@ A Windows tool that maps mouse gestures and keyboard combos to keyboard chords, 
 
 ## Preview
 
-![ShortcutHook Main Window](ShortcutHookUI/Assets/ShortcutHookMainWindow.png)
+ShortcutHook provides a highly polished, interactive setup panel to manage your triggers. Here is a look at it in action:
 
-<details>
-<summary>Mouse gestures section</summary>
+### 🖱️ Mouse Gestures
+Map custom mouse clicks, double clicks, held-clicks, or modifier-scrolling (e.g., Alt+Wheel for horizontal scroll).
+![Mouse Gestures Demo](ShortcutHookUI/Assets/mouse-right-click.gif)
 
-![Mouse gestures](ShortcutHookUI/Assets/mouse-right-click.gif)
+### ⌨️ Keyboard Actions
+Create powerful multi-key chords and text expansions. Smart defer logic automatically handles prefix shortcuts without key conflicts.
+![Keyboard Actions Demo](ShortcutHookUI/Assets/keyboard-action.gif)
 
-</details>
-
-<details>
-<summary>Keyboard bindings section</summary>
-
-![Keyboard actions](ShortcutHookUI/Assets/keyboard-action.gif)
-
-</details>
-
-<details>
-<summary>Profiles & active switching section</summary>
-
-![Profile switching](ShortcutHookUI/Assets/profiles.gif)
-
-</details>
+### 📂 Profiles & Context Switching
+Organize hotkeys into profiles (e.g., Default, Coding, Gaming) and switch between them instantly.
+![Profiles Demo](ShortcutHookUI/Assets/profiles.gif)
 
 ## Download
 
