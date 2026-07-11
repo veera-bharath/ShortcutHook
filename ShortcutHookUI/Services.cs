@@ -385,7 +385,10 @@ internal static class InstallService
     const string UiExeFileName        = "ShortcutHookUI.exe";
 
     // Script + config always live here — fixed, never changes.
-    public static readonly string ScriptRoot = @"C:\Tools\ShortcutHook";
+    public static string ScriptRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ShortcutHook"
+    );
 
     // Primary name for the daemon executable path.
     public static string DaemonPath => Path.Combine(ScriptRoot, ScriptFileName);
@@ -482,9 +485,48 @@ internal static class InstallService
         if (!string.Equals(Path.GetFullPath(sourceExe), Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase))
             File.Copy(sourceExe, targetExe, overwrite: true);
 
-        // 3. Write default config if absent.
-        if (!File.Exists(ConfigService.ConfigPath(ScriptRoot)))
-            ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
+        // 3. Write default config if absent (migrating from old path if available).
+        var newConfigPath = ConfigService.ConfigPath(ScriptRoot);
+        if (!File.Exists(newConfigPath))
+        {
+            var oldConfigPath = Path.Combine(@"C:\Tools\ShortcutHook", "shortcuts.json");
+            if (File.Exists(oldConfigPath))
+            {
+                try
+                {
+                    File.Copy(oldConfigPath, newConfigPath, overwrite: true);
+                }
+                catch
+                {
+                    ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
+                }
+            }
+            else
+            {
+                ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
+            }
+        }
+
+        // Migrate startup shortcut if it exists to point to the new daemon path.
+        try
+        {
+            if (StartupService.IsEnabled())
+            {
+                StartupService.Set(true);
+            }
+        }
+        catch { }
+
+        // Clean up old daemon to avoid confusion.
+        try
+        {
+            var oldDaemonPath = Path.Combine(@"C:\Tools\ShortcutHook", "ShortcutHookDaemon.exe");
+            if (File.Exists(oldDaemonPath))
+            {
+                File.Delete(oldDaemonPath);
+            }
+        }
+        catch { }
 
         SaveAppRoot(appRoot);
 
