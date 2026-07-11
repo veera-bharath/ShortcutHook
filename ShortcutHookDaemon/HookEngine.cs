@@ -218,6 +218,27 @@ public class ShortcutHook {
     [DllImport("user32.dll")] static extern bool   TranslateMessage(ref MSG msg);
     [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG msg);
 
+    [DllImport("user32.dll")]
+    static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventProc lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    [DllImport("user32.dll")]
+    static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetParent(IntPtr hWnd);
+
+    delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+    delegate void WinEventProc(IntPtr hWinEventHook, uint eventId, IntPtr hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime);
+
+    private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    private const uint EVENT_OBJECT_CREATE     = 0x8000;
+    private const uint EVENT_OBJECT_DESTROY    = 0x8001;
+    private const int  OBJID_WINDOW            = 0;
+    private const uint WINEVENT_OUTOFCONTEXT   = 0;
+
     [StructLayout(LayoutKind.Sequential)]
     public struct KBDLLHOOKSTRUCT {
         public uint vkCode; public uint scanCode; public uint flags;
@@ -289,8 +310,11 @@ public class ShortcutHook {
     public static Dictionary<string, List<Binding>> BlurBindings   = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
     static HashSet<string> KnownRunningApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     static string LastFocusedApp = "";
-    static System.Threading.Timer ProcessPollTimer;
-    const int PROCESS_POLL_MS = 1500;
+    static readonly Dictionary<IntPtr, string> ActiveWindows = new Dictionary<IntPtr, string>();
+
+    static IntPtr hFocusEventHook;
+    static IntPtr hCreateDestroyEventHook;
+    static WinEventProc winEventProcDelegate;
 
     // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
     public static List<Binding> BLeftRight        = new List<Binding>();
@@ -402,44 +426,102 @@ public class ShortcutHook {
         }
     }
 
-    static HashSet<string> GetRunningAppNames() {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    static string GetProcessNameFromWindow(IntPtr hwnd) {
         try {
-            foreach (Process p in Process.GetProcesses()) {
-                try { if (!string.IsNullOrEmpty(p.ProcessName)) set.Add(p.ProcessName + ".exe"); }
-                catch { } finally { p.Dispose(); }
-            }
-        } catch { }
-        return set;
+            if (hwnd == IntPtr.Zero) return "";
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            if (pid == 0) return "";
+            return GetProcessNameFromPid(pid);
+        } catch { return ""; }
     }
 
-    static void PollProcesses(object state) {
+    static string GetProcessNameFromPid(uint pid) {
         try {
-            var current = GetRunningAppNames();
-            foreach (string name in current) {
-                if (KnownRunningApps.Contains(name)) continue;
-                List<Binding> list;
-                if (LaunchBindings.TryGetValue(name, out list))
-                    foreach (Binding b in list) ExecuteBinding(b);
-            }
-            foreach (string name in KnownRunningApps) {
-                if (current.Contains(name)) continue;
-                List<Binding> list;
-                if (ExitBindings.TryGetValue(name, out list))
-                    foreach (Binding b in list) ExecuteBinding(b);
-            }
-            KnownRunningApps = current;
+            const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+            IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (hProc == IntPtr.Zero) return "";
+            try {
+                var sb = new System.Text.StringBuilder(1024);
+                uint size = 1024;
+                if (!QueryFullProcessImageName(hProc, 0, sb, ref size)) return "";
+                return System.IO.Path.GetFileName(sb.ToString(0, (int)size));
+            } finally { CloseHandle(hProc); }
+        } catch { return ""; }
+    }
 
-            if (FocusBindings.Count > 0 || BlurBindings.Count > 0) {
+    static bool PopulateExistingWindows(IntPtr hwnd, IntPtr lParam) {
+        if (GetParent(hwnd) == IntPtr.Zero) {
+            string name = GetProcessNameFromWindow(hwnd);
+            if (!string.IsNullOrEmpty(name)) {
+                ActiveWindows[hwnd] = name;
+                KnownRunningApps.Add(name);
+            }
+        }
+        return true;
+    }
+
+    static void WinEventCallback(IntPtr hWinEventHook, uint eventId, IntPtr hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime) {
+        try {
+            if (eventId == EVENT_SYSTEM_FOREGROUND) {
                 string fgApp = GetForegroundProcessName();
                 if (!string.IsNullOrEmpty(fgApp) && !string.Equals(fgApp, LastFocusedApp, StringComparison.OrdinalIgnoreCase)) {
                     List<Binding> blist;
-                    if (!string.IsNullOrEmpty(LastFocusedApp) && BlurBindings.TryGetValue(LastFocusedApp, out blist))
+                    if (!string.IsNullOrEmpty(LastFocusedApp) && BlurBindings.TryGetValue(LastFocusedApp, out blist)) {
                         foreach (Binding b in blist) ExecuteBinding(b);
+                    }
                     List<Binding> flist;
-                    if (FocusBindings.TryGetValue(fgApp, out flist))
+                    if (FocusBindings.TryGetValue(fgApp, out flist)) {
                         foreach (Binding b in flist) ExecuteBinding(b);
+                    }
                     LastFocusedApp = fgApp;
+                }
+                return;
+            }
+
+            if (idObject != OBJID_WINDOW) return;
+
+            if (eventId == EVENT_OBJECT_CREATE) {
+                if (GetParent(hwnd) == IntPtr.Zero) {
+                    string name = GetProcessNameFromWindow(hwnd);
+                    if (!string.IsNullOrEmpty(name)) {
+                        ActiveWindows[hwnd] = name;
+                        if (!KnownRunningApps.Contains(name)) {
+                            KnownRunningApps.Add(name);
+                            List<Binding> list;
+                            if (LaunchBindings.TryGetValue(name, out list)) {
+                                foreach (Binding b in list) ExecuteBinding(b);
+                            }
+                        }
+                    }
+                }
+            }
+            else if (eventId == EVENT_OBJECT_DESTROY) {
+                if (ActiveWindows.TryGetValue(hwnd, out string name)) {
+                    ActiveWindows.Remove(hwnd);
+                    bool anyLeft = false;
+                    foreach (var pair in ActiveWindows) {
+                        if (string.Equals(pair.Value, name, StringComparison.OrdinalIgnoreCase)) {
+                            anyLeft = true;
+                            break;
+                        }
+                    }
+                    if (!anyLeft) {
+                        string procNameOnly = name;
+                        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) {
+                            procNameOnly = name.Substring(0, name.Length - 4);
+                        }
+                        var processes = Process.GetProcessesByName(procNameOnly);
+                        if (processes.Length == 0) {
+                            KnownRunningApps.Remove(name);
+                            List<Binding> list;
+                            if (ExitBindings.TryGetValue(name, out list)) {
+                                foreach (Binding b in list) ExecuteBinding(b);
+                            }
+                        } else {
+                            foreach (var p in processes) p.Dispose();
+                        }
+                    }
                 }
             }
         } catch { }
@@ -1453,16 +1535,27 @@ public class ShortcutHook {
         }
 
         if (LaunchBindings.Count > 0 || ExitBindings.Count > 0 || FocusBindings.Count > 0 || BlurBindings.Count > 0) {
-            KnownRunningApps = GetRunningAppNames();
+            ActiveWindows.Clear();
+            KnownRunningApps.Clear();
+            EnumWindows(PopulateExistingWindows, IntPtr.Zero);
             LastFocusedApp = GetForegroundProcessName();
-            ProcessPollTimer = new System.Threading.Timer(PollProcesses, null, PROCESS_POLL_MS, PROCESS_POLL_MS);
+
+            winEventProcDelegate = new WinEventProc(WinEventCallback);
+            hFocusEventHook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                IntPtr.Zero, winEventProcDelegate, 0, 0, WINEVENT_OUTOFCONTEXT);
+            hCreateDestroyEventHook = SetWinEventHook(
+                EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+                IntPtr.Zero, winEventProcDelegate, 0, 0, WINEVENT_OUTOFCONTEXT);
         }
 
         MSG msg; int r;
         while ((r = GetMessage(out msg, IntPtr.Zero, 0, 0)) > 0) {
             TranslateMessage(ref msg); DispatchMessage(ref msg);
         }
-        if (ProcessPollTimer != null) { ProcessPollTimer.Dispose(); ProcessPollTimer = null; }
+
+        if (hFocusEventHook != IntPtr.Zero) { UnhookWinEvent(hFocusEventHook); hFocusEventHook = IntPtr.Zero; }
+        if (hCreateDestroyEventHook != IntPtr.Zero) { UnhookWinEvent(hCreateDestroyEventHook); hCreateDestroyEventHook = IntPtr.Zero; }
         UnhookWindowsHookEx(kbdHookId); UnhookWindowsHookEx(mouseHookId);
     }
 }
