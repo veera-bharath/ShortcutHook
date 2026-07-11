@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using ShortcutHookCore.Models;
 using ShortcutHookCore.Parsing;
+using ShortcutHookCore.Security;
 
 namespace ShortcutHookDaemon;
 
@@ -235,6 +236,10 @@ public static class ConfigLoader
                     else if (outStr.StartsWith("profile:", StringComparison.Ordinal))
                     {
                         step.SwitchToProfile = outStr.Substring(8).Trim();
+                    }
+                    else if (outStr.StartsWith("type-enc:", StringComparison.Ordinal))
+                    {
+                        step.TypeText = DpapiHelper.Decrypt(outStr.Substring(9));
                     }
                     else if (outStr.StartsWith("type:", StringComparison.Ordinal))
                     {
