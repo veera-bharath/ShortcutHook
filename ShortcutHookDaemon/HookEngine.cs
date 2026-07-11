@@ -820,13 +820,27 @@ public class ShortcutHook {
             // Instead mark that we need to release Win at physical Win-up time, where
             // we can sandwich it between Ctrl events to break the clean-tap sequence.
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
-            string path = step.OpenPath;
+            string path = step.OpenPath.Trim();
+            if (!path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) {
+                try {
+                    string fullPath = Path.GetFullPath(path);
+                    if (!IsPathSafe(fullPath)) return;
+                } catch { return; }
+            }
             try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
         } else if (step.CmdLine != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
             string cmd = step.CmdLine;
+            try {
+                string exePath = ResolveCommandPath(cmd);
+                if (!string.IsNullOrEmpty(exePath) && Path.IsPathRooted(exePath)) {
+                    if (!IsPathSafe(exePath)) return;
+                }
+            } catch { return; }
             bool show = step.CmdShow;
             try {
                 if (show) {
@@ -847,6 +861,61 @@ public class ShortcutHook {
         } else {
             FireOutput(step.Output);
         }
+    }
+
+    static bool IsPathSafe(string path) {
+        try {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            string fullPath = Path.GetFullPath(path);
+            string winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            string progFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string progFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+            if (fullPath.StartsWith(winDir, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(progFiles, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(progFilesX86, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(localAppData, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(appData, StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+        } catch { }
+        return false;
+    }
+
+    static string ResolveCommandPath(string cmd) {
+        if (string.IsNullOrWhiteSpace(cmd)) return "";
+        string exe = "";
+        cmd = cmd.Trim();
+        if (cmd.StartsWith("\"")) {
+            int end = cmd.IndexOf("\"", 1);
+            if (end > 0) exe = cmd.Substring(1, end - 1);
+        } else {
+            int space = cmd.IndexOf(' ');
+            exe = space > 0 ? cmd.Substring(0, space) : cmd;
+        }
+
+        if (Path.IsPathRooted(exe)) {
+            return exe;
+        }
+
+        if (File.Exists(exe)) return Path.GetFullPath(exe);
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (pathEnv != null) {
+            foreach (var p in pathEnv.Split(Path.PathSeparator)) {
+                try {
+                    var full = Path.Combine(p, exe);
+                    if (File.Exists(full)) return Path.GetFullPath(full);
+                    foreach (var ext in new[] { ".exe", ".cmd", ".bat" }) {
+                        var fullExt = full + ext;
+                        if (File.Exists(fullExt)) return Path.GetFullPath(fullExt);
+                    }
+                } catch { }
+            }
+        }
+        return exe;
     }
 
     static bool HasTogglePause(Binding b) {

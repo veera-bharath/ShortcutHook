@@ -1690,6 +1690,16 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (HasExecutableScripts(imported))
+        {
+            var res = MessageBox.Show(this,
+                "Warning: The imported profile contains bindings that execute command scripts or launch program paths (cmd:, run:, open:).\n\nOnly import profiles from trusted sources.\n\nDo you want to import this profile anyway?",
+                "Security Warning",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (res != MessageBoxResult.Yes) return;
+        }
+
         var config = ConfigService.ReadConfig(InstallService.ScriptRoot);
         if (config.profiles.Count >= ProfileHelpers.MaxProfiles)
         {
@@ -1708,6 +1718,27 @@ public partial class MainWindow : Window
         }
 
         FinishImport(imported, skipped);
+    }
+
+    bool HasExecutableScripts(ProfileEntry profile)
+    {
+        if (profile.bindings == null) return false;
+        foreach (var b in profile.bindings)
+        {
+            if (b.outputs != null)
+            {
+                foreach (var outp in b.outputs)
+                {
+                    if (outp.StartsWith("cmd:", StringComparison.OrdinalIgnoreCase) ||
+                        outp.StartsWith("run:", StringComparison.OrdinalIgnoreCase) ||
+                        outp.StartsWith("open:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     void ShowImportRenameForm(string conflictName)
