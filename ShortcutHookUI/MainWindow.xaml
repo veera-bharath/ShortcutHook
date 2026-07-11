@@ -885,7 +885,7 @@
                                     <TextBlock Grid.Row="0" Grid.Column="1" x:Name="SetupAppFolderText" Text=""
                                                Foreground="#5B9CF6" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/>
                                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Script:" Foreground="#777777" FontSize="12" VerticalAlignment="Center" Margin="0,5,0,0"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="SetupScriptFolderText" Text="C:\Tools\ShortcutHook"
+                                    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="SetupScriptFolderText" Text="%LOCALAPPDATA%\ShortcutHook"
                                                Foreground="#555555" FontSize="12" VerticalAlignment="Center" Margin="0,5,0,0"/>
                                 </Grid>
                                 <TextBlock x:Name="SetupInstallStatusText" Text="Not installed yet."
@@ -973,7 +973,7 @@
                         <TextBlock Text="App Update Available" Foreground="#EFEFEF" FontSize="20" FontWeight="Bold"/>
                         <TextBlock x:Name="UpdateOverlayMessageText" Text="You're running a newer version of ShortcutHook. This will update the app and daemon."
                                    Foreground="#CCCCCC" FontSize="13" Margin="0,12,0,0" TextWrapping="Wrap"/>
-                        <TextBlock x:Name="UpdateOverlayPathText" Text="Target location: C:\Tools\ShortcutHook"
+                        <TextBlock x:Name="UpdateOverlayPathText" Text="Target location: %LOCALAPPDATA%\ShortcutHook"
                                    Foreground="#777777" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"/>
                         
                         <StackPanel Orientation="Horizontal" Margin="0,24,0,0" HorizontalAlignment="Right">
