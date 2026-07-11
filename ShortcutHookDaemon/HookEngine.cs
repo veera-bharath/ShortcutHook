@@ -84,10 +84,97 @@ public class ShortcutHook {
     static extern IntPtr GetModuleHandle(string name);
     [DllImport("user32.dll")] static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")]
-    static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-    [DllImport("user32.dll")]
-    static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    private const uint INPUT_MOUSE    = 0;
+    private const uint INPUT_KEYBOARD = 1;
+
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUT_UNION
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT
+    {
+        public uint type;
+        public INPUT_UNION union;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
+    }
+
+    static void SendKey(byte vk, bool up)
+    {
+        uint flags = up ? KEYEVENTF_KEYUP : 0;
+        var input = new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            union = new INPUT_UNION
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = vk,
+                    wScan = 0,
+                    dwFlags = flags,
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero
+                }
+            }
+        };
+        SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    static void SendMouse(uint flags, int dx, int dy, int data)
+    {
+        var input = new INPUT
+        {
+            type = INPUT_MOUSE,
+            union = new INPUT_UNION
+            {
+                mi = new MOUSEINPUT
+                {
+                    dx = dx,
+                    dy = dy,
+                    mouseData = (uint)data,
+                    dwFlags = flags,
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero
+                }
+            }
+        };
+        SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT)));
+    }
     [DllImport("user32.dll")]
     static extern uint GetDoubleClickTime();
     [DllImport("user32.dll")]
@@ -605,10 +692,10 @@ public class ShortcutHook {
         // Fallback selection detection (text, files, etc. in other apps)
         var saved = BackupClipboard();
         ClearClipboard();
-        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-        keybd_event(0x43, 0, 0, UIntPtr.Zero);
-        keybd_event(0x43, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        SendKey(VK_CONTROL, false);
+        SendKey(0x43, false);
+        SendKey(0x43, true);
+        SendKey(VK_CONTROL, true);
         Thread.Sleep(CLIP_WAIT_MS);
 
         bool hasSel = ClipboardHasData();
@@ -654,7 +741,7 @@ public class ShortcutHook {
         if (step.IsHScroll) {
             int d = step.HScrollDelta;
             new Thread(() => {
-                try { mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)d, UIntPtr.Zero); }
+                try { SendMouse(MOUSEEVENTF_HWHEEL, 0, 0, d); }
                 catch { }
             }) { IsBackground = true }.Start();
             return;
@@ -790,33 +877,33 @@ public class ShortcutHook {
         // Release held modifiers that the chord does NOT want (prevent interference).
         // For modifiers that the chord DOES include, skip the pre-release — the chord
         // re-fires them itself and the app must see the modifier held continuously.
-        if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uShift && !cShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uCtrl  && !cCtrl)  SendKey(VK_CONTROL, true);
+        if (uShift && !cShift) SendKey(VK_SHIFT,   true);
+        if (uAlt   && !cAlt)   SendKey(VK_MENU,    true);
+        if (uWinL)  SendKey(VK_LWIN,    true);
+        if (uWinR)  SendKey(VK_RWIN,    true);
 
         // Fire the full chord — including any modifier keys it contains.
         // If a modifier was already physically held, injecting its key-down again fires
         // it as a synthetic repeat (WM_KEYDOWN with repeat count), which the target app
         // processes as "modifier still held" — guaranteeing it sees the modifier when
         // the action key arrives, regardless of any physical-key timing.
-        foreach (byte k in chord)                    keybd_event(k, 0, 0, UIntPtr.Zero);
-        for (int i = chord.Length - 1; i >= 0; i--) keybd_event(chord[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        foreach (byte k in chord)                    SendKey(k, false);
+        for (int i = chord.Length - 1; i >= 0; i--) SendKey(chord[i], true);
 
         // Re-press non-Win modifiers so the user's held keys remain active.
         // Group 1: modifiers that were released in the pre-release step above.
-        if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
-        if (uShift && !cShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
-        if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        if (uAlt   && !cAlt)   SendKey(VK_MENU,    false);
+        if (uShift && !cShift) SendKey(VK_SHIFT,   false);
+        if (uCtrl  && !cCtrl)  SendKey(VK_CONTROL, false);
         // Group 2: chord modifiers that were physically held — the chord's own key-up
         // released them, so re-press to restore the user's hold state.
-        if (uAlt   && cAlt)    keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
-        if (uShift && cShift)  keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
-        if (uCtrl  && cCtrl)   keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        if (uAlt   && cAlt)    SendKey(VK_MENU,    false);
+        if (uShift && cShift)  SendKey(VK_SHIFT,   false);
+        if (uCtrl  && cCtrl)   SendKey(VK_CONTROL, false);
 
         if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
-        else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
+        else { if (uWinR) SendKey(VK_RWIN, false); if (uWinL) SendKey(VK_LWIN, false); }
     }
 
     // Types a literal string in one shot via the clipboard: stash the current
@@ -832,19 +919,19 @@ public class ShortcutHook {
         bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
 
         // Release held modifiers so they don't interfere with our own Ctrl+V.
-        if (uCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uCtrl)  SendKey(VK_CONTROL, true);
+        if (uShift) SendKey(VK_SHIFT,   true);
+        if (uAlt)   SendKey(VK_MENU,    true);
+        if (uWinL)  SendKey(VK_LWIN,    true);
+        if (uWinR)  SendKey(VK_RWIN,    true);
 
         var saved = BackupClipboard();
         SetClipboardText(text);
 
-        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56 /* V */, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        SendKey(VK_CONTROL, false);
+        SendKey(0x56 /* V */, false);
+        SendKey(0x56, true);
+        SendKey(VK_CONTROL, true);
 
         // Give the target app time to read the clipboard before we restore it.
         Thread.Sleep(CLIP_WAIT_MS);
@@ -907,14 +994,14 @@ public class ShortcutHook {
 
     static void Reinject(bool withUp) {
         Interlocked.Increment(ref reinjDown);
-        mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
-        if (withUp) { Interlocked.Increment(ref reinjUp); mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero); }
+        SendMouse(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0);
+        if (withUp) { Interlocked.Increment(ref reinjUp); SendMouse(MOUSEEVENTF_RIGHTUP, 0, 0, 0); }
     }
 
     static void ReinjectWheel(bool withUp) {
         Interlocked.Increment(ref reinjWheelDown);
-        mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, UIntPtr.Zero);
-        if (withUp) { Interlocked.Increment(ref reinjWheelUp); mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, UIntPtr.Zero); }
+        SendMouse(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0);
+        if (withUp) { Interlocked.Increment(ref reinjWheelUp); SendMouse(MOUSEEVENTF_MIDDLEUP, 0, 0, 0); }
     }
 
     static IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam) {
@@ -1283,9 +1370,9 @@ public class ShortcutHook {
                                 releaseWinOnSuppress = false;
                                 // Ctrl before Win-up breaks Explorer's clean-tap detection;
                                 // Ctrl after cleans up. Injected Win-up restores key state.
-                                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-                                keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                                SendKey(VK_CONTROL, false);
+                                SendKey(vk, true);
+                                SendKey(VK_CONTROL, true);
                             }
                         }
                     }
@@ -1331,8 +1418,8 @@ public class ShortcutHook {
                         // Prefix-only swallow with no binding fired: replay the key so
                         // apps receive it (fixes Ctrl+S being lost when Ctrl+S+L is bound).
                         if (wasPrefix && !hadDeferred) {
-                            keybd_event(vk, 0, 0, UIntPtr.Zero);
-                            keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                            SendKey(vk, false);
+                            SendKey(vk, true);
                         }
                         return new IntPtr(1);
                     }
