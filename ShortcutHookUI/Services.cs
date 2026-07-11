@@ -13,6 +13,7 @@ using Microsoft.Win32;
 
 using ShortcutHookCore.Models;
 using ShortcutHookCore.Parsing;
+using ShortcutHookCore.Security;
 
 namespace ShortcutHookUI;
 
@@ -50,6 +51,48 @@ internal static class ConfigService
         }
     }
 
+    static void DecryptConfig(ConfigRoot doc)
+    {
+        if (doc.bindings != null)
+        {
+            foreach (var b in doc.bindings)
+            {
+                if (b.outputs != null)
+                {
+                    for (int i = 0; i < b.outputs.Count; i++)
+                    {
+                        if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                        {
+                            b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                        }
+                    }
+                }
+            }
+        }
+        if (doc.profiles != null)
+        {
+            foreach (var profile in doc.profiles)
+            {
+                if (profile.bindings != null)
+                {
+                    foreach (var b in profile.bindings)
+                    {
+                        if (b.outputs != null)
+                        {
+                            for (int i = 0; i < b.outputs.Count; i++)
+                            {
+                                if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                                {
+                                    b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     public static ConfigRoot ReadConfig(string root)
     {
         var p = ConfigPath(root);
@@ -60,7 +103,10 @@ internal static class ConfigService
                 var txt = File.ReadAllText(p);
                 var doc = JsonSerializer.Deserialize<ConfigRoot>(txt);
                 if (doc is not null)
+                {
+                    DecryptConfig(doc);
                     return Migrate(doc, root);
+                }
             }
             catch { }
         }
@@ -108,7 +154,61 @@ internal static class ConfigService
     {
         config.bindings = null;
         Directory.CreateDirectory(root);
-        File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(config, JsonOpts));
+
+        // Encrypt type outputs in memory before serialization
+        if (config.profiles != null)
+        {
+            foreach (var profile in config.profiles)
+            {
+                if (profile.bindings != null)
+                {
+                    foreach (var b in profile.bindings)
+                    {
+                        if (b.outputs != null)
+                        {
+                            for (int i = 0; i < b.outputs.Count; i++)
+                            {
+                                if (b.outputs[i].StartsWith("type:", StringComparison.Ordinal))
+                                {
+                                    b.outputs[i] = "type-enc:" + DpapiHelper.Encrypt(b.outputs[i].Substring(5));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        try
+        {
+            File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(config, JsonOpts));
+        }
+        finally
+        {
+            // Decrypt back to plaintext in memory
+            if (config.profiles != null)
+            {
+                foreach (var profile in config.profiles)
+                {
+                    if (profile.bindings != null)
+                    {
+                        foreach (var b in profile.bindings)
+                        {
+                            if (b.outputs != null)
+                            {
+                                for (int i = 0; i < b.outputs.Count; i++)
+                                {
+                                    if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                                    {
+                                        b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Replaces the active profile's bindings, preserving other profiles and settings.
@@ -188,8 +288,47 @@ internal static class ConfigService
     // Serializes a single profile as a standalone JSON document: { "name": ..., "bindings": [...] }.
     public static void ExportProfile(string path, ProfileEntry profile)
     {
-        var export = new ProfileEntry { name = profile.name, bindings = profile.bindings };
-        File.WriteAllText(path, JsonSerializer.Serialize(export, JsonOpts));
+        if (profile.bindings != null)
+        {
+            foreach (var b in profile.bindings)
+            {
+                if (b.outputs != null)
+                {
+                    for (int i = 0; i < b.outputs.Count; i++)
+                    {
+                        if (b.outputs[i].StartsWith("type:", StringComparison.Ordinal))
+                        {
+                            b.outputs[i] = "type-enc:" + DpapiHelper.Encrypt(b.outputs[i].Substring(5));
+                        }
+                    }
+                }
+            }
+        }
+
+        try
+        {
+            var export = new ProfileEntry { name = profile.name, bindings = profile.bindings };
+            File.WriteAllText(path, JsonSerializer.Serialize(export, JsonOpts));
+        }
+        finally
+        {
+            if (profile.bindings != null)
+            {
+                foreach (var b in profile.bindings)
+                {
+                    if (b.outputs != null)
+                    {
+                        for (int i = 0; i < b.outputs.Count; i++)
+                        {
+                            if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                            {
+                                b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Parses a standalone profile export file. Throws FormatException/JsonException if invalid.
@@ -205,6 +344,21 @@ internal static class ConfigService
 
         var name     = nameEl.GetString()!;
         var bindings = JsonSerializer.Deserialize<List<BindingEntry>>(bindingsEl.GetRawText()) ?? new();
+
+        foreach (var b in bindings)
+        {
+            if (b.outputs != null)
+            {
+                for (int i = 0; i < b.outputs.Count; i++)
+                {
+                    if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                    {
+                        b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                    }
+                }
+            }
+        }
+
         return new ProfileEntry { name = name, bindings = bindings };
     }
 
