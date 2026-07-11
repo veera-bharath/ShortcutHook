@@ -3,7 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using ShortcutHookCore;
+using ShortcutHookCore.Models;
+using ShortcutHookCore.Parsing;
 
 namespace ShortcutHookDaemon;
 
@@ -31,7 +32,7 @@ public static class ConfigLoader
             {
                 result.Add(modByte);
             }
-            else if (TriggerHelpers.VkMap.TryGetValue(tok, out var vkByte))
+            else if (KeyResolver.VkMap.TryGetValue(tok, out var vkByte))
             {
                 result.Add(vkByte);
             }
@@ -143,13 +144,13 @@ public static class ConfigLoader
                 if (trigger.StartsWith("mouse:", StringComparison.Ordinal))
                 {
                     var g = trigger.Substring(6).Trim().ToLowerInvariant();
-                    if (!TriggerHelpers.ValidGestures.Contains(g)) continue;
+                    if (!TriggerParser.ValidGestures.Contains(g)) continue;
                     nb.Kind = "mouse";
                     nb.MouseGesture = g;
                 }
                 else if (trigger.StartsWith("key:", StringComparison.Ordinal))
                 {
-                    var parsed = TriggerHelpers.ParseKeyTrigger(trigger.Substring(4));
+                    var parsed = TriggerParser.ParseKeyTrigger(trigger.Substring(4));
                     nb.Kind      = "key";
                     nb.Mods      = parsed.Mods;
                     nb.Keys      = parsed.Keys.Select(k => (byte)k).ToArray();

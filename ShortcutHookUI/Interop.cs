@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-using ShortcutHookCore;
+using ShortcutHookCore.Parsing;
 
 namespace ShortcutHookUI;
 
@@ -62,10 +62,10 @@ internal static class HotkeyProbe
     static uint ToFsMods(int mods)
     {
         uint fs = 0;
-        if ((mods & TriggerHelpers.MOD_CTRL)  != 0) fs |= FS_CONTROL;
-        if ((mods & TriggerHelpers.MOD_SHIFT) != 0) fs |= FS_SHIFT;
-        if ((mods & TriggerHelpers.MOD_ALT)   != 0) fs |= FS_ALT;
-        if ((mods & TriggerHelpers.MOD_WIN)   != 0) fs |= FS_WIN;
+        if ((mods & TriggerParser.MOD_CTRL)  != 0) fs |= FS_CONTROL;
+        if ((mods & TriggerParser.MOD_SHIFT) != 0) fs |= FS_SHIFT;
+        if ((mods & TriggerParser.MOD_ALT)   != 0) fs |= FS_ALT;
+        if ((mods & TriggerParser.MOD_WIN)   != 0) fs |= FS_WIN;
         return fs;
     }
 

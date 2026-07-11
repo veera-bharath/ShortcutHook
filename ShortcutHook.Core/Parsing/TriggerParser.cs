@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using ShortcutHookCore.Enums;
+using ShortcutHookCore.Models;
 
-namespace ShortcutHookCore;
+namespace ShortcutHookCore.Parsing;
 
-public static class TriggerHelpers
+public static class TriggerParser
 {
     public const int MOD_CTRL  = (int)ModifierFlags.Control;
     public const int MOD_SHIFT = (int)ModifierFlags.Shift;
@@ -21,58 +23,6 @@ public static class TriggerHelpers
         "single-wheel", "double-wheel", "triple-wheel"
     };
 
-    public static readonly Dictionary<string, byte> VkMap = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ENTER"]       = (byte)VirtualKeys.Enter,
-        ["RETURN"]      = (byte)VirtualKeys.Return,
-        ["ESC"]         = (byte)VirtualKeys.Esc,
-        ["ESCAPE"]      = (byte)VirtualKeys.Escape,
-        ["TAB"]         = (byte)VirtualKeys.Tab,
-        ["SPACE"]       = (byte)VirtualKeys.Space,
-        ["BACK"]        = (byte)VirtualKeys.Back,
-        ["BACKSPACE"]   = (byte)VirtualKeys.Back,
-        ["DELETE"]      = (byte)VirtualKeys.Delete,
-        ["DEL"]          = (byte)VirtualKeys.Del,
-        ["INSERT"]      = (byte)VirtualKeys.Insert,
-        ["INS"]         = (byte)VirtualKeys.Ins,
-        ["HOME"]        = (byte)VirtualKeys.Home,
-        ["END"]         = (byte)VirtualKeys.End,
-        ["PGUP"]        = (byte)VirtualKeys.PgUp,
-        ["PAGEUP"]      = (byte)VirtualKeys.PageUp,
-        ["PGDN"]        = (byte)VirtualKeys.PgDn,
-        ["PAGEDOWN"]    = (byte)VirtualKeys.PageDown,
-        ["LEFT"]        = (byte)VirtualKeys.Left,
-        ["UP"]          = (byte)VirtualKeys.Up,
-        ["RIGHT"]       = (byte)VirtualKeys.Right,
-        ["DOWN"]        = (byte)VirtualKeys.Down,
-        ["PRTSCR"]      = (byte)VirtualKeys.PrtScr,
-        ["PRINTSCREEN"] = (byte)VirtualKeys.PrintScreen,
-        ["F1"]          = (byte)VirtualKeys.F1,
-        ["F2"]          = (byte)VirtualKeys.F2,
-        ["F3"]          = (byte)VirtualKeys.F3,
-        ["F4"]          = (byte)VirtualKeys.F4,
-        ["F5"]          = (byte)VirtualKeys.F5,
-        ["F6"]          = (byte)VirtualKeys.F6,
-        ["F7"]          = (byte)VirtualKeys.F7,
-        ["F8"]          = (byte)VirtualKeys.F8,
-        ["F9"]          = (byte)VirtualKeys.F9,
-        ["F10"]         = (byte)VirtualKeys.F10,
-        ["F11"]         = (byte)VirtualKeys.F11,
-        ["F12"]         = (byte)VirtualKeys.F12,
-    };
-
-    private static readonly HashSet<string> Mods =
-        new(StringComparer.OrdinalIgnoreCase) { "CTRL", "CONTROL", "SHIFT", "ALT", "MENU", "WIN" };
-
-    public static int ResolveKeyCode(string k)
-    {
-        var u = k.Trim().ToUpperInvariant();
-        if (VkMap.TryGetValue(u, out var v)) return v;
-        if (u.Length == 1 && u[0] >= 'A' && u[0] <= 'Z') return u[0];
-        if (u.Length == 1 && u[0] >= '0' && u[0] <= '9') return u[0];
-        throw new ArgumentException($"Unknown key '{k}'");
-    }
-
     public static ParsedKey ParseKeyTrigger(string combo)
     {
         var p = new ParsedKey();
@@ -85,7 +35,7 @@ public static class TriggerHelpers
             else if (tok is "SHIFT")        p.Mods |= MOD_SHIFT;
             else if (tok is "ALT" or "MENU") p.Mods |= MOD_ALT;
             else if (tok is "WIN")          p.Mods |= MOD_WIN;
-            else keys.Add(ResolveKeyCode(tok));
+            else keys.Add(KeyResolver.ResolveKeyCode(tok));
         }
         if (keys.Count == 0) throw new ArgumentException($"No non-modifier key in '{combo}'");
         keys.Sort();
@@ -129,20 +79,6 @@ public static class TriggerHelpers
             return prefix + string.Join(",", apps);
         }
         throw new ArgumentException("Trigger must start with 'mouse:', 'key:', 'launch:', 'exit:', 'focus:', or 'blur:'");
-    }
-
-    public static void ValidateShortcutOutput(string combo)
-    {
-        var tokens = combo.Trim().Split('+').Select(t => t.Trim().ToUpperInvariant()).ToArray();
-        if (tokens.All(string.IsNullOrEmpty)) throw new ArgumentException("Output cannot be empty");
-        foreach (var tok in tokens)
-        {
-            if (string.IsNullOrEmpty(tok)) throw new ArgumentException("Empty token");
-            if (Mods.Contains(tok)) continue;
-            if (VkMap.ContainsKey(tok)) continue;
-            if (tok.Length == 1 && ((tok[0] >= 'A' && tok[0] <= 'Z') || (tok[0] >= '0' && tok[0] <= '9'))) continue;
-            throw new ArgumentException($"Unknown key '{tok}'");
-        }
     }
 
     public static bool IsKeyPrefixOf(ParsedKey a, ParsedKey b)

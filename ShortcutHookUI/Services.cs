@@ -11,7 +11,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 
-using ShortcutHookCore;
+using ShortcutHookCore.Models;
+using ShortcutHookCore.Parsing;
 
 namespace ShortcutHookUI;
 
@@ -218,7 +219,7 @@ internal static class ConfigService
         skipped = 0;
         foreach (var b in bindings)
         {
-            try { TriggerHelpers.CanonicalizeTrigger(b.trigger); }
+            try { TriggerParser.CanonicalizeTrigger(b.trigger); }
             catch { skipped++; continue; }
             result.Add(b);
         }

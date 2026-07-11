@@ -1,16 +1,4 @@
-using System;
-
-namespace ShortcutHookCore;
-
-[Flags]
-public enum ModifierFlags : byte
-{
-    None = 0,
-    Control = 1,
-    Shift = 2,
-    Alt = 4,
-    Win = 8
-}
+namespace ShortcutHookCore.Enums;
 
 public enum VirtualKeys : byte
 {
