@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using ShortcutHookCore.Enums;
+using System.Windows.Automation;
 
 namespace ShortcutHookDaemon;
 
@@ -763,41 +764,25 @@ public class ShortcutHook {
         return -1;
     }
 
-    // Injects Ctrl+C, waits CLIP_WAIT_MS, then checks whether clipboard gained data.
-    // If no selection found, restores the clipboard to its prior state.
     static bool DetectTextSelection() {
         int explorerSelCount = GetExplorerSelectionCount();
         if (explorerSelCount >= 0) {
             return explorerSelCount > 0;
         }
 
-        // Fallback selection detection (text, files, etc. in other apps)
-        var saved = BackupClipboard();
-        ClearClipboard();
-        SendKey(VK_CONTROL, false);
-        SendKey(0x43, false);
-        SendKey(0x43, true);
-        SendKey(VK_CONTROL, true);
-        Thread.Sleep(CLIP_WAIT_MS);
-
-        bool hasSel = ClipboardHasData();
-        if (hasSel) {
-            // Check if it's an Explorer default/invisible selection (e.g. $RECYCLE.BIN)
-            byte[] hdropData = GetClipboardFormatData(CF_HDROP);
-            if (hdropData != null) {
-                var files = GetCopiedFiles(hdropData);
-                if (IsExplorerInvisibleSelection(files)) {
-                    hasSel = false;
+        try {
+            AutomationElement focusedElement = AutomationElement.FocusedElement;
+            if (focusedElement != null && focusedElement.TryGetCurrentPattern(TextPattern.Pattern, out object patternObj)) {
+                var textPattern = (TextPattern)patternObj;
+                var selection = textPattern.GetSelection();
+                if (selection != null && selection.Length > 0) {
+                    string selectedText = selection[0].GetText(-1);
+                    return !string.IsNullOrEmpty(selectedText);
                 }
             }
-        }
+        } catch { }
 
-        if (!hasSel) {
-            RestoreClipboard(saved);
-        } else {
-            FreeBackup(saved); // Free GDI copies to prevent leaks when backup is discarded
-        }
-        return hasSel;
+        return false;
     }
     static void ExecuteDoubleRight() {
         if (BDoubleRightSel.Count == 0) { ExecuteBinding(ResolveMouseBinding(BDoubleRight)); return; }
