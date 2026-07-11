@@ -39,15 +39,15 @@
   <Target Name="BuildDaemon" BeforeTargets="PrepareForBuild" Condition="'$(Configuration)' == 'Release'">
     <Message Text="Building ShortcutHookDaemon..." Importance="high" />
     <Exec Command="dotnet publish $(MSBuildThisFileDirectory)..\ShortcutHookDaemon\ShortcutHookDaemon.csproj -c Release -v minimal" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\ShortcutHookDaemon\bin\Release\net8.0-windows\win-x64\publish\ShortcutHookDaemon.exe"
-          DestinationFolder="$(MSBuildThisFileDirectory)Resources\" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\ShortcutHookDaemon\bin\Release\net8.0-windows\win-x64\publish\ShortcutHookDaemon.exe" DestinationFolder="$(MSBuildThisFileDirectory)Resources\" />
   </Target>
 
   <!-- Embed daemon exe (produced by BuildDaemon target above) -->
   <ItemGroup>
-    <EmbeddedResource Include="Resources\ShortcutHookDaemon.exe"
-                      LogicalName="ShortcutHookUI.Runtime.ShortcutHookDaemon.exe"
-                      Condition="Exists('Resources\ShortcutHookDaemon.exe')" />
+    <EmbeddedResource Include="Resources\ShortcutHookDaemon.exe" LogicalName="ShortcutHookUI.Runtime.ShortcutHookDaemon.exe" Condition="Exists('Resources\ShortcutHookDaemon.exe')" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ShortcutHook.Core\ShortcutHook.Core.csproj" />
   </ItemGroup>
 
 </Project>

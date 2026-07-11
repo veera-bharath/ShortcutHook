@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
+using ShortcutHookCore.Enums;
 
 namespace ShortcutHookDaemon;
 
@@ -50,10 +51,10 @@ public class ShortcutHook {
     private const byte VK_LMENU   = 0xA4;
     private const byte VK_RMENU   = 0xA5;
 
-    public const int MOD_CTRL  = 1;
-    public const int MOD_SHIFT = 2;
-    public const int MOD_ALT   = 4;
-    public const int MOD_WIN   = 8;
+    public const int MOD_CTRL  = (int)ModifierFlags.Control;
+    public const int MOD_SHIFT = (int)ModifierFlags.Shift;
+    public const int MOD_ALT   = (int)ModifierFlags.Alt;
+    public const int MOD_WIN   = (int)ModifierFlags.Win;
 
     // Global pause: while true, both hooks pass events through untouched except
     // for keyboard bindings that toggle this flag back off (see KbdCallback).

@@ -17,6 +17,11 @@ using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 
+using ShortcutHookCore.Enums;
+using ShortcutHookCore.Models;
+using ShortcutHookCore.Parsing;
+using ShortcutHookCore.Validation;
+
 namespace ShortcutHookUI;
 
 public enum ActionKind { Shortcut, OpenApp, OpenFile, OpenFolder, Command, TypeText, ShiftHome, ShiftEnd, CtrlShiftLeft, CtrlShiftRight, HScrollLeft, HScrollRight, TogglePause, SwitchProfile }
@@ -178,10 +183,10 @@ public partial class MainWindow : Window
     }
     static readonly Dictionary<Key,int> ModBits = new()
     {
-        [Key.LeftCtrl]  = TriggerHelpers.MOD_CTRL,  [Key.RightCtrl]  = TriggerHelpers.MOD_CTRL,
-        [Key.LeftShift] = TriggerHelpers.MOD_SHIFT, [Key.RightShift] = TriggerHelpers.MOD_SHIFT,
-        [Key.LeftAlt]   = TriggerHelpers.MOD_ALT,   [Key.RightAlt]   = TriggerHelpers.MOD_ALT,
-        [Key.LWin]      = TriggerHelpers.MOD_WIN,   [Key.RWin]       = TriggerHelpers.MOD_WIN,
+        [Key.LeftCtrl]  = TriggerParser.MOD_CTRL,  [Key.RightCtrl]  = TriggerParser.MOD_CTRL,
+        [Key.LeftShift] = TriggerParser.MOD_SHIFT, [Key.RightShift] = TriggerParser.MOD_SHIFT,
+        [Key.LeftAlt]   = TriggerParser.MOD_ALT,   [Key.RightAlt]   = TriggerParser.MOD_ALT,
+        [Key.LWin]      = TriggerParser.MOD_WIN,   [Key.RWin]       = TriggerParser.MOD_WIN,
     };
 
     // Colors / brushes — values mirror the XAML color token resources
@@ -878,7 +883,7 @@ public partial class MainWindow : Window
         catch (Exception ex) { ShowFeedback($"Invalid binding JSON: {ex.Message}", FeedbackKind.Err); return; }
 
         string canon;
-        try { canon = TriggerHelpers.CanonicalizeTrigger(entry.trigger); }
+        try { canon = TriggerParser.CanonicalizeTrigger(entry.trigger); }
         catch (Exception ex) { ShowFeedback($"Invalid trigger: {ex.Message}", FeedbackKind.Err); return; }
 
         // Validate shortcut outputs.
@@ -892,7 +897,7 @@ public partial class MainWindow : Window
                 outp.StartsWith("type:", StringComparison.Ordinal)      ||
                 outp.StartsWith("profile:", StringComparison.Ordinal)   ||
                 outp == "toggle:pause") continue;
-            try { TriggerHelpers.ValidateShortcutOutput(outp); }
+            try { ShortcutValidator.ValidateShortcutOutput(outp); }
             catch (Exception ex) { ShowFeedback($"Invalid output '{outp}': {ex.Message}", FeedbackKind.Err); return; }
         }
 
@@ -902,7 +907,7 @@ public partial class MainWindow : Window
         foreach (var b in existing)
         {
             string bCanon;
-            try { bCanon = TriggerHelpers.CanonicalizeTrigger(b.trigger); }
+            try { bCanon = TriggerParser.CanonicalizeTrigger(b.trigger); }
             catch { continue; }
             if (!string.Equals(bCanon, canon, StringComparison.Ordinal)) continue;
             bool bGlobal = b.apps == null || b.apps.Count == 0;
@@ -922,15 +927,15 @@ public partial class MainWindow : Window
         {
             try
             {
-                var newParsed = TriggerHelpers.ParseKeyTrigger(entry.trigger.Substring(4));
+                var newParsed = TriggerParser.ParseKeyTrigger(entry.trigger.Substring(4));
                 foreach (var b in existing)
                 {
                     if (!b.trigger.StartsWith("key:", StringComparison.Ordinal)) continue;
                     try
                     {
-                        var bParsed = TriggerHelpers.ParseKeyTrigger(b.trigger.Substring(4));
-                        if (TriggerHelpers.IsKeyPrefixOf(newParsed, bParsed) ||
-                            TriggerHelpers.IsKeyPrefixOf(bParsed, newParsed))
+                        var bParsed = TriggerParser.ParseKeyTrigger(b.trigger.Substring(4));
+                        if (TriggerParser.IsKeyPrefixOf(newParsed, bParsed) ||
+                            TriggerParser.IsKeyPrefixOf(bParsed, newParsed))
                         { prefixWarn = true; break; }
                     }
                     catch { }
@@ -2936,7 +2941,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    TriggerHelpers.CanonicalizeTrigger("key:" + combo);
+                    TriggerParser.CanonicalizeTrigger("key:" + combo);
                     card.Trigger = "key:" + combo;
                     RestoreTriggerButton(capBtn, card.Trigger);
                     UpdateCardAccentBorder(card);
@@ -3257,10 +3262,10 @@ public partial class MainWindow : Window
     string ComposeCaptureString()
     {
         var parts = new List<string>();
-        if ((_captureMods & TriggerHelpers.MOD_WIN)   != 0) parts.Add("Win");
-        if ((_captureMods & TriggerHelpers.MOD_CTRL)  != 0) parts.Add("Ctrl");
-        if ((_captureMods & TriggerHelpers.MOD_SHIFT) != 0) parts.Add("Shift");
-        if ((_captureMods & TriggerHelpers.MOD_ALT)   != 0) parts.Add("Alt");
+        if ((_captureMods & TriggerParser.MOD_WIN)   != 0) parts.Add("Win");
+        if ((_captureMods & TriggerParser.MOD_CTRL)  != 0) parts.Add("Ctrl");
+        if ((_captureMods & TriggerParser.MOD_SHIFT) != 0) parts.Add("Shift");
+        if ((_captureMods & TriggerParser.MOD_ALT)   != 0) parts.Add("Alt");
         foreach (var k in _captureNonMods) parts.Add(KeyDisplay[k]);
         return string.Join("+", parts);
     }
@@ -3831,7 +3836,7 @@ public partial class MainWindow : Window
                             outp.StartsWith("type:", StringComparison.Ordinal)    ||
                             outp.StartsWith("profile:", StringComparison.Ordinal) ||
                             outp == "toggle:pause") continue;
-                        try { TriggerHelpers.ValidateShortcutOutput(outp); }
+                        try { ShortcutValidator.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedback($"Mouse '{def.Label}': {ex.Message}", FeedbackKind.Err); return; }
                     }
                 }
@@ -3910,7 +3915,7 @@ public partial class MainWindow : Window
                 if (outputsList.Count == 0) { ShowFeedback($"Keyboard trigger {cardIdx}: no output configured.", FeedbackKind.Err); return; }
 
                 string canon;
-                try { canon = TriggerHelpers.CanonicalizeTrigger(trig); }
+                try { canon = TriggerParser.CanonicalizeTrigger(trig); }
                 catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
 
                 foreach (var outp in outputsList)
@@ -3921,7 +3926,7 @@ public partial class MainWindow : Window
                         outp.StartsWith("type:", StringComparison.Ordinal)    ||
                         outp.StartsWith("profile:", StringComparison.Ordinal) ||
                         outp == "toggle:pause") continue;
-                    try { TriggerHelpers.ValidateShortcutOutput(outp); }
+                    try { ShortcutValidator.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedback($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
                 }
 
@@ -3950,7 +3955,7 @@ public partial class MainWindow : Window
                     }
                 }
 
-                var parsed = TriggerHelpers.ParseKeyTrigger(trig.Substring(4));
+                var parsed = TriggerParser.ParseKeyTrigger(trig.Substring(4));
                 keyParsed.Add((trig, parsed, cardIdx, row.IsGlobal, new List<string>(row.Apps)));
                 entries.Add(new BindingEntry
                 {
@@ -3990,7 +3995,7 @@ public partial class MainWindow : Window
                     outp.StartsWith("type:", StringComparison.Ordinal)    ||
                     outp.StartsWith("profile:", StringComparison.Ordinal) ||
                     outp == "toggle:pause") continue;
-                try { TriggerHelpers.ValidateShortcutOutput(outp); }
+                try { ShortcutValidator.ValidateShortcutOutput(outp); }
                 catch (Exception ex) { ShowFeedback($"App trigger '{appsLabel}': {ex.Message}", FeedbackKind.Err); return; }
             }
 
@@ -4012,7 +4017,7 @@ public partial class MainWindow : Window
         for (int i = 0; i < keyParsed.Count; i++)
             for (int j = 0; j < keyParsed.Count; j++)
             {
-                if (i == j || !TriggerHelpers.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed)) continue;
+                if (i == j || !TriggerParser.IsKeyPrefixOf(keyParsed[i].Parsed, keyParsed[j].Parsed)) continue;
                 // Skip if both scoped but share no app
                 bool iGlobal = keyParsed[i].IsGlobal, jGlobal = keyParsed[j].IsGlobal;
                 if (!iGlobal && !jGlobal && !keyParsed[i].Apps.Intersect(keyParsed[j].Apps, StringComparer.OrdinalIgnoreCase).Any()) continue;
