@@ -14,4 +14,7 @@ public sealed class ConfigRoot
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<BindingEntry>? bindings { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? signature { get; set; }
 }

@@ -19,11 +19,7 @@ namespace ShortcutHookUI;
 
 internal static class ConfigService
 {
-    static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never
-    };
+    static readonly JsonSerializerOptions JsonOpts = DpapiHelper.SignJsonOpts;
 
     public static readonly List<BindingEntry> Defaults = new()
     {
@@ -178,6 +174,8 @@ internal static class ConfigService
                 }
             }
         }
+
+        DpapiHelper.SignConfig(config, root);
 
         try
         {

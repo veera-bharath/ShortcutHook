@@ -81,10 +81,16 @@ public static class ConfigLoader
             return (DefaultBindings(), "Default", false);
 
         ConfigRoot? cfg;
+        bool isAuthentic = false;
         try
         {
             var json = File.ReadAllText(configPath);
             cfg = JsonSerializer.Deserialize<ConfigRoot>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (cfg != null)
+            {
+                string rootDir = Path.GetDirectoryName(configPath) ?? AppContext.BaseDirectory;
+                isAuthentic = DpapiHelper.VerifyConfig(cfg, rootDir);
+            }
         }
         catch
         {
@@ -93,6 +99,8 @@ public static class ConfigLoader
 
         if (cfg == null)
             return (DefaultBindings(), "Default", false);
+
+        ShortcutHook.IsConfigAuthentic = isAuthentic;
 
         // Load ignoredApps
         if (cfg.ignoredApps != null)
