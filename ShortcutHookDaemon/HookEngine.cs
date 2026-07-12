@@ -64,6 +64,7 @@ public class ShortcutHook {
 
     public static volatile string SwitchProfileRequest = null;
     public static string CurrentProfileName = "";
+    public static bool IsConfigAuthentic = false;
     public static uint MainThreadId = 0;
 
     public static HashSet<string> IgnoredApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -821,7 +822,8 @@ public class ShortcutHook {
             // we can sandwich it between Ctrl events to break the clean-tap sequence.
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
             string path = step.OpenPath.Trim();
-            if (!path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            if (!IsConfigAuthentic &&
+                !path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
                 !path.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
                 !path.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) {
                 try {
@@ -835,12 +837,14 @@ public class ShortcutHook {
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
             string cmd = step.CmdLine;
-            try {
-                string exePath = ResolveCommandPath(cmd);
-                if (!string.IsNullOrEmpty(exePath) && Path.IsPathRooted(exePath)) {
-                    if (!IsPathSafe(exePath)) return;
-                }
-            } catch { return; }
+            if (!IsConfigAuthentic) {
+                try {
+                    string exePath = ResolveCommandPath(cmd);
+                    if (!string.IsNullOrEmpty(exePath) && Path.IsPathRooted(exePath)) {
+                        if (!IsPathSafe(exePath)) return;
+                    }
+                } catch { return; }
+            }
             bool show = step.CmdShow;
             try {
                 if (show) {
