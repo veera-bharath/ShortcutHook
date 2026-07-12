@@ -2632,12 +2632,14 @@ public partial class MainWindow : Window
                     var list = row.IsGlobal ? row.ExceptApps : row.Apps;
                     if (!list.Contains(procName, StringComparer.OrdinalIgnoreCase)) list.Add(procName);
                     UpdateAppScopeBtnLabel(row);
+                    MarkDirty();
                 };
                 cb.Unchecked += (_, __) =>
                 {
                     var list = row.IsGlobal ? row.ExceptApps : row.Apps;
                     list.RemoveAll(a => string.Equals(a, procName, StringComparison.OrdinalIgnoreCase));
                     UpdateAppScopeBtnLabel(row);
+                    MarkDirty();
                 };
                 popupStack.Children.Add(cb);
                 row.AppCheckBoxes.Add((cb, procName));
@@ -2648,12 +2650,14 @@ public partial class MainWindow : Window
                 row.IsGlobal = true;
                 RebuildPopupItems();
                 UpdateAppScopeBtnLabel(row);
+                MarkDirty();
             };
             globalCb.Unchecked += (_, __) =>
             {
                 row.IsGlobal = false;
                 RebuildPopupItems();
                 UpdateAppScopeBtnLabel(row);
+                MarkDirty();
             };
         }
 
@@ -2760,11 +2764,13 @@ public partial class MainWindow : Window
                 {
                     if (!card.SelectedApps.Contains(procName, StringComparer.OrdinalIgnoreCase)) card.SelectedApps.Add(procName);
                     UpdateAppNameBtnLabel(card);
+                    MarkDirty();
                 };
                 cb.Unchecked += (_, __) =>
                 {
                     card.SelectedApps.RemoveAll(a => string.Equals(a, procName, StringComparison.OrdinalIgnoreCase));
                     UpdateAppNameBtnLabel(card);
+                    MarkDirty();
                 };
                 popupStack.Children.Add(cb);
                 card.AppCheckBoxes.Add((cb, procName));
@@ -2820,6 +2826,7 @@ public partial class MainWindow : Window
                 UpdateAppNameBtnLabel(card);
                 RebuildPopupItems();
                 popup.IsOpen = true;
+                MarkDirty();
             }
             addBtn.Click += (_, __) => CommitCustom();
             customBox.KeyDown += (_, ev) => { if (ev.Key == Key.Enter) CommitCustom(); };
@@ -3119,6 +3126,7 @@ public partial class MainWindow : Window
         };
         foreach (var label in new[] { "App launches", "App exits", "App focus", "App blur" }) kindCombo.Items.Add(label);
         kindCombo.SelectedIndex = kind == "exit" ? 1 : kind == "focus" ? 2 : kind == "blur" ? 3 : 0;
+        kindCombo.SelectionChanged += (_, __) => MarkDirty();
         Grid.SetColumn(kindCombo, 0);
         card.KindCombo = kindCombo;
 
@@ -3527,6 +3535,14 @@ public partial class MainWindow : Window
                     var match = _apps.FirstOrDefault(a => string.Equals(a.Path, curPath, StringComparison.OrdinalIgnoreCase));
                     if (match is not null) cb.SelectedItem = match;
                 }
+                cb.SelectionChanged += (_, __) =>
+                {
+                    if (cb.SelectedItem is AppEntry app)
+                        item.OutputValue = "open:" + app.Path;
+                    else
+                        item.OutputValue = "";
+                    MarkDirty();
+                };
                 item.OutputPanel.Children.Add(cb);
                 item.OutputCtrl = cb;
                 break;
@@ -3582,6 +3598,14 @@ public partial class MainWindow : Window
                     cb.SelectedItem = curProfile;
                 else if (profiles.Count > 0)
                     cb.SelectedIndex = 0;
+                cb.SelectionChanged += (_, __) =>
+                {
+                    if (cb.SelectedItem is string pn)
+                        item.OutputValue = "profile:" + pn;
+                    else
+                        item.OutputValue = "";
+                    MarkDirty();
+                };
                 item.OutputPanel.Children.Add(cb);
                 item.OutputCtrl = cb;
                 break;
@@ -3617,6 +3641,7 @@ public partial class MainWindow : Window
                     FontSize   = 11,
                     Text       = cmdText,
                 };
+                tb.TextChanged += (_, __) => MarkDirty();
                 Grid.SetColumn(tb, 1);
 
                 var showCb = new CheckBox
@@ -3627,6 +3652,8 @@ public partial class MainWindow : Window
                     Margin    = new Thickness(8, 0, 2, 0),
                     IsChecked = isShow,
                 };
+                showCb.Checked += (_, __) => MarkDirty();
+                showCb.Unchecked += (_, __) => MarkDirty();
                 Grid.SetColumn(showCb, 2);
 
                 g.Children.Add(lbl);
@@ -3652,6 +3679,7 @@ public partial class MainWindow : Window
                     Text = item.OutputValue.StartsWith("type:", StringComparison.Ordinal)
                         ? item.OutputValue.Substring(5) : "",
                 };
+                tb.TextChanged += (_, __) => MarkDirty();
                 item.OutputPanel.Children.Add(tb);
                 item.OutputCtrl = tb;
                 break;
@@ -3697,6 +3725,7 @@ public partial class MainWindow : Window
             tb.Text = !string.IsNullOrEmpty(item.OutputValue) &&
                       !item.OutputValue.StartsWith("open:", StringComparison.Ordinal)
                 ? item.OutputValue : "";
+            tb.TextChanged += (_, __) => MarkDirty();
             main = tb;
             item.OutputCtrl = tb;
         }
@@ -3781,6 +3810,7 @@ public partial class MainWindow : Window
                     item.OutputValue  = "open:" + ofd.FileName;
                     pathTB.Text      = ofd.FileName;
                     pathTB.Foreground = Br("#CCCCCC");
+                    MarkDirty();
                 }
             }
             else
@@ -3791,6 +3821,7 @@ public partial class MainWindow : Window
                     item.OutputValue  = "open:" + fbd.SelectedPath;
                     pathTB.Text      = fbd.SelectedPath;
                     pathTB.Foreground = Br("#CCCCCC");
+                    MarkDirty();
                 }
             }
         };
