@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 using ShortcutHookCore.Parsing;
 
-namespace ShortcutHookUI;
+namespace ShortcutHookUI.Services;
 
 internal static class DwmApi
 {

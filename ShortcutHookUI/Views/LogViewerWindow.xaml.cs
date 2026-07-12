@@ -5,7 +5,9 @@ using System.Text;
 using System.Windows;
 using System.Windows.Interop;
 
-namespace ShortcutHookUI;
+using ShortcutHookUI.Services;
+
+namespace ShortcutHookUI.Views;
 
 public partial class LogViewerWindow : Window
 {

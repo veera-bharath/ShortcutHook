@@ -14,8 +14,10 @@ using ShortcutHookCore.Enums;
 using ShortcutHookCore.Models;
 using ShortcutHookCore.Parsing;
 using ShortcutHookUI.ViewModels;
+using ShortcutHookUI.Services;
+using ShortcutHookUI.Models;
 
-namespace ShortcutHookUI;
+namespace ShortcutHookUI.Views;
 
 public partial class MainWindow : Window
 {

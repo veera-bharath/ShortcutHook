@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="ShortcutHookUI/Assets/ShortcutHook.png" alt="ShortcutHook" width="96"/>
+  <img src="assets/ShortcutHook.png" alt="ShortcutHook" width="96"/>
 </p>
 
 <h1 align="center">ShortcutHook</h1>
@@ -31,15 +31,15 @@
 
 ### 🖱️ Mouse Gestures
 Map custom mouse clicks, double clicks, held-clicks, or modifier-scrolling (e.g., Alt+Wheel for horizontal scroll).
-![Mouse Gestures Demo](ShortcutHookUI/Assets/mouse-right-click.gif)
+![Mouse Gestures Demo](assets/mouse-right-click.gif)
 
 ### ⌨️ Keyboard Actions
 Create powerful multi-key chords and text expansions. Smart defer logic automatically handles prefix shortcuts without key conflicts.
-![Keyboard Actions Demo](ShortcutHookUI/Assets/keyboard-action.gif)
+![Keyboard Actions Demo](assets/keyboard-action.gif)
 
 ### 📂 Profiles & Context Switching
 Organize hotkeys into profiles (e.g., Default, Coding, Gaming) and switch between them instantly.
-![Profiles Demo](ShortcutHookUI/Assets/profiles.gif)
+![Profiles Demo](assets/profiles.gif)
 
 ---
 
