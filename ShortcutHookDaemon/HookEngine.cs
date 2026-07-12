@@ -280,6 +280,7 @@ public class ShortcutHook {
         public int    HScrollDelta;
         public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
         public string SwitchToProfile; // switches active profile and relaunches daemon; null for all other fields when set
+        public int    Delay; // delay after executing this step
     }
 
     public class Binding {
@@ -1011,16 +1012,15 @@ public class ShortcutHook {
         if (IsPaused && !HasTogglePause(b)) return;
         if (b.ShowToast) ShowToast(b.ToastText);
         // Single-action with no delay: fast path — run inline (FireOutput is safe in hook callback).
-        if (b.Steps.Length == 1 && b.OutputDelay == 0 && b.Steps[0].Output != null) {
+        if (b.Steps.Length == 1 && b.Steps[0].Delay == 0 && b.Steps[0].Output != null) {
             FireOutput(b.Steps[0].Output);
             return;
         }
         // Chain or open/cmd step: run on background thread so the callback returns quickly.
         ChainStep[] steps = b.Steps;
-        int delay = b.OutputDelay;
         new Thread(() => {
             for (int i = 0; i < steps.Length; i++) {
-                if (i > 0 && delay > 0) Thread.Sleep(delay);
+                if (steps[i].Delay > 0) Thread.Sleep(steps[i].Delay);
                 ExecuteStep(steps[i]);
             }
         }) { IsBackground = true }.Start();
