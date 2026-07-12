@@ -738,15 +738,15 @@ public class MainWindowViewModel : ViewModelBase
             ShowUpdateOverlay = false;
             try
             {
-                var exe = Path.Combine(_appRoot, "publish.bat");
-                if (File.Exists(exe))
+                DaemonService.Stop();
+                InstallService.Install(_appRoot);
+                DaemonService.Start();
+                ShowFeedbackMsg("Successfully updated!", FeedbackKind.Ok);
+
+                if (!InstallService.IsRunningFromInstalledLocation(_appRoot))
                 {
-                    Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = _appRoot, UseShellExecute = true });
+                    InstallService.LaunchInstalledApp(_appRoot);
                     Application.Current.Shutdown();
-                }
-                else
-                {
-                    ShowFeedbackMsg("Publish.bat not found in " + _appRoot, FeedbackKind.Err);
                 }
             }
             catch (Exception ex)
