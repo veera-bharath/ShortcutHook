@@ -847,16 +847,19 @@ public class ShortcutHook {
             }
             bool show = step.CmdShow;
             try {
-                if (show) {
-                    Process.Start(new ProcessStartInfo("cmd.exe") {
-                        Arguments = "/k " + cmd,
-                        UseShellExecute = true,
-                    });
-                } else {
-                    Process.Start(new ProcessStartInfo("cmd.exe") {
-                        Arguments = "/c " + cmd,
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
+                var (exe, args) = SplitCommandLine(cmd);
+                if (!string.IsNullOrEmpty(exe)) {
+                    string targetExe = exe;
+                    if (!Path.IsPathRooted(targetExe)) {
+                        string resolved = ResolveCommandPath(cmd);
+                        if (Path.IsPathRooted(resolved)) {
+                            targetExe = resolved;
+                        }
+                    }
+                    Process.Start(new ProcessStartInfo(targetExe) {
+                        Arguments = args,
+                        UseShellExecute = show,
+                        CreateNoWindow = !show,
                     });
                 }
             } catch { }
@@ -920,6 +923,31 @@ public class ShortcutHook {
             }
         }
         return exe;
+    }
+
+    static (string exe, string args) SplitCommandLine(string cmd) {
+        if (string.IsNullOrWhiteSpace(cmd)) return ("", "");
+        cmd = cmd.Trim();
+        string exe = "";
+        string args = "";
+        if (cmd.StartsWith("\"")) {
+            int end = cmd.IndexOf("\"", 1);
+            if (end > 0) {
+                exe = cmd.Substring(1, end - 1);
+                args = cmd.Substring(end + 1).Trim();
+            } else {
+                exe = cmd.Substring(1);
+            }
+        } else {
+            int space = cmd.IndexOf(' ');
+            if (space > 0) {
+                exe = cmd.Substring(0, space);
+                args = cmd.Substring(space + 1).Trim();
+            } else {
+                exe = cmd;
+            }
+        }
+        return (exe, args);
     }
 
     static bool HasTogglePause(Binding b) {
