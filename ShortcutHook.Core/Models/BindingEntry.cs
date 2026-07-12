@@ -17,6 +17,9 @@ public sealed class BindingEntry
     public int outputDelay { get; set; } = 0;
     
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<int>? outputDelays { get; set; }
+    
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? app    { get; set; }
     
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

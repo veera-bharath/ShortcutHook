@@ -208,10 +208,20 @@ public static class ConfigLoader
                 if (outputsList == null || outputsList.Count == 0) continue;
 
                 var steps = new List<ShortcutHook.ChainStep>();
-                foreach (var outStr in outputsList)
+                for (int i = 0; i < outputsList.Count; i++)
                 {
+                    var outStr = outputsList[i];
                     if (string.IsNullOrWhiteSpace(outStr)) continue;
                     var step = new ShortcutHook.ChainStep();
+
+                    if (b.outputDelays != null && i < b.outputDelays.Count)
+                    {
+                        step.Delay = b.outputDelays[i];
+                    }
+                    else
+                    {
+                        step.Delay = i == 0 ? 0 : b.outputDelay;
+                    }
 
                     if (outStr.StartsWith("open:", StringComparison.Ordinal))
                     {

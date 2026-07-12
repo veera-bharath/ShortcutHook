@@ -37,7 +37,10 @@ public sealed class ChainedAction
     public Grid       ItemContainer      = null!;  // the row grid for this chain item
     public ComboBox   ActionCombo        = null!;
     public Grid       OutputPanel        = null!;
-    public Button?    DeleteBtn;
+    public Button?          DeleteBtn;
+    public int              Delay              = 0;
+    public TextBox?         DelayBox;
+    public FrameworkElement? DelayPanel;
 }
 
 public sealed class Row
@@ -835,17 +838,20 @@ public partial class MainWindow : Window
     {
         var outputs = GetRowOutputs(row);
         if (outputs.Count == 0) return null;
+        var delays = row.Chain.Select(item => item.Delay).Take(outputs.Count).ToList();
+        var hasNonZeroDelay = delays.Any(d => d != 0);
         return new BindingEntry
         {
-            trigger     = "mouse:" + gesture,
-            outputs     = outputs,
-            outputDelay = row.OutputDelay,
-            apps        = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
-            exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
-            enabled     = row.Enabled ? null : false,
-            debounce    = row.Debounce,
-            showToast   = row.ShowToast,
-            label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
+            trigger      = "mouse:" + gesture,
+            outputs      = outputs,
+            outputDelay  = row.OutputDelay,
+            outputDelays = hasNonZeroDelay ? delays : null,
+            apps         = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
+            exceptApps   = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
+            enabled      = row.Enabled ? null : false,
+            debounce     = row.Debounce,
+            showToast    = row.ShowToast,
+            label        = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
         };
     }
 
@@ -854,16 +860,19 @@ public partial class MainWindow : Window
         if (string.IsNullOrEmpty(trigger)) return null;
         var outputs = GetRowOutputs(row);
         if (outputs.Count == 0) return null;
+        var delays = row.Chain.Select(item => item.Delay).Take(outputs.Count).ToList();
+        var hasNonZeroDelay = delays.Any(d => d != 0);
         return new BindingEntry
         {
-            trigger     = trigger,
-            outputs     = outputs,
-            outputDelay = row.OutputDelay,
-            apps        = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
-            exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
-            enabled     = row.Enabled ? null : false,
-            showToast   = row.ShowToast,
-            label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
+            trigger      = trigger,
+            outputs      = outputs,
+            outputDelay  = row.OutputDelay,
+            outputDelays = hasNonZeroDelay ? delays : null,
+            apps         = (!row.IsGlobal && row.Apps.Count > 0) ? new List<string>(row.Apps) : null,
+            exceptApps   = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
+            enabled      = row.Enabled ? null : false,
+            showToast    = row.ShowToast,
+            label        = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
         };
     }
 
@@ -1097,28 +1106,28 @@ public partial class MainWindow : Window
         var triggerGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.Ordinal);
         foreach (var b in ConfigService.Read(InstallService.ScriptRoot))
         {
-            if (b.trigger.StartsWith("launch:", StringComparison.Ordinal))
+             if (b.trigger.StartsWith("launch:", StringComparison.Ordinal))
             {
                 var apps = b.trigger.Substring(7).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-                AddAppTriggerCard("launch", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                AddAppTriggerCard("launch", apps, b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
                 continue;
             }
             if (b.trigger.StartsWith("exit:", StringComparison.Ordinal))
             {
                 var apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-                AddAppTriggerCard("exit", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                AddAppTriggerCard("exit", apps, b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
                 continue;
             }
             if (b.trigger.StartsWith("focus:", StringComparison.Ordinal))
             {
                 var apps = b.trigger.Substring(6).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-                AddAppTriggerCard("focus", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                AddAppTriggerCard("focus", apps, b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
                 continue;
             }
             if (b.trigger.StartsWith("blur:", StringComparison.Ordinal))
             {
                 var apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-                AddAppTriggerCard("blur", apps, b.outputs ?? new List<string> { "" }, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
+                AddAppTriggerCard("blur", apps, b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay, b.enabled != false, b.showToast, b.label ?? "");
                 continue;
             }
             if (!b.trigger.StartsWith("key:", StringComparison.Ordinal)) continue;
@@ -1138,7 +1147,7 @@ public partial class MainWindow : Window
                     bool isGlobal  = b.apps == null || b.apps.Count == 0;
                     var  apps      = b.apps      ?? new List<string>();
                     var  exceptApps = b.exceptApps ?? new List<string>();
-                    return (b.outputs ?? new List<string> { "" }, b.outputDelay, isGlobal, apps, exceptApps, b.enabled != false, b.showToast, b.label ?? "");
+                    return (b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay, isGlobal, apps, exceptApps, b.enabled != false, b.showToast, b.label ?? "");
                 })
                 .ToList();
             AddKbdTriggerCard(trig, variants);
@@ -2064,6 +2073,7 @@ public partial class MainWindow : Window
             var globalEntry = bindings?.FirstOrDefault(b => b.apps == null || b.apps.Count == 0);
             AddMouseVariantRow(def, gestureSP,
                 globalEntry?.outputs ?? new List<string> { "" },
+                globalEntry?.outputDelays,
                 globalEntry?.outputDelay ?? 0,
                 true, new List<string>(), globalEntry?.enabled != false, isGlobal: true,
                 debounce: globalEntry?.debounce ?? false,
@@ -2076,6 +2086,7 @@ public partial class MainWindow : Window
                 foreach (var b in bindings.Where(b => b.apps != null && b.apps.Count > 0))
                     AddMouseVariantRow(def, gestureSP,
                         b.outputs ?? new List<string> { "" },
+                        b.outputDelays,
                         b.outputDelay, false, b.apps!, b.enabled != false, isGlobal: false,
                         debounce: b.debounce, showToast: b.showToast, noteLabel: b.label ?? "");
 
@@ -2084,7 +2095,7 @@ public partial class MainWindow : Window
 
     }
 
-    void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, int outputDelay,
+    void AddMouseVariantRow(MouseGestureDef def, StackPanel container, List<string> outputs, List<int>? outputDelays, int outputDelay,
                             bool isGlobal_scope, List<string> apps, bool enabled, bool isGlobal, bool debounce = false,
                             bool showToast = false, List<string>? exceptApps = null, string noteLabel = "")
     {
@@ -2138,7 +2149,7 @@ public partial class MainWindow : Window
             Padding  = new Thickness(0),
             Margin   = new Thickness(2, 6, 0, 0),
             FontSize = isGlobal ? 15 : 12,
-            ToolTip  = isGlobal ? "Add an app-specific variant for this gesture" : "Remove this variant",
+            ToolTip  = "Add variant or remove this",
             VerticalAlignment = VerticalAlignment.Top,
         };
         Grid.SetColumn(variantBtn, 2);
@@ -2157,12 +2168,12 @@ public partial class MainWindow : Window
             NoteLabel        = noteLabel,
         };
 
-        BuildChainStack(row, outputs, isGlobal_scope, apps, enabled, exceptApps);
+        BuildChainStack(row, outputs, outputDelays, isGlobal_scope, apps, enabled, exceptApps);
         AddExportToRow(row, () => BuildMouseBindingEntry(def.Gesture, row));
         if (!enabled) grid.Opacity = 0.45;
 
         if (isGlobal)
-            variantBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, 0, false, new List<string>(), true, isGlobal: false, exceptApps: new List<string>());
+            variantBtn.Click += (_, __) => AddMouseVariantRow(def, container, new List<string> { "" }, null, 0, false, new List<string>(), true, isGlobal: false, exceptApps: new List<string>());
         else
             variantBtn.Click += (_, __) =>
             {
@@ -2178,8 +2189,26 @@ public partial class MainWindow : Window
     // Chain stack builder
     // =========================================================================
 
+    List<int> GetEffectiveDelays(List<string> outputs, List<int>? outputDelays, int outputDelay)
+    {
+        var result = new List<int>();
+        int count = outputs.Count > 0 ? outputs.Count : 1;
+        for (int i = 0; i < count; i++)
+        {
+            if (outputDelays != null && i < outputDelays.Count)
+            {
+                result.Add(outputDelays[i]);
+            }
+            else
+            {
+                result.Add(i == 0 ? 0 : outputDelay);
+            }
+        }
+        return result;
+    }
+
     // Builds chain items + control row into row.ChainStack.
-    void BuildChainStack(Row row, List<string> outputs, bool isGlobal, List<string> apps, bool enabled, List<string>? exceptApps = null)
+    void BuildChainStack(Row row, List<string> outputs, List<int>? outputDelays, bool isGlobal, List<string> apps, bool enabled, List<string>? exceptApps = null)
     {
         row.ChainStack.Children.Clear();
         row.Chain.Clear();
@@ -2187,8 +2216,10 @@ public partial class MainWindow : Window
         row.ChainStack.Children.Add(BuildNoteRow(row));
 
         var effectiveOutputs = outputs.Count > 0 ? outputs : new List<string> { "" };
-        foreach (var o in effectiveOutputs)
-            AddChainItem(row, o, rebuild: false);
+        var effectiveDelays = GetEffectiveDelays(effectiveOutputs, outputDelays, row.OutputDelay);
+
+        for (int i = 0; i < effectiveOutputs.Count; i++)
+            AddChainItem(row, effectiveOutputs[i], effectiveDelays[i], rebuild: false);
 
         var controlRow = BuildChainControlRow(row, isGlobal, apps, enabled, exceptApps);
         row.ChainStack.Children.Add(controlRow);
@@ -2198,15 +2229,16 @@ public partial class MainWindow : Window
     }
 
     // Adds one action item to the chain (appends before the control row if already built).
-    ChainedAction AddChainItem(Row row, string output, bool rebuild = true)
+    ChainedAction AddChainItem(Row row, string output, int delay = 0, bool rebuild = true)
     {
         var rowActions = row.AvailableActions ?? StandardActions;
         var action = DetectAction(output, rowActions);
 
-        // Item grid: [ActionCombo 120][OutputPanel *][chain-× Auto]
+        // Item grid: [ActionCombo 120][OutputPanel *][DelayPanel Auto][chain-× Auto]
         var itemGrid = new Grid { Margin = new Thickness(0, 0, 0, 5) };
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var actionCB = NewActionCombo(rowActions, action);
@@ -2214,6 +2246,39 @@ public partial class MainWindow : Window
 
         var outPanel = new Grid { Margin = new Thickness(8, 0, 0, 0) };
         Grid.SetColumn(outPanel, 1);
+
+        var delayPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 0, 0) };
+        var plusLabel = new TextBlock
+        {
+            Text = "+",
+            Foreground = DimBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 4, 0),
+        };
+        var delayTB = new TextBox
+        {
+            Style = (Style)FindResource("DarkTB"),
+            Width = 40,
+            Height = 26,
+            Text = delay > 0 ? delay.ToString() : "0",
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            Padding = new Thickness(0, 3, 0, 0),
+            ToolTip = "Delay after executing this action step (ms)",
+        };
+        var msLabel = new TextBlock
+        {
+            Text = "ms",
+            Foreground = DimBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0),
+        };
+        delayPanel.Children.Add(plusLabel);
+        delayPanel.Children.Add(delayTB);
+        delayPanel.Children.Add(msLabel);
+        Grid.SetColumn(delayPanel, 2);
 
         var delBtn = new Button
         {
@@ -2226,20 +2291,24 @@ public partial class MainWindow : Window
             FontSize = 10,
             ToolTip  = "Remove this action from the chain",
         };
-        Grid.SetColumn(delBtn, 2);
+        Grid.SetColumn(delBtn, 3);
 
         itemGrid.Children.Add(actionCB);
         itemGrid.Children.Add(outPanel);
+        itemGrid.Children.Add(delayPanel);
         itemGrid.Children.Add(delBtn);
 
         var item = new ChainedAction
         {
             Action        = action,
             OutputValue   = output,
+            Delay         = delay,
             ItemContainer = itemGrid,
             ActionCombo   = actionCB,
             OutputPanel   = outPanel,
             DeleteBtn     = delBtn,
+            DelayBox      = delayTB,
+            DelayPanel    = delayPanel,
         };
         SetChainItemOutput(row, item, action);
 
@@ -2248,6 +2317,15 @@ public partial class MainWindow : Window
         {
             var idx = actionCB.SelectedIndex;
             if (idx >= 0 && idx < capturedActions.Length) { SetChainItemOutput(row, item, capturedActions[idx].Kind); MarkDirty(); }
+        };
+
+        delayTB.TextChanged += (_, __) =>
+        {
+            if (int.TryParse(delayTB.Text, out var ms) && ms >= 0)
+            {
+                item.Delay = ms;
+            }
+            MarkDirty();
         };
 
         delBtn.Click += (_, __) =>
@@ -2470,7 +2548,16 @@ public partial class MainWindow : Window
         delayTB.TextChanged += (_, __) =>
         {
             if (int.TryParse(delayTB.Text, out var ms) && ms >= 0)
+            {
                 row.OutputDelay = ms;
+                // Sync to all subsequent steps in the chain (index >= 1)
+                for (int i = 1; i < row.Chain.Count; i++)
+                {
+                    row.Chain[i].Delay = ms;
+                    if (row.Chain[i].DelayBox is TextBox tb)
+                        tb.Text = ms.ToString();
+                }
+            }
             MarkDirty();
         };
         Grid.SetColumn(delayTB, 2);
@@ -2886,6 +2973,11 @@ public partial class MainWindow : Window
             if (col >= 1 && col <= 3)
                 child.Visibility = multi ? Visibility.Visible : Visibility.Collapsed;
         }
+        foreach (var item in row.Chain)
+        {
+            if (item.DelayPanel != null)
+                item.DelayPanel.Visibility = multi ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     // =========================================================================
@@ -2893,7 +2985,7 @@ public partial class MainWindow : Window
     // =========================================================================
     void AddKbdBtn_Click(object sender, RoutedEventArgs e) { AddKbdTriggerCard("", null, insertAtTop: true); }
 
-    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants, bool insertAtTop = false)
+    void AddKbdTriggerCard(string trigger, List<(List<string> outputs, List<int>? outputDelays, int outputDelay, bool isGlobal, List<string> apps, List<string> exceptApps, bool enabled, bool showToast, string noteLabel)>? variants, bool insertAtTop = false)
     {
         var card = new KbdTriggerCard { Trigger = trigger };
 
@@ -2992,7 +3084,7 @@ public partial class MainWindow : Window
             },
             onRestore: () => RestoreTriggerButton(capBtn, card.Trigger));
 
-        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, 0, false, new List<string>(), new List<string>(), true, false, "");
+        addAppBtn.Click += (_, __) => AddKbdVariantRow(card, new List<string> { "" }, null, 0, false, new List<string>(), new List<string>(), true, false, "");
 
         delCardBtn.Click += (_, __) =>
         {
@@ -3008,14 +3100,14 @@ public partial class MainWindow : Window
         else             { KbdStack.Children.Add(cardBorder);       _kbdCards.Add(card); }
 
         if (variants is { Count: > 0 })
-            foreach (var (o, d, isG, apps, ex, e, st, nl) in variants) AddKbdVariantRow(card, o, d, isG, apps, ex, e, st, nl);
+            foreach (var (o, od, d, isG, apps, ex, e, st, nl) in variants) AddKbdVariantRow(card, o, od, d, isG, apps, ex, e, st, nl);
         else
-            AddKbdVariantRow(card, new List<string> { "" }, 0, true, new List<string>(), new List<string>(), true, false, "");
+            AddKbdVariantRow(card, new List<string> { "" }, null, 0, true, new List<string>(), new List<string>(), true, false, "");
 
         UpdateCardAccentBorder(card);
     }
 
-    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, List<string> scopeExceptApps, bool enabled, bool showToast, string noteLabel = "")
+    Row AddKbdVariantRow(KbdTriggerCard card, List<string> outputs, List<int>? outputDelays, int outputDelay, bool scopeIsGlobal, List<string> scopeApps, List<string> scopeExceptApps, bool enabled, bool showToast, string noteLabel = "")
     {
         // col0=*: chain block border containing chain items + control row
         // col1=Auto: delete-variant button — top-aligned
@@ -3064,7 +3156,7 @@ public partial class MainWindow : Window
             ShowToast   = showToast,
             NoteLabel   = noteLabel,
         };
-        BuildChainStack(row, outputs, scopeIsGlobal, scopeApps, enabled, scopeExceptApps);
+        BuildChainStack(row, outputs, outputDelays, scopeIsGlobal, scopeApps, enabled, scopeExceptApps);
         AddExportToRow(row, () => BuildKbdBindingEntry(card.Trigger, row));
         if (!enabled) grid.Opacity = 0.45;
 
@@ -3092,9 +3184,9 @@ public partial class MainWindow : Window
     // App-launch / app-exit trigger cards
     // =========================================================================
     void AddAppTriggerBtn_Click(object sender, RoutedEventArgs e)
-    { MarkDirty(); AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, 0, true, false, "", insertAtTop: true); }
+    { MarkDirty(); AddAppTriggerCard("launch", new List<string>(), new List<string> { "" }, null, 0, true, false, "", insertAtTop: true); }
 
-    void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, int outputDelay, bool enabled, bool showToast, string noteLabel, bool insertAtTop = false)
+    void AddAppTriggerCard(string kind, List<string> appNames, List<string> outputs, List<int>? outputDelays, int outputDelay, bool enabled, bool showToast, string noteLabel, bool insertAtTop = false)
     {
         var card = new AppTriggerCard();
 
@@ -3179,7 +3271,7 @@ public partial class MainWindow : Window
             HasAppScope = false,
         };
         card.Row = row;
-        BuildChainStack(row, outputs, true, new List<string>(), enabled, null);
+        BuildChainStack(row, outputs, outputDelays, true, new List<string>(), enabled, null);
         AddExportToRow(row, () => BuildAppTriggerBindingEntry(card));
         if (!enabled) rowContainer.Opacity = 0.45;
 
@@ -3210,14 +3302,17 @@ public partial class MainWindow : Window
         var outputs = GetRowOutputs(card.Row);
         if (outputs.Count == 0) return null;
         var prefix = AppTriggerPrefix(card.KindCombo.SelectedIndex);
+        var delays = card.Row.Chain.Select(item => item.Delay).Take(outputs.Count).ToList();
+        var hasNonZeroDelay = delays.Any(d => d != 0);
         return new BindingEntry
         {
-            trigger     = prefix + string.Join(",", card.SelectedApps),
-            outputs     = outputs,
-            outputDelay = card.Row.OutputDelay,
-            enabled     = card.Row.Enabled ? null : false,
-            showToast   = card.Row.ShowToast,
-            label       = string.IsNullOrWhiteSpace(card.Row.NoteLabel) ? null : card.Row.NoteLabel.Trim(),
+            trigger      = prefix + string.Join(",", card.SelectedApps),
+            outputs      = outputs,
+            outputDelay  = card.Row.OutputDelay,
+            outputDelays = hasNonZeroDelay ? delays : null,
+            enabled      = card.Row.Enabled ? null : false,
+            showToast    = card.Row.ShowToast,
+            label        = string.IsNullOrWhiteSpace(card.Row.NoteLabel) ? null : card.Row.NoteLabel.Trim(),
         };
     }
 
@@ -3916,13 +4011,15 @@ public partial class MainWindow : Window
                     }
                 }
 
+                var mouseDelays = row.Chain.Select(item => item.Delay).Take(outputsList.Count).ToList();
                 var entry = new BindingEntry
                 {
-                    trigger     = "mouse:" + def.Gesture,
-                    outputs     = outputsList,
-                    outputDelay = row.OutputDelay,
-                    apps        = row.IsGlobal ? null : new List<string>(row.Apps),
-                    exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
+                    trigger      = "mouse:" + def.Gesture,
+                    outputs      = outputsList,
+                    outputDelay  = row.OutputDelay,
+                    outputDelays = mouseDelays.Any(d => d != 0) ? mouseDelays : null,
+                    apps         = row.IsGlobal ? null : new List<string>(row.Apps),
+                    exceptApps   = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
                 };
                 if (!row.Enabled) entry.enabled = false;
                 if (row.Debounce)  entry.debounce = true;
@@ -3959,17 +4056,21 @@ public partial class MainWindow : Window
                 if (!row.Enabled)
                 {
                     if (!string.IsNullOrEmpty(trig))
+                    {
+                        var kbdDisabledDelays = row.Chain.Select(item => item.Delay).Take(outputsList.Count).ToList();
                         entries.Add(new BindingEntry
                         {
-                            trigger     = trig,
-                            outputs     = outputsList.Count > 0 ? outputsList : new List<string> { "" },
-                            outputDelay = row.OutputDelay,
-                            apps        = row.IsGlobal ? null : new List<string>(row.Apps),
-                            exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
-                            enabled     = false,
-                            showToast   = row.ShowToast,
-                            label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
+                            trigger      = trig,
+                            outputs      = outputsList.Count > 0 ? outputsList : new List<string> { "" },
+                            outputDelay  = row.OutputDelay,
+                            outputDelays = kbdDisabledDelays.Any(d => d != 0) ? kbdDisabledDelays : null,
+                            apps         = row.IsGlobal ? null : new List<string>(row.Apps),
+                            exceptApps   = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
+                            enabled      = false,
+                            showToast    = row.ShowToast,
+                            label        = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
                         });
+                    }
                     continue;
                 }
 
@@ -4019,15 +4120,17 @@ public partial class MainWindow : Window
 
                 var parsed = TriggerParser.ParseKeyTrigger(trig.Substring(4));
                 keyParsed.Add((trig, parsed, cardIdx, row.IsGlobal, new List<string>(row.Apps)));
+                var kbdDelays = row.Chain.Select(item => item.Delay).Take(outputsList.Count).ToList();
                 entries.Add(new BindingEntry
                 {
-                    trigger     = trig,
-                    outputs     = outputsList,
-                    outputDelay = row.OutputDelay,
-                    apps        = row.IsGlobal ? null : new List<string>(row.Apps),
-                    exceptApps  = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
-                    showToast   = row.ShowToast,
-                    label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
+                    trigger      = trig,
+                    outputs      = outputsList,
+                    outputDelay  = row.OutputDelay,
+                    outputDelays = kbdDelays.Any(d => d != 0) ? kbdDelays : null,
+                    apps         = row.IsGlobal ? null : new List<string>(row.Apps),
+                    exceptApps   = (row.IsGlobal && row.ExceptApps.Count > 0) ? new List<string>(row.ExceptApps) : null,
+                    showToast    = row.ShowToast,
+                    label        = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
                 });
             }
         }
@@ -4061,14 +4164,16 @@ public partial class MainWindow : Window
                 catch (Exception ex) { ShowFeedback($"App trigger '{appsLabel}': {ex.Message}", FeedbackKind.Err); return; }
             }
 
+            var appDelays = row.Chain.Select(item => item.Delay).Take(outputsList.Count).ToList();
             entries.Add(new BindingEntry
             {
-                trigger     = kind + ":" + appsLabel,
-                outputs     = outputsList,
-                outputDelay = row.OutputDelay,
-                enabled     = row.Enabled ? null : false,
-                showToast   = row.ShowToast,
-                label       = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
+                trigger      = kind + ":" + appsLabel,
+                outputs      = outputsList,
+                outputDelay  = row.OutputDelay,
+                outputDelays = appDelays.Any(d => d != 0) ? appDelays : null,
+                enabled      = row.Enabled ? null : false,
+                showToast    = row.ShowToast,
+                label        = string.IsNullOrWhiteSpace(row.NoteLabel) ? null : row.NoteLabel.Trim(),
             });
         }
 
