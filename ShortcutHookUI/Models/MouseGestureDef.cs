@@ -1,24 +1,4 @@
-namespace ShortcutHookUI;
-
-public enum ActionKind
-{
-    Shortcut,
-    OpenApp,
-    OpenFile,
-    OpenFolder,
-    Command,
-    TypeText,
-    ShiftHome,
-    ShiftEnd,
-    CtrlShiftLeft,
-    CtrlShiftRight,
-    HScrollLeft,
-    HScrollRight,
-    TogglePause,
-    SwitchProfile
-}
-
-public record ActionDef(string Label, ActionKind Kind);
+namespace ShortcutHookUI.Models;
 
 public sealed class MouseGestureDef
 {

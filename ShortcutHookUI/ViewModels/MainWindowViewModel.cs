@@ -14,7 +14,9 @@ using ShortcutHookCore.Models;
 using ShortcutHookUI.ViewModels;
 using ShortcutHookCore.Parsing;
 using ShortcutHookCore.Validation;
-using ShortcutHookUI;
+using ShortcutHookUI.Services;
+using ShortcutHookUI.Models;
+using ShortcutHookUI.Views;
 
 namespace ShortcutHookUI.ViewModels;
 

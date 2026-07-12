@@ -5,7 +5,7 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationIcon>Assets\ShortcutHook.ico</ApplicationIcon>
+    <ApplicationIcon>Resources\Images\ShortcutHook.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RootNamespace>ShortcutHookUI</RootNamespace>
@@ -31,8 +31,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\ShortcutHook.ico" />
-    <Resource Include="Assets\ShortcutHook.png" />
+    <Resource Include="Resources\Images\ShortcutHook.ico" />
+    <Resource Include="Resources\Images\ShortcutHook.png" />
   </ItemGroup>
 
   <!-- Auto-build daemon before UI in Release mode -->
