@@ -736,16 +736,11 @@ public class MainWindowViewModel : ViewModelBase
             ShowUpdateOverlay = false;
             try
             {
-                var exe = Path.Combine(_appRoot, "publish.bat");
-                if (File.Exists(exe))
-                {
-                    Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = _appRoot, UseShellExecute = true });
-                    Application.Current.Shutdown();
-                }
-                else
-                {
-                    ShowFeedbackMsg("Publish.bat not found in " + _appRoot, FeedbackKind.Err);
-                }
+                DaemonService.Stop();
+                System.Threading.Thread.Sleep(500); // Wait for daemon to exit
+                InstallService.Install(_appRoot);
+                Process.Start(InstallService.UiExePath(_appRoot));
+                Application.Current.Shutdown();
             }
             catch (Exception ex)
             {
@@ -943,13 +938,16 @@ public class MainWindowViewModel : ViewModelBase
         var root = ConfigService.ReadConfig(InstallService.ScriptRoot);
         Profiles.Clear();
         var activeName = root.activeProfile ?? "Default";
-        Profiles.Add(new ProfileViewModel("Default", SelectProfile, SelectProfileForExportMethod, RenameProfile, DeleteProfile) { IsSelected = string.Equals(activeName, "Default", StringComparison.OrdinalIgnoreCase) });
-        if (root.profiles != null)
+        if (root.profiles != null && root.profiles.Count > 0)
         {
             foreach (var profile in root.profiles)
             {
                 Profiles.Add(new ProfileViewModel(profile.name, SelectProfile, SelectProfileForExportMethod, RenameProfile, DeleteProfile) { IsSelected = string.Equals(activeName, profile.name, StringComparison.OrdinalIgnoreCase) });
             }
+        }
+        else
+        {
+            Profiles.Add(new ProfileViewModel("Default", SelectProfile, SelectProfileForExportMethod, RenameProfile, DeleteProfile) { IsSelected = true });
         }
 
         // Active bindings
@@ -1379,6 +1377,7 @@ public class MainWindowViewModel : ViewModelBase
                             outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
                             outp.StartsWith("type:", StringComparison.Ordinal) ||
                             outp.StartsWith("profile:", StringComparison.Ordinal) ||
+                            outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
                             outp == "toggle:pause") continue;
                         try { ShortcutValidator.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedbackMsg($"Mouse '{group.Label}': {ex.Message}", FeedbackKind.Err); return; }
@@ -1472,6 +1471,7 @@ public class MainWindowViewModel : ViewModelBase
                         outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
                         outp.StartsWith("type:", StringComparison.Ordinal) ||
                         outp.StartsWith("profile:", StringComparison.Ordinal) ||
+                        outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
                         outp == "toggle:pause") continue;
                     try { ShortcutValidator.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedbackMsg($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
@@ -1543,6 +1543,7 @@ public class MainWindowViewModel : ViewModelBase
                     outp.StartsWith("cmdw:", StringComparison.Ordinal) ||
                     outp.StartsWith("type:", StringComparison.Ordinal) ||
                     outp.StartsWith("profile:", StringComparison.Ordinal) ||
+                    outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
                     outp == "toggle:pause") continue;
                 try { ShortcutValidator.ValidateShortcutOutput(outp); }
                 catch (Exception ex) { ShowFeedbackMsg($"App trigger '{appsLabel}': {ex.Message}", FeedbackKind.Err); return; }
@@ -1568,14 +1569,14 @@ public class MainWindowViewModel : ViewModelBase
             // Write config
             var root = ConfigService.ReadConfig(InstallService.ScriptRoot);
             var activeProfile = root.activeProfile ?? "Default";
-            if (string.Equals(activeProfile, "Default", StringComparison.OrdinalIgnoreCase))
+            var match = root.profiles?.FirstOrDefault(p => string.Equals(p.name, activeProfile, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
             {
-                root.bindings = entries;
+                match.bindings = entries;
             }
-            else
+            else if (root.profiles != null)
             {
-                var match = root.profiles?.FirstOrDefault(p => string.Equals(p.name, activeProfile, StringComparison.OrdinalIgnoreCase));
-                if (match != null) match.bindings = entries;
+                root.profiles.Add(new ProfileEntry { name = activeProfile, bindings = entries });
             }
             ConfigService.Save(InstallService.ScriptRoot, root);
 

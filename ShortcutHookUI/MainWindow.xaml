@@ -123,6 +123,35 @@
             </Setter>
         </Style>
 
+        <Style x:Key="TogBtnGhost" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="#BBBBBB"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#2E2E2E"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="7"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1F1F1F"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#3E3E3E"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="BtnStop" TargetType="Button">
             <Setter Property="Foreground" Value="#AAAAAA"/>
             <Setter Property="Background" Value="Transparent"/>
@@ -518,8 +547,17 @@
                                               HorizontalAlignment="Left" VerticalAlignment="Center"
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                              ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
                                               IsHitTestVisible="False"
                                               TextElement.Foreground="{TemplateBinding Foreground}"/>
+                            <TextBlock x:Name="Placeholder"
+                                       Margin="10,0,26,0"
+                                       HorizontalAlignment="Left" VerticalAlignment="Center"
+                                       Foreground="#777777"
+                                       IsHitTestVisible="False"
+                                       Text="{TemplateBinding Tag}"
+                                       Visibility="Collapsed"/>
                             <Popup x:Name="PART_Popup" Placement="Bottom"
                                    IsOpen="{TemplateBinding IsDropDownOpen}"
                                    AllowsTransparency="True" Focusable="False"
@@ -540,6 +578,12 @@
                             </Popup>
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="SelectedIndex" Value="-1">
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="SelectedItem" Value="{x:Null}">
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible"/>
+                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="Root" Property="Opacity" Value="0.45"/>
                             </Trigger>
@@ -553,17 +597,19 @@
         <DataTemplate DataType="{x:Type vm:ChainedActionViewModel}">
             <Grid Margin="0,3">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="130"/>
+                    <ColumnDefinition Width="155"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- Actions dropdown -->
-                <ComboBox Grid.Column="0" SelectedValue="{Binding Action, Mode=TwoWay}" SelectedValuePath="Kind" DisplayMemberPath="Label" Style="{StaticResource DarkCB}" Height="28" Margin="0,0,6,0">
-                    <ComboBox.ItemsSource>
-                        <Binding Path="AvailableActions" RelativeSource="{RelativeSource AncestorType={x:Type ItemsControl}, AncestorLevel=2}"/>
-                    </ComboBox.ItemsSource>
+                <ComboBox Grid.Column="0" ItemsSource="{Binding AvailableActions}" SelectedValue="{Binding Action, Mode=TwoWay}" SelectedValuePath="Kind" Tag="Select action" Style="{StaticResource DarkCB}" Height="28" Margin="0,0,6,0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Label}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
                 </ComboBox>
 
                 <!-- Dynamic Middle Control -->
@@ -643,28 +689,11 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="175"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Col 0: Indent arrow or Gesture Header -->
+                <!-- Col 0: Indent arrow for variant -->
                 <Grid Grid.Column="0" VerticalAlignment="Top" Margin="0,8,0,0">
                     <TextBlock Text="↳" Foreground="{StaticResource ColorTextMuted}" FontSize="12" Margin="10,0,0,0" Visibility="{Binding IsGlobal, Converter={StaticResource InverseBooleanToVisibilityConverter}}"/>
-                    <TextBlock Text="{Binding Label}" Foreground="#CCCCCC" FontSize="12" Visibility="{Binding IsMouseTrigger, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Visibility" Value="Collapsed"/>
-                                <Style.Triggers>
-                                    <MultiDataTrigger>
-                                        <MultiDataTrigger.Conditions>
-                                            <Condition Binding="{Binding IsMouseTrigger}" Value="True"/>
-                                            <Condition Binding="{Binding IsGlobal}" Value="True"/>
-                                        </MultiDataTrigger.Conditions>
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                    </MultiDataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
                 </Grid>
 
                 <!-- Col 1: Rounded Card Border -->
@@ -683,115 +712,139 @@
                     </Border.Style>
 
                     <StackPanel>
-                        <!-- Actions stack -->
+                        <!-- ── Row 1: Label and Enable toggle ── -->
+                        <DockPanel LastChildFill="False" Margin="0,0,0,6">
+                            <!-- Label input on left -->
+                            <Grid VerticalAlignment="Center">
+                                <TextBox x:Name="RowNoteTb" Text="{Binding NoteLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTB}" Width="220" Height="26" FontSize="11" ToolTip="Custom label / note"/>
+                                <TextBlock Text="Label / note..." Foreground="#555555" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=RowNoteTb}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Text, ElementName=RowNoteTb}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+
+                            <!-- Enable toggle and variant delete on right -->
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <CheckBox Content="enable" IsChecked="{Binding Enabled, Mode=TwoWay}" Style="{StaticResource Toggle}" ToolTip="Enable or disable this shortcut" VerticalAlignment="Center" FontSize="11"/>
+                                <Button Content="✕" Command="{Binding DeleteRowCommand}" Style="{StaticResource BtnGhost}" Width="24" Height="24" ToolTip="Delete this variant" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="{Binding IsGlobal, Converter={StaticResource InverseBooleanToVisibilityConverter}}"/>
+                            </StackPanel>
+                        </DockPanel>
+
+                        <Border Height="1" Background="#282828" Margin="0,2,0,8"/>
+
+                        <!-- ── Row 2: Action / Actions ── -->
                         <ItemsControl ItemsSource="{Binding Chain}"/>
 
                         <Border Height="1" Background="#282828" Margin="0,8,0,8"/>
 
-                        <!-- Footer controls -->
+                        <!-- ── Row 3: Global selector and toast / options ── -->
                         <DockPanel LastChildFill="False">
-                            <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}" Style="{StaticResource Toggle}" ToolTip="Toggle enabled state" VerticalAlignment="Center"/>
+                            <!-- Right side: toast, debounce, delay -->
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <!-- Delay text (footer) -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <!-- Visible if chain has more than one step -->
+                                                <DataTrigger Binding="{Binding Chain.Count}" Value="1">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Chain.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <!-- Greater than 1 → Visible -->
+                                                <DataTrigger Binding="{Binding Chain.Count}" Value="2"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Chain.Count}" Value="3"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Chain.Count}" Value="4"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Chain.Count}" Value="5"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock Text="delay " Foreground="#666666" FontSize="10" VerticalAlignment="Center"/>
+                                    <TextBox Text="{Binding OutputDelay, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTB}" Height="22" Width="40" VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
+                                    <TextBlock Text=" ms" Foreground="#666666" FontSize="10" VerticalAlignment="Center"/>
+                                </StackPanel>
 
-                            <!-- App Scope button + popup (Only if HasAppScope is true) -->
-                            <Grid Visibility="{Binding HasAppScope, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                <ToggleButton x:Name="ScopeToggleBtn" Content="{Binding AppScopeLabel}" Style="{StaticResource BtnGhost}" Height="26" Margin="6,0,0,0" FontFamily="Consolas" FontSize="11" Padding="6,0,6,0"/>
-                                <Popup IsOpen="{Binding IsChecked, ElementName=ScopeToggleBtn, Mode=TwoWay}" StaysOpen="False" Placement="Bottom" PlacementTarget="{Binding ElementName=ScopeToggleBtn}" AllowsTransparency="True" MinWidth="160" MaxWidth="260">
-                                    <Border Background="#222222" BorderBrush="#444444" BorderThickness="1" CornerRadius="5" Padding="4" MaxHeight="260">
-                                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                            <StackPanel>
-                                                <!-- Global toggle -->
-                                                <CheckBox Content="Global" IsChecked="{Binding IsGlobal, Mode=TwoWay}" Foreground="#E8E8E8" Margin="4" FontFamily="Consolas" FontSize="11"/>
-                                                <Rectangle Height="1" Fill="#444444" Margin="0,2,0,2"/>
-                                                <!-- Mode Label -->
-                                                <TextBlock FontFamily="Consolas" FontSize="10" Margin="4,2,4,2">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Text" Value="Only in:"/>
-                                                            <Setter Property="Foreground" Value="#FFC107"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsGlobal}" Value="True">
-                                                                    <Setter Property="Text" Value="Except in:"/>
-                                                                    <Setter Property="Foreground" Value="#5B9CF6"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                                <!-- App options -->
-                                                <ItemsControl ItemsSource="{Binding AppScopeOptions}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsChecked, Mode=TwoWay}" ToolTip="{Binding ProcessName}" Foreground="#CCCCCC" Margin="4,2,4,2" FontFamily="Consolas" FontSize="11"/>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                            </StackPanel>
-                                        </ScrollViewer>
-                                    </Border>
-                                </Popup>
-                            </Grid>
+                                <!-- Debounce Toggle (scroll gestures only) -->
+                                <CheckBox Content="debounce" IsChecked="{Binding Debounce, Mode=TwoWay}" Style="{StaticResource Toggle}" ToolTip="Ignore repeat scroll wheel signals within 200ms" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="11" Visibility="{Binding DebounceVisible, Converter={StaticResource BooleanToVisibilityConverter}}"/>
 
-                            <!-- Debounce Toggle (scroll gestures only) -->
-                            <CheckBox Content="debounce" IsChecked="{Binding Debounce, Mode=TwoWay}" Style="{StaticResource Toggle}" ToolTip="Ignore repeat scroll wheel signals within 200ms" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="11" Visibility="{Binding DebounceVisible, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-
-                            <!-- Toast Toggle -->
-                            <CheckBox Content="toast" IsChecked="{Binding ShowToast, Mode=TwoWay}" Style="{StaticResource Toggle}" ToolTip="Show on-screen message when fired" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="11"/>
-
-                            <!-- Note label -->
-                            <TextBox Text="{Binding NoteLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTB}" Width="100" Height="22" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="Add a custom note"/>
-
-                            <!-- Add step button (footer) -->
-                            <Button Content="+ Action" Command="{Binding AddActionCommand}" Style="{StaticResource BtnGhost}" Height="24" Padding="8,0,8,0" Margin="10,0,0,0" VerticalAlignment="Center"/>
-
-                            <!-- Delay text (footer) -->
-                            <StackPanel Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
-                                <StackPanel.Style>
-                                    <Style TargetType="StackPanel">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                        <Style.Triggers>
-                                            <!-- Visible if chain has more than one step -->
-                                            <DataTrigger Binding="{Binding Chain.Count}" Value="1">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding Chain.Count}" Value="0">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                            <!-- Greater than 1 → Visible -->
-                                            <DataTrigger Binding="{Binding Chain.Count}" Value="2"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
-                                            <DataTrigger Binding="{Binding Chain.Count}" Value="3"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
-                                            <DataTrigger Binding="{Binding Chain.Count}" Value="4"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
-                                            <DataTrigger Binding="{Binding Chain.Count}" Value="5"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </StackPanel.Style>
-                                <TextBlock Text="delay " Foreground="#666666" FontSize="10" VerticalAlignment="Center"/>
-                                <TextBox Text="{Binding OutputDelay, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTB}" Height="22" Width="40" VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
-                                <TextBlock Text=" ms" Foreground="#666666" FontSize="10" VerticalAlignment="Center"/>
+                                <!-- Toast Toggle -->
+                                <CheckBox Content="toast" IsChecked="{Binding ShowToast, Mode=TwoWay}" Style="{StaticResource Toggle}" ToolTip="Show on-screen message when fired" VerticalAlignment="Center" FontSize="11"/>
                             </StackPanel>
 
-                            <!-- Delete variant row button -->
-                            <Button DockPanel.Dock="Right" Content="✕" Command="{Binding DeleteRowCommand}" Style="{StaticResource BtnGhost}" Width="24" Height="24" ToolTip="Delete this variant" VerticalAlignment="Center" Visibility="{Binding IsGlobal, Converter={StaticResource InverseBooleanToVisibilityConverter}}"/>
+                            <!-- Left side: App Scope and + Action -->
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <!-- App Scope button + popup (Only if HasAppScope is true) -->
+                                <Grid Visibility="{Binding HasAppScope, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <ToggleButton x:Name="ScopeToggleBtn" Content="{Binding AppScopeLabel}" Style="{StaticResource TogBtnGhost}" Height="26" Margin="0,0,0,0" FontFamily="Consolas" FontSize="11" Padding="6,0,6,0"/>
+                                    <Popup IsOpen="{Binding IsChecked, ElementName=ScopeToggleBtn, Mode=TwoWay}" StaysOpen="False" Placement="Bottom" PlacementTarget="{Binding ElementName=ScopeToggleBtn}" AllowsTransparency="True" MinWidth="160" MaxWidth="260">
+                                        <Border Background="#222222" BorderBrush="#444444" BorderThickness="1" CornerRadius="5" Padding="4" MaxHeight="260">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                                <StackPanel>
+                                                    <!-- Global toggle -->
+                                                    <CheckBox Content="Global" IsChecked="{Binding IsGlobal, Mode=TwoWay}" Foreground="#E8E8E8" Margin="4" FontFamily="Consolas" FontSize="11"/>
+                                                    <Rectangle Height="1" Fill="#444444" Margin="0,2,0,2"/>
+                                                    <!-- Mode Label -->
+                                                    <TextBlock FontFamily="Consolas" FontSize="10" Margin="4,2,4,2">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Text" Value="Only in:"/>
+                                                                <Setter Property="Foreground" Value="#FFC107"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsGlobal}" Value="True">
+                                                                        <Setter Property="Text" Value="Except in:"/>
+                                                                        <Setter Property="Foreground" Value="#5B9CF6"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                    <!-- App options -->
+                                                    <ItemsControl ItemsSource="{Binding AppScopeOptions}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsChecked, Mode=TwoWay}" ToolTip="{Binding ProcessName}" Foreground="#CCCCCC" Margin="4,2,4,2" FontFamily="Consolas" FontSize="11"/>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+
+                                                    <Border Height="1" Background="#2A2A2A" Margin="2,4,2,4"/>
+
+                                                    <!-- Add custom process input -->
+                                                    <Grid Margin="4,2,4,2">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox x:Name="ScopeCustomAppTxt" Text="{Binding CustomAppInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTB}" Height="24" FontSize="11"/>
+                                                        <TextBlock Text="Add process..." Foreground="#444444" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" IsHitTestVisible="False" Visibility="{Binding Text, ElementName=ScopeCustomAppTxt, Converter={StaticResource InverseBooleanToVisibilityConverter}}"/>
+                                                        <Button Grid.Column="1" Content="+" Command="{Binding AddCustomAppCommand}" Style="{StaticResource BtnGhost}" Width="24" Height="24" Margin="4,0,0,0"/>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </ScrollViewer>
+                                        </Border>
+                                    </Popup>
+                                </Grid>
+
+                                <!-- Add step button (footer) -->
+                                <Button Content="+ Action" Command="{Binding AddActionCommand}" Style="{StaticResource BtnGhost}" Height="24" Padding="8,0,8,0" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </DockPanel>
                     </StackPanel>
                 </Border>
-
-                <!-- Col 2: "+" add variant button (Only if global) -->
-                <Button Grid.Column="2" Content="+" Command="{Binding AddVariantCommand}" Height="26" Width="26" Margin="2,6,0,0" FontSize="15" ToolTip="Add app-specific variant" VerticalAlignment="Top">
-                    <Button.Style>
-                        <Style TargetType="Button" BasedOn="{StaticResource BtnGhost}">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                            <Style.Triggers>
-                                <MultiDataTrigger>
-                                    <MultiDataTrigger.Conditions>
-                                        <Condition Binding="{Binding IsMouseTrigger}" Value="True"/>
-                                        <Condition Binding="{Binding IsGlobal}" Value="True"/>
-                                    </MultiDataTrigger.Conditions>
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                </MultiDataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
             </Grid>
         </DataTemplate>
 
@@ -870,7 +923,7 @@
 
                         <!-- App Picker Toggle Button & Popup -->
                         <Grid Grid.Column="1" Margin="8,0,0,0">
-                            <ToggleButton x:Name="AppPickerToggle" Content="{Binding AppsLabel}" Style="{StaticResource BtnGhost}" Height="28" FontFamily="Consolas" FontSize="11" Padding="8,0,8,0" HorizontalContentAlignment="Left"/>
+                            <ToggleButton x:Name="AppPickerToggle" Content="{Binding AppsLabel}" Style="{StaticResource TogBtnGhost}" Height="28" FontFamily="Consolas" FontSize="11" Padding="8,0,8,0" HorizontalContentAlignment="Left"/>
                             <Popup IsOpen="{Binding IsChecked, ElementName=AppPickerToggle, Mode=TwoWay}" StaysOpen="False" Placement="Bottom" PlacementTarget="{Binding ElementName=AppPickerToggle}" AllowsTransparency="True" MinWidth="180" MaxWidth="300">
                                 <Border Background="#222222" BorderBrush="#444444" BorderThickness="1" CornerRadius="5" Padding="4" MaxHeight="260">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -1818,3 +1871,4 @@
 
     </Grid>
 </Window>
+

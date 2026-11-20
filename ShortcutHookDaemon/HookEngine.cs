@@ -423,10 +423,22 @@ public class ShortcutHook {
     static void AddAppNameBindings(Dictionary<string, List<Binding>> dict, Binding b) {
         if (b.AppNames == null) return;
         foreach (string name in b.AppNames) {
-            List<Binding> list;
-            if (!dict.TryGetValue(name, out list)) { list = new List<Binding>(); dict[name] = list; }
-            list.Add(b);
+            AddBindingKey(dict, name, b);
+            if (string.Equals(name, "wt.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "WindowsTerminal.exe", b);
+            else if (string.Equals(name, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "wt.exe", b);
+            else if (string.Equals(name, "Calculator.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "CalculatorApp.exe", b);
+            else if (string.Equals(name, "CalculatorApp.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "Calculator.exe", b);
         }
+    }
+
+    static void AddBindingKey(Dictionary<string, List<Binding>> dict, string key, Binding b) {
+        List<Binding> list;
+        if (!dict.TryGetValue(key, out list)) { list = new List<Binding>(); dict[key] = list; }
+        if (!list.Contains(b)) list.Add(b);
     }
 
     static string GetProcessNameFromWindow(IntPtr hwnd) {
@@ -826,7 +838,8 @@ public class ShortcutHook {
             if (!IsConfigAuthentic &&
                 !path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
                 !path.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
-                !path.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) {
+                !path.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)) {
                 try {
                     string fullPath = Path.GetFullPath(path);
                     if (!IsPathSafe(fullPath)) return;
@@ -1177,7 +1190,7 @@ public class ShortcutHook {
         // While paused, mouse input passes through untouched. Resuming is keyboard-only
         // (mouse gesture detection requires timers we don't want running while paused).
         if (IsPaused) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
-        if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+        if (IsIgnoredApp(GetForegroundProcessName()))
             return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
         try {
             int msg = wParam.ToInt32();
@@ -1411,11 +1424,44 @@ public class ShortcutHook {
         } catch { return ""; }
     }
 
-    // Case-insensitive search — avoids lambdas so ref parameters can safely call this.
+    // Case-insensitive search with alias matching (e.g. wt.exe <-> WindowsTerminal.exe)
     static bool AppsContain(string[] apps, string fgApp) {
-        if (apps == null) return false;
-        for (int i = 0; i < apps.Length; i++)
+        if (apps == null || string.IsNullOrEmpty(fgApp)) return false;
+        string fgBase = Path.GetFileNameWithoutExtension(fgApp);
+        for (int i = 0; i < apps.Length; i++) {
+            if (string.IsNullOrEmpty(apps[i])) continue;
             if (string.Equals(apps[i], fgApp, StringComparison.OrdinalIgnoreCase)) return true;
+            string appBase = Path.GetFileNameWithoutExtension(apps[i]);
+            if (string.Equals(appBase, fgBase, StringComparison.OrdinalIgnoreCase)) return true;
+            if (IsProcessAliasMatch(appBase, fgBase)) return true;
+        }
+        return false;
+    }
+
+    static bool IsProcessAliasMatch(string a, string b) {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        if ((string.Equals(a, "wt", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "WindowsTerminal", StringComparison.OrdinalIgnoreCase)) ||
+            (string.Equals(a, "WindowsTerminal", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "wt", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if ((string.Equals(a, "Calculator", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "CalculatorApp", StringComparison.OrdinalIgnoreCase)) ||
+            (string.Equals(a, "CalculatorApp", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "Calculator", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if ((string.Equals(a, "Settings", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "SystemSettings", StringComparison.OrdinalIgnoreCase)) ||
+            (string.Equals(a, "SystemSettings", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "Settings", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return false;
+    }
+
+    static bool IsIgnoredApp(string fgApp) {
+        if (IgnoredApps.Count == 0 || string.IsNullOrEmpty(fgApp)) return false;
+        string fgBase = Path.GetFileNameWithoutExtension(fgApp);
+        foreach (var app in IgnoredApps) {
+            if (string.IsNullOrEmpty(app)) continue;
+            if (string.Equals(app, fgApp, StringComparison.OrdinalIgnoreCase)) return true;
+            string appBase = Path.GetFileNameWithoutExtension(app);
+            if (string.Equals(appBase, fgBase, StringComparison.OrdinalIgnoreCase)) return true;
+            if (IsProcessAliasMatch(appBase, fgBase)) return true;
+        }
         return false;
     }
 
@@ -1515,7 +1561,7 @@ public class ShortcutHook {
         try {
             KBDLLHOOKSTRUCT data = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
             if ((data.flags & LLKHF_INJECTED) != 0) return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
-            if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+            if (IsIgnoredApp(GetForegroundProcessName()))
                 return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
 
             int  msg    = wParam.ToInt32();
