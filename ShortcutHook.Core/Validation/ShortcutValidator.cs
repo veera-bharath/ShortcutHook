@@ -12,6 +12,7 @@ public static class ShortcutValidator
 
     public static void ValidateShortcutOutput(string combo)
     {
+        if (combo.StartsWith("hscroll:", StringComparison.OrdinalIgnoreCase)) return;
         var tokens = combo.Trim().Split('+').Select(t => t.Trim().ToUpperInvariant()).ToArray();
         if (tokens.All(string.IsNullOrEmpty)) throw new ArgumentException("Output cannot be empty");
         foreach (var tok in tokens)

@@ -152,57 +152,64 @@ public class AppScopeOptionViewModel : ViewModelBase
 
 public class ChainedActionViewModel : ViewModelBase
 {
-    private ActionKind _action = ActionKind.Shortcut;
-    public ActionKind Action
+    private ActionKind? _action;
+    public ActionKind? Action
     {
         get => _action;
         set
         {
             if (SetProperty(ref _action, value))
             {
-                switch (value)
+                if (value.HasValue)
                 {
-                    case ActionKind.ShiftHome: OutputValue = "Shift+Home"; break;
-                    case ActionKind.ShiftEnd: OutputValue = "Shift+End"; break;
-                    case ActionKind.CtrlShiftLeft: OutputValue = "Ctrl+Shift+Left"; break;
-                    case ActionKind.CtrlShiftRight: OutputValue = "Ctrl+Shift+Right"; break;
-                    case ActionKind.HScrollLeft: OutputValue = "hscroll:left"; break;
-                    case ActionKind.HScrollRight: OutputValue = "hscroll:right"; break;
-                    case ActionKind.TogglePause: OutputValue = "toggle:pause"; break;
-                    case ActionKind.OpenApp:
-                        if (!OutputValue.StartsWith("open:", StringComparison.Ordinal))
-                        {
-                            var firstApp = Apps.FirstOrDefault();
-                            OutputValue = firstApp != null ? "open:" + firstApp.Path : "";
-                        }
-                        break;
-                    case ActionKind.OpenFile:
-                    case ActionKind.OpenFolder:
-                        if (!OutputValue.StartsWith("open:", StringComparison.Ordinal))
-                            OutputValue = "";
-                        break;
-                    case ActionKind.SwitchProfile:
-                        if (!OutputValue.StartsWith("profile:", StringComparison.Ordinal))
-                        {
-                            var firstProfile = Profiles.FirstOrDefault();
-                            OutputValue = firstProfile != null ? "profile:" + firstProfile.Name : "";
-                        }
-                        break;
-                    case ActionKind.Command:
-                        if (OutputValue.StartsWith("cmd:", StringComparison.Ordinal) || OutputValue.StartsWith("cmdw:", StringComparison.Ordinal))
-                        {
-                            CmdShow = OutputValue.StartsWith("cmdw:", StringComparison.Ordinal);
-                            OutputValue = OutputValue.Substring(CmdShow ? 5 : 4);
-                        }
-                        break;
-                    case ActionKind.TypeText:
-                        if (OutputValue.StartsWith("type:", StringComparison.Ordinal))
-                            OutputValue = OutputValue.Substring(5);
-                        break;
-                    case ActionKind.Shortcut:
-                        if (OutputValue.StartsWith("open:", StringComparison.Ordinal) || OutputValue.StartsWith("profile:", StringComparison.Ordinal) || OutputValue.StartsWith("type:", StringComparison.Ordinal) || OutputValue.StartsWith("cmd:", StringComparison.Ordinal) || OutputValue.StartsWith("cmdw:", StringComparison.Ordinal))
-                            OutputValue = "";
-                        break;
+                    switch (value.Value)
+                    {
+                        case ActionKind.ShiftHome: OutputValue = "Shift+Home"; break;
+                        case ActionKind.ShiftEnd: OutputValue = "Shift+End"; break;
+                        case ActionKind.CtrlShiftLeft: OutputValue = "Ctrl+Shift+Left"; break;
+                        case ActionKind.CtrlShiftRight: OutputValue = "Ctrl+Shift+Right"; break;
+                        case ActionKind.HScrollLeft: OutputValue = "hscroll:left"; break;
+                        case ActionKind.HScrollRight: OutputValue = "hscroll:right"; break;
+                        case ActionKind.TogglePause: OutputValue = "toggle:pause"; break;
+                        case ActionKind.OpenApp:
+                            if (!OutputValue.StartsWith("open:", StringComparison.Ordinal))
+                            {
+                                var firstApp = Apps.FirstOrDefault();
+                                OutputValue = firstApp != null ? "open:" + firstApp.Path : "";
+                            }
+                            break;
+                        case ActionKind.OpenFile:
+                        case ActionKind.OpenFolder:
+                            if (!OutputValue.StartsWith("open:", StringComparison.Ordinal))
+                                OutputValue = "";
+                            break;
+                        case ActionKind.SwitchProfile:
+                            if (!OutputValue.StartsWith("profile:", StringComparison.Ordinal))
+                            {
+                                var firstProfile = Profiles.FirstOrDefault();
+                                OutputValue = firstProfile != null ? "profile:" + firstProfile.Name : "";
+                            }
+                            break;
+                        case ActionKind.Command:
+                            if (OutputValue.StartsWith("cmd:", StringComparison.Ordinal) || OutputValue.StartsWith("cmdw:", StringComparison.Ordinal))
+                            {
+                                CmdShow = OutputValue.StartsWith("cmdw:", StringComparison.Ordinal);
+                                OutputValue = OutputValue.Substring(CmdShow ? 5 : 4);
+                            }
+                            break;
+                        case ActionKind.TypeText:
+                            if (OutputValue.StartsWith("type:", StringComparison.Ordinal))
+                                OutputValue = OutputValue.Substring(5);
+                            break;
+                        case ActionKind.Shortcut:
+                            if (OutputValue.StartsWith("open:", StringComparison.Ordinal) || OutputValue.StartsWith("profile:", StringComparison.Ordinal) || OutputValue.StartsWith("type:", StringComparison.Ordinal) || OutputValue.StartsWith("cmd:", StringComparison.Ordinal) || OutputValue.StartsWith("cmdw:", StringComparison.Ordinal) || OutputValue.StartsWith("hscroll:", StringComparison.Ordinal))
+                                OutputValue = "";
+                            break;
+                    }
+                }
+                else
+                {
+                    OutputValue = "";
                 }
                 OnPropertyChanged(nameof(DisplayPath));
                 OnPropertyChanged(nameof(SelectedApp));
@@ -325,8 +332,15 @@ public class ChainedActionViewModel : ViewModelBase
         {
             if (Action == ActionKind.OpenApp && OutputValue.StartsWith("open:", StringComparison.Ordinal))
             {
-                var path = OutputValue.Substring(5);
-                return Apps.FirstOrDefault(a => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase));
+                var path = OutputValue.Substring(5).Trim();
+                var exact = Apps.FirstOrDefault(a => string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase));
+                if (exact != null) return exact;
+
+                var fileName = Path.GetFileName(path);
+                return Apps.FirstOrDefault(a =>
+                    string.Equals(Path.GetFileName(a.Path), fileName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a.Name, path, StringComparison.OrdinalIgnoreCase) ||
+                    (string.Equals(fileName, "wt.exe", StringComparison.OrdinalIgnoreCase) && a.Name.IndexOf("Terminal", StringComparison.OrdinalIgnoreCase) >= 0));
             }
             return null;
         }
@@ -364,14 +378,16 @@ public class ChainedActionViewModel : ViewModelBase
     public ICommand DeleteCommand { get; }
     public ICommand BrowseFileCommand { get; }
     public ICommand BrowseFolderCommand { get; }
+    public ActionDef[] AvailableActions { get; }
 
     private readonly Action _markDirty;
 
-    public ChainedActionViewModel(Action markDirty, List<AppEntry> apps, ObservableCollection<ProfileViewModel> profiles, Action<ChainedActionViewModel> delete, Action<ChainedActionViewModel> record)
+    public ChainedActionViewModel(Action markDirty, List<AppEntry> apps, ObservableCollection<ProfileViewModel> profiles, Action<ChainedActionViewModel> delete, Action<ChainedActionViewModel> record, ActionDef[] availableActions)
     {
         _markDirty = markDirty;
         Apps = apps;
         Profiles = profiles;
+        AvailableActions = availableActions;
         DeleteCommand = new RelayCommand(() => delete(this));
         RecordShortcutCommand = new RelayCommand(() => record(this));
         ToggleRecordModeCommand = new RelayCommand(() =>
@@ -402,7 +418,12 @@ public class ChainedActionViewModel : ViewModelBase
     {
         bool Has(ActionKind k) => availableActions == null || Array.FindIndex(availableActions, d => d.Kind == k) >= 0;
 
-        if (output.StartsWith("cmd:", StringComparison.Ordinal) ||
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            _action = null;
+            _outputValue = "";
+        }
+        else if (output.StartsWith("cmd:", StringComparison.Ordinal) ||
             output.StartsWith("cmdw:", StringComparison.Ordinal))
         {
             _action = ActionKind.Command;
@@ -588,6 +609,13 @@ public class RowViewModel : ViewModelBase
         set => SetProperty(ref _appScopeLabel, value);
     }
 
+    private string _customAppInput = "";
+    public string CustomAppInput
+    {
+        get => _customAppInput;
+        set => SetProperty(ref _customAppInput, value);
+    }
+
     public ObservableCollection<AppScopeOptionViewModel> AppScopeOptions { get; } = new();
 
     public bool IsMouseTrigger { get; }
@@ -598,6 +626,7 @@ public class RowViewModel : ViewModelBase
     public ICommand AddActionCommand { get; }
     public ICommand DeleteRowCommand { get; }
     public ICommand ToggleGlobalCommand { get; }
+    public ICommand AddCustomAppCommand { get; }
 
     private readonly Action _markDirty;
     private readonly List<AppEntry> _allApps;
@@ -623,7 +652,7 @@ public class RowViewModel : ViewModelBase
 
         AddActionCommand = new RelayCommand(() =>
         {
-            var item = new ChainedActionViewModel(_markDirty, _allApps, _profiles, DeleteActionStep, _recordAction);
+            var item = new ChainedActionViewModel(_markDirty, _allApps, _profiles, DeleteActionStep, _recordAction, AvailableActions);
             Chain.Add(item);
             UpdateMultiStepFlags();
             _markDirty();
@@ -634,6 +663,23 @@ public class RowViewModel : ViewModelBase
         ToggleGlobalCommand = new RelayCommand(() =>
         {
             IsGlobal = !IsGlobal;
+        });
+
+        AddCustomAppCommand = new RelayCommand(() =>
+        {
+            var name = CustomAppInput.Trim();
+            if (string.IsNullOrEmpty(name)) return;
+            if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name += ".exe";
+
+            var list = IsGlobal ? ExceptApps : Apps;
+            if (!list.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                list.Add(name);
+                UpdateAppScopeOptions();
+                UpdateAppScopeLabel();
+                _markDirty();
+            }
+            CustomAppInput = "";
         });
     }
 
@@ -662,7 +708,7 @@ public class RowViewModel : ViewModelBase
         var effectiveDelays = GetEffectiveDelays(outputs, outputDelays, outputDelay);
         for (int i = 0; i < outputs.Count; i++)
         {
-            var item = new ChainedActionViewModel(_markDirty, _allApps, _profiles, DeleteActionStep, _recordAction);
+            var item = new ChainedActionViewModel(_markDirty, _allApps, _profiles, DeleteActionStep, _recordAction, AvailableActions);
             item.ParseOutputString(outputs[i], AvailableActions);
             if (i < effectiveDelays.Count)
                 item.Delay = effectiveDelays[i];
@@ -670,7 +716,7 @@ public class RowViewModel : ViewModelBase
         }
         if (Chain.Count == 0)
         {
-            Chain.Add(new ChainedActionViewModel(_markDirty, _allApps, _profiles, DeleteActionStep, _recordAction));
+            Chain.Add(new ChainedActionViewModel(_markDirty, _allApps, _profiles, DeleteActionStep, _recordAction, AvailableActions));
         }
         UpdateMultiStepFlags();
     }
@@ -769,6 +815,19 @@ public class MouseTriggerGroupViewModel : ViewModelBase
     private readonly ObservableCollection<ProfileViewModel> _profiles;
     private readonly Action<ChainedActionViewModel> _recordAction;
 
+    public string NoteLabel
+    {
+        get => Variants.Count > 0 ? Variants[0].NoteLabel : "";
+        set
+        {
+            if (Variants.Count > 0 && Variants[0].NoteLabel != value)
+            {
+                Variants[0].NoteLabel = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public MouseTriggerGroupViewModel(MouseGestureDef def, Action markDirty, List<AppEntry> allApps,
                                        ObservableCollection<ProfileViewModel> profiles, Action<ChainedActionViewModel> recordAction)
     {
@@ -779,6 +838,16 @@ public class MouseTriggerGroupViewModel : ViewModelBase
         _profiles = profiles;
         _recordAction = recordAction;
 
+        Variants.CollectionChanged += (s, e) =>
+        {
+            if (Variants.Count > 0)
+            {
+                Variants[0].PropertyChanged -= OnFirstVariantPropertyChanged;
+                Variants[0].PropertyChanged += OnFirstVariantPropertyChanged;
+            }
+            OnPropertyChanged(nameof(NoteLabel));
+        };
+
         AddVariantCommand = new RelayCommand(() =>
         {
             var row = new RowViewModel(_markDirty, _allApps, _profiles, _recordAction, DeleteVariant,
@@ -788,6 +857,14 @@ public class MouseTriggerGroupViewModel : ViewModelBase
             Variants.Add(row);
             _markDirty();
         });
+    }
+
+    private void OnFirstVariantPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(RowViewModel.NoteLabel))
+        {
+            OnPropertyChanged(nameof(NoteLabel));
+        }
     }
 
     public void DeleteVariant(RowViewModel row)
@@ -862,6 +939,19 @@ public class KbdTriggerCardViewModel : ViewModelBase
     private readonly ObservableCollection<ProfileViewModel> _profiles;
     private readonly Action<ChainedActionViewModel> _recordAction;
 
+    public string NoteLabel
+    {
+        get => Variants.Count > 0 ? Variants[0].NoteLabel : "";
+        set
+        {
+            if (Variants.Count > 0 && Variants[0].NoteLabel != value)
+            {
+                Variants[0].NoteLabel = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public KbdTriggerCardViewModel(string trigger, Action markDirty, List<AppEntry> allApps,
                                    ObservableCollection<ProfileViewModel> profiles, Action<ChainedActionViewModel> recordAction,
                                    Action<KbdTriggerCardViewModel> deleteCard, Action<KbdTriggerCardViewModel> recordCard)
@@ -871,6 +961,16 @@ public class KbdTriggerCardViewModel : ViewModelBase
         _allApps = allApps;
         _profiles = profiles;
         _recordAction = recordAction;
+
+        Variants.CollectionChanged += (s, e) =>
+        {
+            if (Variants.Count > 0)
+            {
+                Variants[0].PropertyChanged -= OnFirstVariantPropertyChanged;
+                Variants[0].PropertyChanged += OnFirstVariantPropertyChanged;
+            }
+            OnPropertyChanged(nameof(NoteLabel));
+        };
 
         AddVariantCommand = new RelayCommand(() =>
         {
@@ -884,6 +984,14 @@ public class KbdTriggerCardViewModel : ViewModelBase
 
         DeleteCardCommand = new RelayCommand(() => deleteCard(this));
         RecordCommand = new RelayCommand(() => recordCard(this));
+    }
+
+    private void OnFirstVariantPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(RowViewModel.NoteLabel))
+        {
+            OnPropertyChanged(nameof(NoteLabel));
+        }
     }
 
     public void DeleteVariant(RowViewModel row)
@@ -930,6 +1038,19 @@ public class AppTriggerCardViewModel : ViewModelBase
 
     public RowViewModel Row { get; }
 
+    public string NoteLabel
+    {
+        get => Row.NoteLabel;
+        set
+        {
+            if (Row.NoteLabel != value)
+            {
+                Row.NoteLabel = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     private string _customAppInput = "";
     public string CustomAppInput
     {
@@ -951,6 +1072,14 @@ public class AppTriggerCardViewModel : ViewModelBase
 
         Row = new RowViewModel(_markDirty, _allApps, profiles, recordAction, _ => {},
                              isMouseTrigger: false, null, hasAppScope: false, MainWindowViewModel.StandardActions);
+
+        Row.PropertyChanged += (s, e) =>
+        {
+            if (e.PropertyName == nameof(RowViewModel.NoteLabel))
+            {
+                OnPropertyChanged(nameof(NoteLabel));
+            }
+        };
 
         DeleteCardCommand = new RelayCommand(() => deleteCard(this));
 

@@ -2,6 +2,11 @@
 setlocal
 pushd "%~dp0"
 
+echo Stopping running instances...
+taskkill /F /IM ShortcutHookDaemon.exe >nul 2>&1
+taskkill /F /IM ShortcutHookUI.exe >nul 2>&1
+timeout /t 1 /nobreak >nul 2>&1
+
 echo Building ShortcutHookDaemon...
 dotnet publish ..\ShortcutHookDaemon\ShortcutHookDaemon.csproj -c Release -v minimal || goto :err
 if not exist Resources mkdir Resources
@@ -29,4 +34,5 @@ exit /b 0
 echo.
 echo Publish failed.
 popd
+pause
 exit /b 1

@@ -18,7 +18,10 @@ public enum ActionKind
     SwitchProfile
 }
 
-public record ActionDef(string Label, ActionKind Kind);
+public record ActionDef(string Label, ActionKind Kind)
+{
+    public override string ToString() => Label;
+}
 
 public sealed class MouseGestureDef
 {

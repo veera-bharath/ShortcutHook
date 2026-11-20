@@ -305,7 +305,7 @@ internal static class ConfigService
 
         try
         {
-            var export = new ProfileEntry { name = profile.name, bindings = profile.bindings };
+            var export = new ProfileEntry { name = profile.name, bindings = profile.bindings ?? new() };
             File.WriteAllText(path, JsonSerializer.Serialize(export, JsonOpts));
         }
         finally
@@ -705,53 +705,349 @@ internal static class StartupService
 
 internal static class AppScanner
 {
-    // Resolves a .lnk shortcut to the process executable name it launches (e.g. "chrome.exe").
-    // Returns null for shortcuts with no resolvable file target (e.g. UWP "shell:AppsFolder\..." links).
-    public static string? ResolveProcessName(string lnkPath)
+    // Resolves an app path (shortcut .lnk, direct .exe, or shell:AppsFolder/AUMID) to the
+    // foreground process executable name (e.g. "chrome.exe", "WindowsTerminal.exe").
+    public static string? ResolveProcessName(string path)
     {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        path = path.Trim();
+
+        // 1. Direct .exe file path or executable name
+        if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            var exe = Path.GetFileName(path);
+            return MapAliasToProcess(exe);
+        }
+
+        // 2. shell:AppsFolder\... or package AUMID
+        if (path.StartsWith("shell:AppsFolder\\", StringComparison.OrdinalIgnoreCase) || path.Contains('!'))
+        {
+            var resolved = ResolveUwpProcessName(path);
+            if (!string.IsNullOrEmpty(resolved)) return resolved;
+        }
+
+        // 3. .lnk shortcut file
+        if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+        {
+            try
+            {
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType != null)
+                {
+                    dynamic shell = Activator.CreateInstance(shellType)!;
+                    dynamic shortcut = shell.CreateShortcut(path);
+                    string target = shortcut.TargetPath as string ?? "";
+                    if (!string.IsNullOrWhiteSpace(target))
+                    {
+                        if (target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                            return MapAliasToProcess(Path.GetFileName(target));
+
+                        if (target.StartsWith("shell:AppsFolder\\", StringComparison.OrdinalIgnoreCase) || target.Contains('!'))
+                        {
+                            var uwp = ResolveUwpProcessName(target);
+                            if (!string.IsNullOrEmpty(uwp)) return uwp;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // If WScript failed to resolve (e.g. modern MSIX shortcut), check shortcut name
+            var lnkName = Path.GetFileNameWithoutExtension(path);
+            var fallback = MapNameToProcess(lnkName);
+            if (!string.IsNullOrEmpty(fallback)) return fallback;
+        }
+
+        return null;
+    }
+
+    private static string MapAliasToProcess(string exe)
+    {
+        if (string.Equals(exe, "wt.exe", StringComparison.OrdinalIgnoreCase))
+            return "WindowsTerminal.exe";
+        if (string.Equals(exe, "Calculator.exe", StringComparison.OrdinalIgnoreCase))
+            return "CalculatorApp.exe";
+        return exe;
+    }
+
+    private static string? MapNameToProcess(string name)
+    {
+        if (name.IndexOf("Terminal", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsTerminal.exe";
+        if (name.IndexOf("Calculator", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "CalculatorApp.exe";
+        if (name.IndexOf("Snipping Tool", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            name.IndexOf("Snip & Sketch", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SnippingTool.exe";
+        if (name.IndexOf("Settings", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SystemSettings.exe";
+        if (name.IndexOf("Camera", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsCamera.exe";
+        if (name.IndexOf("Photos", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Photos.exe";
+        return null;
+    }
+
+    private static string? ResolveUwpProcessName(string uwpPath)
+    {
+        string aumid = uwpPath;
+        if (aumid.StartsWith("shell:AppsFolder\\", StringComparison.OrdinalIgnoreCase))
+            aumid = aumid.Substring("shell:AppsFolder\\".Length);
+
+        // Check known patterns first
+        if (aumid.IndexOf("WindowsTerminal", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsTerminal.exe";
+        if (aumid.IndexOf("WindowsCalculator", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "CalculatorApp.exe";
+        if (aumid.IndexOf("WindowsCamera", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsCamera.exe";
+        if (aumid.IndexOf("ScreenSketch", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            aumid.IndexOf("SnippingTool", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SnippingTool.exe";
+        if (aumid.IndexOf("WindowsNotepad", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Notepad.exe";
+        if (aumid.IndexOf("Microsoft.Paint", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "mspaint.exe";
+        if (aumid.IndexOf("SystemSettings", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            aumid.IndexOf("ImmersiveControlPanel", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SystemSettings.exe";
+        if (aumid.IndexOf("Windows.Photos", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Photos.exe";
+        if (aumid.IndexOf("ZuneMusic", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            aumid.IndexOf("Media.Player", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Media.Player.exe";
+        if (aumid.IndexOf("OutlookForWindows", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "olk.exe";
+        if (aumid.IndexOf("DesktopAppInstaller", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "winget.exe";
+
+        // Dynamic registry lookup in HKCU AppModel Repository
         try
         {
-            var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return null;
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic shortcut = shell.CreateShortcut(lnkPath);
-            string target = shortcut.TargetPath as string ?? "";
-            if (string.IsNullOrWhiteSpace(target) || !target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                return null;
-            return Path.GetFileName(target);
+            int bang = aumid.IndexOf('!');
+            string family = bang > 0 ? aumid.Substring(0, bang) : aumid;
+            using var famKey = Registry.CurrentUser.OpenSubKey(
+                $@"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Families\{family}");
+            if (famKey != null)
+            {
+                var pkgNames = famKey.GetSubKeyNames();
+                if (pkgNames.Length > 0)
+                {
+                    string pkgFullName = pkgNames[0];
+                    using var pkgKey = Registry.CurrentUser.OpenSubKey(
+                        $@"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\{pkgFullName}");
+                    if (pkgKey != null)
+                    {
+                        var rootFolder = pkgKey.GetValue("PackageRootFolder") as string;
+                        if (!string.IsNullOrEmpty(rootFolder) && Directory.Exists(rootFolder))
+                        {
+                            var manifestPath = Path.Combine(rootFolder, "AppxManifest.xml");
+                            if (File.Exists(manifestPath))
+                            {
+                                string manifestText = File.ReadAllText(manifestPath);
+                                var m = System.Text.RegularExpressions.Regex.Match(manifestText, @"<Application\b[^>]*\bExecutable=""([^""]+)""", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                if (m.Success && !string.IsNullOrEmpty(m.Groups[1].Value))
+                                    return Path.GetFileName(m.Groups[1].Value);
+                            }
+                        }
+                    }
+                }
+            }
         }
-        catch { return null; }
+        catch { }
+
+        return null;
+    }
+
+    private static bool IsJunk(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return true;
+        if (name.IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("uninst",    StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("remove",    StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("setup",     StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("help",      StringComparison.OrdinalIgnoreCase) >= 0 && name.Length <= 8) return true;
+        return false;
     }
 
     public static List<AppEntry> Scan()
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var list = new List<AppEntry>();
+
+        void AddEntry(string name, string path)
+        {
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(path)) return;
+            name = name.Trim();
+            path = path.Trim();
+            if (IsJunk(name)) return;
+
+            // Normalize terminal display name
+            if (name.Equals("Terminal", StringComparison.OrdinalIgnoreCase) &&
+                (path.IndexOf("WindowsTerminal", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 path.EndsWith("wt.exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                name = "Windows Terminal";
+            }
+
+            // Deduplicate by path or display name
+            if (!seenPaths.Add(path)) return;
+            if (!seenNames.Add(name)) return;
+
+            list.Add(new AppEntry { Name = name, Path = path });
+        }
+
+        // 1. Packaged & Store apps via shell:AppsFolder (COM)
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellType != null)
+            {
+                dynamic shell = Activator.CreateInstance(shellType)!;
+                dynamic folder = shell.NameSpace("shell:AppsFolder");
+                if (folder != null)
+                {
+                    foreach (dynamic item in folder.Items())
+                    {
+                        try
+                        {
+                            string name = item.Name as string ?? "";
+                            string p = item.Path as string ?? "";
+                            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(p)) continue;
+                            if (p.StartsWith("::{", StringComparison.Ordinal)) continue; // ignore GUIDs
+                            if (p.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
+                                p.EndsWith(".url",  StringComparison.OrdinalIgnoreCase) ||
+                                p.EndsWith(".pdf",  StringComparison.OrdinalIgnoreCase)) continue;
+
+                            string launchPath = (p.Contains(":\\") || p.StartsWith("\\\\"))
+                                ? p
+                                : "shell:AppsFolder\\" + p;
+
+                            AddEntry(name, launchPath);
+                        }
+                        catch { }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        // 2. Start Menu & Desktop .lnk files
         var dirs = new[]
         {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                          "Microsoft", "Windows", "Start Menu", "Programs"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                          "Microsoft", "Windows", "Start Menu", "Programs"),
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
         };
         foreach (var dir in dirs)
         {
-            if (!Directory.Exists(dir)) continue;
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
             IEnumerable<string> files;
             try { files = Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories); }
             catch { continue; }
             foreach (var f in files)
             {
                 var name = Path.GetFileNameWithoutExtension(f);
-                if (name.IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                if (name.IndexOf("uninst",    StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                if (name.IndexOf("remove",    StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                if (!seen.Add(name)) continue;
-                list.Add(new AppEntry { Name = name, Path = f });
+                AddEntry(name, f);
             }
         }
+
+        // 3. Execution aliases (%LOCALAPPDATA%\Microsoft\WindowsApps)
+        try
+        {
+            var winAppsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                          "Microsoft", "WindowsApps");
+            if (Directory.Exists(winAppsDir))
+            {
+                foreach (var file in Directory.EnumerateFiles(winAppsDir, "*.exe"))
+                {
+                    var fileName = Path.GetFileName(file);
+                    var baseName = Path.GetFileNameWithoutExtension(file);
+                    string friendlyName = fileName.ToLowerInvariant() switch
+                    {
+                        "wt.exe" => "Windows Terminal",
+                        "winget.exe" => "Windows Package Manager",
+                        "mediaplayer.exe" => "Windows Media Player",
+                        "olk.exe" => "Outlook",
+                        "python.exe" => "Python",
+                        "python3.exe" => "Python 3",
+                        _ => baseName
+                    };
+                    AddEntry(friendlyName, file);
+                }
+            }
+        }
+        catch { }
+
+        // 4. Registry App Paths (HKCU & HKLM)
+        ScanAppPathsRegistry(Registry.CurrentUser, AddEntry);
+        ScanAppPathsRegistry(Registry.LocalMachine, AddEntry);
+
+        // 5. Currently running top-level processes
+        try
+        {
+            foreach (var proc in Process.GetProcesses())
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(proc.MainWindowTitle)) continue;
+                    string exePath;
+                    try { exePath = proc.MainModule?.FileName ?? ""; } catch { continue; }
+                    if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) continue;
+
+                    string pName = proc.ProcessName;
+                    string friendlyName = pName.Equals("WindowsTerminal", StringComparison.OrdinalIgnoreCase)
+                        ? "Windows Terminal"
+                        : pName;
+
+                    AddEntry(friendlyName, exePath);
+                }
+                catch { }
+            }
+        }
+        catch { }
+
         list.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
         return list;
+    }
+
+    private static void ScanAppPathsRegistry(RegistryKey root, Action<string, string> add)
+    {
+        try
+        {
+            using var key = root.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths");
+            if (key == null) return;
+            foreach (var subName in key.GetSubKeyNames())
+            {
+                try
+                {
+                    using var sub = key.OpenSubKey(subName);
+                    var target = sub?.GetValue("") as string;
+                    if (string.IsNullOrWhiteSpace(target)) continue;
+                    target = target.Trim('"');
+                    if (!File.Exists(target)) continue;
+
+                    string baseName = Path.GetFileNameWithoutExtension(subName);
+                    string friendlyName = subName.ToLowerInvariant() switch
+                    {
+                        "wt.exe" => "Windows Terminal",
+                        "chrome.exe" => "Google Chrome",
+                        "msedge.exe" => "Microsoft Edge",
+                        "brave.exe" => "Brave Browser",
+                        "code.exe" => "Visual Studio Code",
+                        "devenv.exe" => "Visual Studio",
+                        _ => baseName
+                    };
+                    add(friendlyName, target);
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 }
 
