@@ -872,8 +872,11 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
+    private bool _isLoadingBindings;
+
     public void MarkDirty()
     {
+        if (_isLoadingBindings) return;
         IsDirty = true;
     }
 
@@ -932,161 +935,168 @@ public class MainWindowViewModel : ViewModelBase
 
     public void ReloadBindingsFromConfig()
     {
-        IsDirty = false;
-
-        // Load Profiles
-        var root = ConfigService.ReadConfig(InstallService.ScriptRoot);
-        Profiles.Clear();
-        var activeName = root.activeProfile ?? "Default";
-        if (root.profiles != null && root.profiles.Count > 0)
+        _isLoadingBindings = true;
+        try
         {
-            foreach (var profile in root.profiles)
+            // Load Profiles
+            var root = ConfigService.ReadConfig(InstallService.ScriptRoot);
+            Profiles.Clear();
+            var activeName = root.activeProfile ?? "Default";
+            if (root.profiles != null && root.profiles.Count > 0)
             {
-                Profiles.Add(new ProfileViewModel(profile.name, SelectProfile, SelectProfileForExportMethod, RenameProfile, DeleteProfile) { IsSelected = string.Equals(activeName, profile.name, StringComparison.OrdinalIgnoreCase) });
-            }
-        }
-        else
-        {
-            Profiles.Add(new ProfileViewModel("Default", SelectProfile, SelectProfileForExportMethod, RenameProfile, DeleteProfile) { IsSelected = true });
-        }
-
-        // Active bindings
-        var activeBindings = ConfigService.GetActiveProfile(root).bindings;
-
-        // Load Mouse Triggers
-        MouseTriggers.Clear();
-        var mouseGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var b in activeBindings)
-        {
-            if (!b.trigger.StartsWith("mouse:", StringComparison.Ordinal)) continue;
-            var g = b.trigger.Substring(6);
-            if (!mouseGroups.TryGetValue(g, out var list))
-            {
-                list = new List<BindingEntry>();
-                mouseGroups[g] = list;
-            }
-            list.Add(b);
-        }
-
-        foreach (var def in MouseDefs)
-        {
-            mouseGroups.TryGetValue(def.Gesture, out var bindings);
-            var group = new MouseTriggerGroupViewModel(def, MarkDirty, AllApps, Profiles, RecordAction);
-
-            // Global row
-            var globalEntry = bindings?.FirstOrDefault(b => b.apps == null || b.apps.Count == 0);
-            var globalRow = new RowViewModel(MarkDirty, AllApps, Profiles, RecordAction, group.DeleteVariant,
-                                             isMouseTrigger: true, def.Gesture, hasAppScope: true, BuildActionsForGesture(def));
-            globalRow.InitializeChain(globalEntry?.outputs ?? new List<string> { "" }, globalEntry?.outputDelays, globalEntry?.outputDelay ?? 0);
-            globalRow.InitializeAppScope(isGlobal: true, new List<string>(), globalEntry?.exceptApps);
-            globalRow.Enabled = globalEntry?.enabled != false;
-            globalRow.Debounce = globalEntry?.debounce ?? false;
-            globalRow.ShowToast = globalEntry?.showToast ?? false;
-            globalRow.NoteLabel = globalEntry?.label ?? "";
-            group.Variants.Add(globalRow);
-
-            // App-scoped variant rows
-            if (bindings != null)
-            {
-                foreach (var b in bindings.Where(b => b.apps != null && b.apps.Count > 0))
+                foreach (var profile in root.profiles)
                 {
-                    var row = new RowViewModel(MarkDirty, AllApps, Profiles, RecordAction, group.DeleteVariant,
-                                               isMouseTrigger: true, def.Gesture, hasAppScope: true, BuildActionsForGesture(def));
-                    row.InitializeChain(b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay);
-                    row.InitializeAppScope(isGlobal: false, b.apps!, null);
-                    row.Enabled = b.enabled != false;
-                    row.Debounce = b.debounce;
-                    row.ShowToast = b.showToast;
-                    row.NoteLabel = b.label ?? "";
-                    group.Variants.Add(row);
+                    Profiles.Add(new ProfileViewModel(profile.name, SelectProfile, SelectProfileForExportMethod, RenameProfile, DeleteProfile) { IsSelected = string.Equals(activeName, profile.name, StringComparison.OrdinalIgnoreCase) });
                 }
             }
-            MouseTriggers.Add(group);
-        }
+            else
+            {
+                Profiles.Add(new ProfileViewModel("Default", SelectProfile, SelectProfileForExportMethod, RenameProfile, DeleteProfile) { IsSelected = true });
+            }
 
-        // Load Keyboard Triggers
-        KbdTriggers.Clear();
-        var kbdGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.Ordinal);
-        var kbdOrder = new List<string>();
-        foreach (var b in activeBindings)
+            // Active bindings
+            var activeBindings = ConfigService.GetActiveProfile(root).bindings;
+
+            // Load Mouse Triggers
+            MouseTriggers.Clear();
+            var mouseGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var b in activeBindings)
+            {
+                if (!b.trigger.StartsWith("mouse:", StringComparison.Ordinal)) continue;
+                var g = b.trigger.Substring(6);
+                if (!mouseGroups.TryGetValue(g, out var list))
+                {
+                    list = new List<BindingEntry>();
+                    mouseGroups[g] = list;
+                }
+                list.Add(b);
+            }
+
+            foreach (var def in MouseDefs)
+            {
+                mouseGroups.TryGetValue(def.Gesture, out var bindings);
+                var group = new MouseTriggerGroupViewModel(def, MarkDirty, AllApps, Profiles, RecordAction);
+
+                // Global row
+                var globalEntry = bindings?.FirstOrDefault(b => b.apps == null || b.apps.Count == 0);
+                var globalRow = new RowViewModel(MarkDirty, AllApps, Profiles, RecordAction, group.DeleteVariant,
+                                                 isMouseTrigger: true, def.Gesture, hasAppScope: true, BuildActionsForGesture(def));
+                globalRow.InitializeChain(globalEntry?.outputs ?? new List<string> { "" }, globalEntry?.outputDelays, globalEntry?.outputDelay ?? 0);
+                globalRow.InitializeAppScope(isGlobal: true, new List<string>(), globalEntry?.exceptApps);
+                globalRow.Enabled = globalEntry?.enabled != false;
+                globalRow.Debounce = globalEntry?.debounce ?? false;
+                globalRow.ShowToast = globalEntry?.showToast ?? false;
+                globalRow.NoteLabel = globalEntry?.label ?? "";
+                group.Variants.Add(globalRow);
+
+                // App-scoped variant rows
+                if (bindings != null)
+                {
+                    foreach (var b in bindings.Where(b => b.apps != null && b.apps.Count > 0))
+                    {
+                        var row = new RowViewModel(MarkDirty, AllApps, Profiles, RecordAction, group.DeleteVariant,
+                                                   isMouseTrigger: true, def.Gesture, hasAppScope: true, BuildActionsForGesture(def));
+                        row.InitializeChain(b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay);
+                        row.InitializeAppScope(isGlobal: false, b.apps!, null);
+                        row.Enabled = b.enabled != false;
+                        row.Debounce = b.debounce;
+                        row.ShowToast = b.showToast;
+                        row.NoteLabel = b.label ?? "";
+                        group.Variants.Add(row);
+                    }
+                }
+                MouseTriggers.Add(group);
+            }
+
+            // Load Keyboard Triggers
+            KbdTriggers.Clear();
+            var kbdGroups = new Dictionary<string, List<BindingEntry>>(StringComparer.Ordinal);
+            var kbdOrder = new List<string>();
+            foreach (var b in activeBindings)
+            {
+                if (b.trigger.StartsWith("mouse:", StringComparison.Ordinal)) continue;
+                if (b.trigger.StartsWith("launch:", StringComparison.Ordinal) ||
+                    b.trigger.StartsWith("exit:", StringComparison.Ordinal) ||
+                    b.trigger.StartsWith("focus:", StringComparison.Ordinal) ||
+                    b.trigger.StartsWith("blur:", StringComparison.Ordinal)) continue;
+                if (!b.trigger.StartsWith("key:", StringComparison.Ordinal)) continue;
+
+                if (!kbdGroups.TryGetValue(b.trigger, out var list))
+                {
+                    list = new List<BindingEntry>();
+                    kbdGroups[b.trigger] = list;
+                    kbdOrder.Add(b.trigger);
+                }
+                list.Add(b);
+            }
+
+            foreach (var trig in kbdOrder)
+            {
+                var bindings = kbdGroups[trig];
+                var card = new KbdTriggerCardViewModel(trig, MarkDirty, AllApps, Profiles, RecordAction, DeleteKbdCard, RecordKbdCard);
+
+                foreach (var b in bindings)
+                {
+                    var row = new RowViewModel(MarkDirty, AllApps, Profiles, RecordAction, card.DeleteVariant,
+                                               isMouseTrigger: false, null, hasAppScope: true, StandardActions);
+                    row.InitializeChain(b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay);
+                    row.InitializeAppScope(b.apps == null || b.apps.Count == 0, b.apps ?? new List<string>(), b.exceptApps);
+                    row.Enabled = b.enabled != false;
+                    row.ShowToast = b.showToast;
+                    row.NoteLabel = b.label ?? "";
+                    card.Variants.Add(row);
+                }
+                KbdTriggers.Add(card);
+            }
+
+            // Load App Triggers
+            AppTriggers.Clear();
+            foreach (var b in activeBindings)
+            {
+                string? kind = null;
+                List<string>? apps = null;
+                if (b.trigger.StartsWith("launch:", StringComparison.Ordinal))
+                {
+                    kind = "launch";
+                    apps = b.trigger.Substring(7).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                }
+                else if (b.trigger.StartsWith("exit:", StringComparison.Ordinal))
+                {
+                    kind = "exit";
+                    apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                }
+                else if (b.trigger.StartsWith("focus:", StringComparison.Ordinal))
+                {
+                    kind = "focus";
+                    apps = b.trigger.Substring(6).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                }
+                else if (b.trigger.StartsWith("blur:", StringComparison.Ordinal))
+                {
+                    kind = "blur";
+                    apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
+                }
+
+                if (kind != null && apps != null)
+                {
+                    var card = new AppTriggerCardViewModel(MarkDirty, AllApps, Profiles, RecordAction, DeleteAppCard);
+                    card.Kind = kind;
+                    card.InitializeSelectedApps(apps);
+                    card.Row.InitializeChain(b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay);
+                    card.Row.Enabled = b.enabled != false;
+                    card.Row.ShowToast = b.showToast;
+                    card.Row.NoteLabel = b.label ?? "";
+                    AppTriggers.Add(card);
+                }
+            }
+
+            UpdateTabBadges();
+            OnSearchTextChanged();
+        }
+        finally
         {
-            if (b.trigger.StartsWith("mouse:", StringComparison.Ordinal)) continue;
-            if (b.trigger.StartsWith("launch:", StringComparison.Ordinal) ||
-                b.trigger.StartsWith("exit:", StringComparison.Ordinal) ||
-                b.trigger.StartsWith("focus:", StringComparison.Ordinal) ||
-                b.trigger.StartsWith("blur:", StringComparison.Ordinal)) continue;
-            if (!b.trigger.StartsWith("key:", StringComparison.Ordinal)) continue;
-
-            if (!kbdGroups.TryGetValue(b.trigger, out var list))
-            {
-                list = new List<BindingEntry>();
-                kbdGroups[b.trigger] = list;
-                kbdOrder.Add(b.trigger);
-            }
-            list.Add(b);
+            _isLoadingBindings = false;
+            IsDirty = false;
         }
-
-        foreach (var trig in kbdOrder)
-        {
-            var bindings = kbdGroups[trig];
-            var card = new KbdTriggerCardViewModel(trig, MarkDirty, AllApps, Profiles, RecordAction, DeleteKbdCard, RecordKbdCard);
-
-            foreach (var b in bindings)
-            {
-                var row = new RowViewModel(MarkDirty, AllApps, Profiles, RecordAction, card.DeleteVariant,
-                                           isMouseTrigger: false, null, hasAppScope: true, StandardActions);
-                row.InitializeChain(b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay);
-                row.InitializeAppScope(b.apps == null || b.apps.Count == 0, b.apps ?? new List<string>(), b.exceptApps);
-                row.Enabled = b.enabled != false;
-                row.ShowToast = b.showToast;
-                row.NoteLabel = b.label ?? "";
-                card.Variants.Add(row);
-            }
-            KbdTriggers.Add(card);
-        }
-
-        // Load App Triggers
-        AppTriggers.Clear();
-        foreach (var b in activeBindings)
-        {
-            string? kind = null;
-            List<string>? apps = null;
-            if (b.trigger.StartsWith("launch:", StringComparison.Ordinal))
-            {
-                kind = "launch";
-                apps = b.trigger.Substring(7).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-            }
-            else if (b.trigger.StartsWith("exit:", StringComparison.Ordinal))
-            {
-                kind = "exit";
-                apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-            }
-            else if (b.trigger.StartsWith("focus:", StringComparison.Ordinal))
-            {
-                kind = "focus";
-                apps = b.trigger.Substring(6).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-            }
-            else if (b.trigger.StartsWith("blur:", StringComparison.Ordinal))
-            {
-                kind = "blur";
-                apps = b.trigger.Substring(5).Split(',').Select(a => a.Trim()).Where(a => a.Length > 0).ToList();
-            }
-
-            if (kind != null && apps != null)
-            {
-                var card = new AppTriggerCardViewModel(MarkDirty, AllApps, Profiles, RecordAction, DeleteAppCard);
-                card.Kind = kind;
-                card.InitializeSelectedApps(apps);
-                card.Row.InitializeChain(b.outputs ?? new List<string> { "" }, b.outputDelays, b.outputDelay);
-                card.Row.Enabled = b.enabled != false;
-                card.Row.ShowToast = b.showToast;
-                card.Row.NoteLabel = b.label ?? "";
-                AppTriggers.Add(card);
-            }
-        }
-
-        UpdateTabBadges();
-        OnSearchTextChanged();
     }
 
     private void DeleteKbdCard(KbdTriggerCardViewModel card)
