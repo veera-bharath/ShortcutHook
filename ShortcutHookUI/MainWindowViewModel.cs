@@ -1388,6 +1388,9 @@ public class MainWindowViewModel : ViewModelBase
                             outp.StartsWith("type:", StringComparison.Ordinal) ||
                             outp.StartsWith("profile:", StringComparison.Ordinal) ||
                             outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
+                            outp.StartsWith("volume:", StringComparison.Ordinal) ||
+                            outp.StartsWith("brightness:", StringComparison.Ordinal) ||
+                            outp.StartsWith("media:", StringComparison.Ordinal) ||
                             outp == "toggle:pause") continue;
                         try { ShortcutValidator.ValidateShortcutOutput(outp); }
                         catch (Exception ex) { ShowFeedbackMsg($"Mouse '{group.Label}': {ex.Message}", FeedbackKind.Err); return; }
@@ -1482,6 +1485,9 @@ public class MainWindowViewModel : ViewModelBase
                         outp.StartsWith("type:", StringComparison.Ordinal) ||
                         outp.StartsWith("profile:", StringComparison.Ordinal) ||
                         outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
+                        outp.StartsWith("volume:", StringComparison.Ordinal) ||
+                        outp.StartsWith("brightness:", StringComparison.Ordinal) ||
+                        outp.StartsWith("media:", StringComparison.Ordinal) ||
                         outp == "toggle:pause") continue;
                     try { ShortcutValidator.ValidateShortcutOutput(outp); }
                     catch (Exception ex) { ShowFeedbackMsg($"Keyboard trigger {cardIdx}: {ex.Message}", FeedbackKind.Err); return; }
@@ -1554,6 +1560,9 @@ public class MainWindowViewModel : ViewModelBase
                     outp.StartsWith("type:", StringComparison.Ordinal) ||
                     outp.StartsWith("profile:", StringComparison.Ordinal) ||
                     outp.StartsWith("hscroll:", StringComparison.Ordinal) ||
+                    outp.StartsWith("volume:", StringComparison.Ordinal) ||
+                    outp.StartsWith("brightness:", StringComparison.Ordinal) ||
+                    outp.StartsWith("media:", StringComparison.Ordinal) ||
                     outp == "toggle:pause") continue;
                 try { ShortcutValidator.ValidateShortcutOutput(outp); }
                 catch (Exception ex) { ShowFeedbackMsg($"App trigger '{appsLabel}': {ex.Message}", FeedbackKind.Err); return; }
@@ -1622,6 +1631,14 @@ public class MainWindowViewModel : ViewModelBase
                 ActionKind.HScrollRight => "hscroll:right",
                 ActionKind.TogglePause => "toggle:pause",
                 ActionKind.SwitchProfile => string.IsNullOrEmpty(item.OutputValue) ? "" : "profile:" + item.OutputValue,
+                ActionKind.VolumeUp => "volume:up",
+                ActionKind.VolumeDown => "volume:down",
+                ActionKind.VolumeMute => "volume:mute",
+                ActionKind.BrightnessUp => "brightness:up",
+                ActionKind.BrightnessDown => "brightness:down",
+                ActionKind.MediaNext => "media:next",
+                ActionKind.MediaPrev => "media:prev",
+                ActionKind.MediaPlayPause => "media:playpause",
                 _ => ""
             })
             .Where(s => !string.IsNullOrEmpty(s))
@@ -1714,15 +1731,41 @@ public class MainWindowViewModel : ViewModelBase
         new("Open folder",      ActionKind.OpenFolder),
         new("Run command",      ActionKind.Command),
         new("Type text",        ActionKind.TypeText),
+        new("Volume Up",        ActionKind.VolumeUp),
+        new("Volume Down",      ActionKind.VolumeDown),
+        new("Toggle Mute",      ActionKind.VolumeMute),
+        new("Brightness Up",    ActionKind.BrightnessUp),
+        new("Brightness Down",  ActionKind.BrightnessDown),
+        new("Next Track",       ActionKind.MediaNext),
+        new("Previous Track",   ActionKind.MediaPrev),
+        new("Play / Pause",     ActionKind.MediaPlayPause),
         new("Toggle pause",     ActionKind.TogglePause),
         new("Switch profile",   ActionKind.SwitchProfile),
     };
 
     public static ActionDef[] BuildActionsForGesture(MouseGestureDef def)
     {
-        if (def.GestureDefault == null) return StandardActions;
-        var list = new List<ActionDef> { def.GestureDefault };
-        list.AddRange(StandardActions);
+        var list = new List<ActionDef>();
+        if (def.GestureDefault != null)
+        {
+            list.Add(def.GestureDefault);
+        }
+
+        if (def.Gesture.Contains("scroll"))
+        {
+            if (def.GestureDefault?.Kind != ActionKind.HScrollLeft)
+                list.Add(new("Scroll left (horizontal)", ActionKind.HScrollLeft));
+            if (def.GestureDefault?.Kind != ActionKind.HScrollRight)
+                list.Add(new("Scroll right (horizontal)", ActionKind.HScrollRight));
+        }
+
+        foreach (var action in StandardActions)
+        {
+            if (list.All(a => a.Kind != action.Kind))
+            {
+                list.Add(action);
+            }
+        }
         return list.ToArray();
     }
 
@@ -1737,8 +1780,10 @@ public class MainWindowViewModel : ViewModelBase
         new("double-right-sel",  "Right click x2 (text selected)"),
         new("triple-right",      "Right click x3"),
         new("quad-right",        "Right click x4"),
-        new("right-scroll-down", "Right Hold + Wheel Down"),
-        new("right-scroll-up",   "Right Hold + Wheel Up"),
+        new("right-scroll-down", "Right Hold + Wheel Down",
+            new("Volume Down",                              ActionKind.VolumeDown)),
+        new("right-scroll-up",   "Right Hold + Wheel Up",
+            new("Volume Up",                                ActionKind.VolumeUp)),
         new("shift-scroll-up",        "Shift + Wheel Up"),
         new("shift-scroll-down",      "Shift + Wheel Down"),
         new("ctrl-shift-scroll-up",   "Ctrl+Shift + Wheel Up"),

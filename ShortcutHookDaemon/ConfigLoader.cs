@@ -251,6 +251,18 @@ public static class ConfigLoader
                     {
                         step.IsTogglePause = true;
                     }
+                    else if (outStr.StartsWith("volume:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        step.VolumeAction = outStr.Substring(7).Trim().ToLowerInvariant();
+                    }
+                    else if (outStr.StartsWith("brightness:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        step.BrightnessAction = outStr.Substring(11).Trim().ToLowerInvariant();
+                    }
+                    else if (outStr.StartsWith("media:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        step.MediaAction = outStr.Substring(6).Trim().ToLowerInvariant();
+                    }
                     else if (outStr.StartsWith("profile:", StringComparison.Ordinal))
                     {
                         step.SwitchToProfile = outStr.Substring(8).Trim();

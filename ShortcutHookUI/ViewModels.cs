@@ -171,6 +171,14 @@ public class ChainedActionViewModel : ViewModelBase
                         case ActionKind.HScrollLeft: OutputValue = "hscroll:left"; break;
                         case ActionKind.HScrollRight: OutputValue = "hscroll:right"; break;
                         case ActionKind.TogglePause: OutputValue = "toggle:pause"; break;
+                        case ActionKind.VolumeUp: OutputValue = "volume:up"; break;
+                        case ActionKind.VolumeDown: OutputValue = "volume:down"; break;
+                        case ActionKind.VolumeMute: OutputValue = "volume:mute"; break;
+                        case ActionKind.BrightnessUp: OutputValue = "brightness:up"; break;
+                        case ActionKind.BrightnessDown: OutputValue = "brightness:down"; break;
+                        case ActionKind.MediaNext: OutputValue = "media:next"; break;
+                        case ActionKind.MediaPrev: OutputValue = "media:prev"; break;
+                        case ActionKind.MediaPlayPause: OutputValue = "media:playpause"; break;
                         case ActionKind.OpenApp:
                             if (!OutputValue.StartsWith("open:", StringComparison.Ordinal))
                             {
@@ -202,7 +210,16 @@ public class ChainedActionViewModel : ViewModelBase
                                 OutputValue = OutputValue.Substring(5);
                             break;
                         case ActionKind.Shortcut:
-                            if (OutputValue.StartsWith("open:", StringComparison.Ordinal) || OutputValue.StartsWith("profile:", StringComparison.Ordinal) || OutputValue.StartsWith("type:", StringComparison.Ordinal) || OutputValue.StartsWith("cmd:", StringComparison.Ordinal) || OutputValue.StartsWith("cmdw:", StringComparison.Ordinal) || OutputValue.StartsWith("hscroll:", StringComparison.Ordinal))
+                            if (OutputValue.StartsWith("open:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("profile:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("type:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("cmd:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("cmdw:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("hscroll:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("volume:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("brightness:", StringComparison.Ordinal) ||
+                                OutputValue.StartsWith("media:", StringComparison.Ordinal) ||
+                                OutputValue == "toggle:pause")
                                 OutputValue = "";
                             break;
                     }
@@ -474,6 +491,46 @@ public class ChainedActionViewModel : ViewModelBase
         {
             _action = ActionKind.CtrlShiftRight;
             _outputValue = "Ctrl+Shift+Right";
+        }
+        else if (output == "volume:up" && Has(ActionKind.VolumeUp))
+        {
+            _action = ActionKind.VolumeUp;
+            _outputValue = "volume:up";
+        }
+        else if (output == "volume:down" && Has(ActionKind.VolumeDown))
+        {
+            _action = ActionKind.VolumeDown;
+            _outputValue = "volume:down";
+        }
+        else if (output == "volume:mute" && Has(ActionKind.VolumeMute))
+        {
+            _action = ActionKind.VolumeMute;
+            _outputValue = "volume:mute";
+        }
+        else if (output == "brightness:up" && Has(ActionKind.BrightnessUp))
+        {
+            _action = ActionKind.BrightnessUp;
+            _outputValue = "brightness:up";
+        }
+        else if (output == "brightness:down" && Has(ActionKind.BrightnessDown))
+        {
+            _action = ActionKind.BrightnessDown;
+            _outputValue = "brightness:down";
+        }
+        else if (output == "media:next" && Has(ActionKind.MediaNext))
+        {
+            _action = ActionKind.MediaNext;
+            _outputValue = "media:next";
+        }
+        else if (output == "media:prev" && Has(ActionKind.MediaPrev))
+        {
+            _action = ActionKind.MediaPrev;
+            _outputValue = "media:prev";
+        }
+        else if (output == "media:playpause" && Has(ActionKind.MediaPlayPause))
+        {
+            _action = ActionKind.MediaPlayPause;
+            _outputValue = "media:playpause";
         }
         else if (output.StartsWith("open:", StringComparison.Ordinal))
         {
