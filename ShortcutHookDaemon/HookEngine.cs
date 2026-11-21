@@ -326,6 +326,7 @@ public class ShortcutHook {
     public static List<Binding> BDoubleRight      = new List<Binding>();
     public static List<Binding> BDoubleRightSel   = new List<Binding>();
     public static List<Binding> BTripleRight      = new List<Binding>();
+    public static List<Binding> BQuadRight        = new List<Binding>();
     public static List<Binding> BRightScrollDown  = new List<Binding>();
     public static List<Binding> BRightScrollUp    = new List<Binding>();
     public static List<Binding> BShiftScrollDown       = new List<Binding>();
@@ -348,7 +349,7 @@ public class ShortcutHook {
         MouseBindings.Clear(); KeyBindings.Clear(); KeySigIndex.Clear(); ScrollDebounce.Clear();
         LaunchBindings.Clear(); ExitBindings.Clear(); FocusBindings.Clear(); BlurBindings.Clear();
         BLeftRight.Clear(); BLeftRightDouble.Clear(); BLeftRightTriple.Clear();
-        BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear();
+        BDoubleRight.Clear(); BDoubleRightSel.Clear(); BTripleRight.Clear(); BQuadRight.Clear();
         BRightScrollDown.Clear(); BRightScrollUp.Clear();
         BShiftScrollDown.Clear(); BShiftScrollUp.Clear();
         BCtrlShiftScrollDown.Clear(); BCtrlShiftScrollUp.Clear();
@@ -393,6 +394,7 @@ public class ShortcutHook {
         addGesture("double-right",      BDoubleRight);
         addGesture("double-right-sel",  BDoubleRightSel);
         addGesture("triple-right",      BTripleRight);
+        addGesture("quad-right",        BQuadRight);
         addGesture("right-scroll-down",  BRightScrollDown);
         addGesture("right-scroll-up",    BRightScrollUp);
         addGesture("shift-scroll-down",       BShiftScrollDown);
@@ -1276,7 +1278,8 @@ public class ShortcutHook {
                             int count = rightClickCount; rightClickCount = 0;
                             if      (count == 1) Reinject(!rightHeld || rightUpSeen);
                             else if (count == 2) { if (rightHeld) suppressRightUp = true; ExecuteDoubleRight(); }
-                            else                 { if (rightHeld) suppressRightUp = true; ExecuteBinding(ResolveMouseBinding(BTripleRight)); }
+                            else if (count == 3) { if (rightHeld) suppressRightUp = true; ExecuteBinding(ResolveMouseBinding(BTripleRight)); }
+                            else                 { if (rightHeld) suppressRightUp = true; ExecuteBinding(ResolveMouseBinding(BQuadRight)); }
                         }
                     }) { IsBackground = true }.Start();
                 }

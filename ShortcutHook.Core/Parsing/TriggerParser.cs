@@ -15,7 +15,7 @@ public static class TriggerParser
 
     public static readonly string[] ValidGestures = {
         "left+right", "left+rightx2", "left+rightx3",
-        "double-right", "double-right-sel", "triple-right",
+        "double-right", "double-right-sel", "triple-right", "quad-right",
         "right-scroll-down", "right-scroll-up",
         "shift-scroll-down", "shift-scroll-up",
         "ctrl-shift-scroll-down", "ctrl-shift-scroll-up",

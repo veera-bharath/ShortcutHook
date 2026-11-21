@@ -1736,6 +1736,7 @@ public class MainWindowViewModel : ViewModelBase
         new("double-right",      "Right click x2"),
         new("double-right-sel",  "Right click x2 (text selected)"),
         new("triple-right",      "Right click x3"),
+        new("quad-right",        "Right click x4"),
         new("right-scroll-down", "Right Hold + Wheel Down"),
         new("right-scroll-up",   "Right Hold + Wheel Up"),
         new("shift-scroll-up",        "Shift + Wheel Up"),

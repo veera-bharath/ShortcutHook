@@ -109,7 +109,7 @@ Grab the latest **ShortcutHookUI.exe** directly or browse all available versions
 > Older configs that used a top-level `"bindings"` array (no `profiles`) are automatically migrated on load into a `"Default"` profile.
 
 ### Trigger Prefixes
-* `mouse:` — `left+right`, `left+rightx2`, `left+rightx3`, `double-right`, `double-right-sel`, `triple-right`, `single-wheel`, `double-wheel`, `triple-wheel`, `right-scroll-down`, `right-scroll-up`, `shift-scroll-down`, `shift-scroll-up`, `ctrl-shift-scroll-down`, `ctrl-shift-scroll-up`, `alt-scroll-down`, `alt-scroll-up`
+* `mouse:` — `left+right`, `left+rightx2`, `left+rightx3`, `double-right`, `double-right-sel`, `triple-right`, `quad-right`, `single-wheel`, `double-wheel`, `triple-wheel`, `right-scroll-down`, `right-scroll-up`, `shift-scroll-down`, `shift-scroll-up`, `ctrl-shift-scroll-down`, `ctrl-shift-scroll-up`, `alt-scroll-down`, `alt-scroll-up`
 * `key:` — any `Mod+Key` combo. Modifiers: `Ctrl`, `Shift`, `Alt`, `Win`
 * `launch:<processName>` / `exit:<processName>` — fires when the named process starts or exits (e.g. `launch:chrome.exe`).
 * `app-focus:<processName>` / `app-blur:<processName>` — fires when the named process gains or loses foreground focus.
