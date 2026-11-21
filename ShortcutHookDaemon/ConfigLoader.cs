@@ -1,35 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
+using ShortcutHookCore.Models;
+using ShortcutHookCore.Parsing;
+using ShortcutHookCore.Security;
 
 namespace ShortcutHookDaemon;
 
 public static class ConfigLoader
 {
-    // VK map — mirrors $vkMap in ShortcutHook.ps1
-    static readonly Dictionary<string, byte> VkMap = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ENTER"]       = 0x0D, ["RETURN"]      = 0x0D,
-        ["ESC"]         = 0x1B, ["ESCAPE"]       = 0x1B,
-        ["TAB"]         = 0x09, ["SPACE"]        = 0x20,
-        ["BACK"]        = 0x08, ["BACKSPACE"]    = 0x08,
-        ["DELETE"]      = 0x2E, ["DEL"]          = 0x2E,
-        ["INSERT"]      = 0x2D, ["INS"]          = 0x2D,
-        ["HOME"]        = 0x24, ["END"]          = 0x23,
-        ["PGUP"]        = 0x21, ["PAGEUP"]       = 0x21,
-        ["PGDN"]        = 0x22, ["PAGEDOWN"]     = 0x22,
-        ["LEFT"]        = 0x25, ["UP"]           = 0x26,
-        ["RIGHT"]       = 0x27, ["DOWN"]         = 0x28,
-        ["PRTSCR"]      = 0x2C, ["PRINTSCREEN"]  = 0x2C,
-        ["F1"]          = 0x70, ["F2"]           = 0x71,
-        ["F3"]          = 0x72, ["F4"]           = 0x73,
-        ["F5"]          = 0x74, ["F6"]           = 0x75,
-        ["F7"]          = 0x76, ["F8"]           = 0x77,
-        ["F9"]          = 0x78, ["F10"]          = 0x79,
-        ["F11"]         = 0x7A, ["F12"]          = 0x7B,
-    };
-
     // Output modifier map — mirrors $outModMap in ShortcutHook.ps1
     static readonly Dictionary<string, byte> OutModMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -38,32 +19,6 @@ public static class ConfigLoader
         ["CTRL"]    = 0x11, ["CONTROL"] = 0x11, ["LCTRL"]   = 0xA2, ["RCTRL"]   = 0xA3,
         ["ALT"]     = 0x12, ["MENU"]    = 0x12,
     };
-
-    // Trigger modifier set — used by ResolveKeyTrigger
-    static readonly HashSet<string> TriggerMods = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "CTRL", "CONTROL", "SHIFT", "ALT", "MENU", "WIN"
-    };
-
-    static readonly string[] ValidGestures = {
-        "left+right", "left+rightx2", "left+rightx3",
-        "double-right", "double-right-sel", "triple-right",
-        "right-scroll-down", "right-scroll-up",
-        "shift-scroll-down", "shift-scroll-up",
-        "ctrl-shift-scroll-down", "ctrl-shift-scroll-up",
-        "alt-scroll-down", "alt-scroll-up",
-        "single-wheel", "double-wheel", "triple-wheel",
-    };
-
-    // Resolves a single key name to its VK byte (mirrors Resolve-SingleKey in PS1)
-    static byte ResolveKey(string k)
-    {
-        var u = k.Trim().ToUpperInvariant();
-        if (VkMap.TryGetValue(u, out var v)) return v;
-        if (u.Length == 1 && u[0] >= 'A' && u[0] <= 'Z') return (byte)u[0];
-        if (u.Length == 1 && u[0] >= '0' && u[0] <= '9') return (byte)(0x30 + (u[0] - '0'));
-        throw new ArgumentException($"Unknown key '{k}'");
-    }
 
     // Resolves an output chord string to byte[] (mirrors Resolve-OutputChord in PS1)
     public static byte[] ResolveOutputChord(string combo)
@@ -78,7 +33,7 @@ public static class ConfigLoader
             {
                 result.Add(modByte);
             }
-            else if (VkMap.TryGetValue(tok, out var vkByte))
+            else if (KeyResolver.VkMap.TryGetValue(tok, out var vkByte))
             {
                 result.Add(vkByte);
             }
@@ -96,36 +51,6 @@ public static class ConfigLoader
             }
         }
         return result.ToArray();
-    }
-
-    // Resolves a key trigger string to (mods, sortedKeys) (mirrors Resolve-KeyTrigger in PS1)
-    static (int mods, byte[] keys) ResolveKeyTrigger(string combo)
-    {
-        int mods = 0;
-        var keys = new List<byte>();
-        foreach (var tokRaw in combo.Split('+'))
-        {
-            var tok = tokRaw.Trim().ToUpperInvariant();
-            if (tok.Length == 0) continue;
-            switch (tok)
-            {
-                case "CTRL":
-                case "CONTROL": mods |= ShortcutHook.MOD_CTRL;  break;
-                case "SHIFT":   mods |= ShortcutHook.MOD_SHIFT; break;
-                case "ALT":
-                case "MENU":    mods |= ShortcutHook.MOD_ALT;   break;
-                case "WIN":     mods |= ShortcutHook.MOD_WIN;   break;
-                default:        keys.Add(ResolveKey(tok));        break;
-            }
-        }
-        if (keys.Count == 0)
-            throw new ArgumentException($"No non-modifier key in '{combo}'");
-        var arr = keys.ToArray();
-        Array.Sort(arr);
-        // Restrict bare Ctrl+Letter (mirrors the PS1 check)
-        if (mods == ShortcutHook.MOD_CTRL && arr.Length == 1 && arr[0] >= 0x41 && arr[0] <= 0x5A)
-            throw new ArgumentException($"Trigger '{combo}' is restricted: 'Ctrl + single letter' conflicts with standard shortcuts.");
-        return (mods, arr);
     }
 
     // Default bindings used when shortcuts.json is absent or invalid
@@ -156,10 +81,16 @@ public static class ConfigLoader
             return (DefaultBindings(), "Default", false);
 
         ConfigRoot? cfg;
+        bool isAuthentic = false;
         try
         {
             var json = File.ReadAllText(configPath);
             cfg = JsonSerializer.Deserialize<ConfigRoot>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (cfg != null)
+            {
+                string rootDir = Path.GetDirectoryName(configPath) ?? AppContext.BaseDirectory;
+                isAuthentic = DpapiHelper.VerifyConfig(cfg, rootDir);
+            }
         }
         catch
         {
@@ -168,6 +99,8 @@ public static class ConfigLoader
 
         if (cfg == null)
             return (DefaultBindings(), "Default", false);
+
+        ShortcutHook.IsConfigAuthentic = isAuthentic;
 
         // Load ignoredApps
         if (cfg.ignoredApps != null)
@@ -220,19 +153,17 @@ public static class ConfigLoader
                 if (trigger.StartsWith("mouse:", StringComparison.Ordinal))
                 {
                     var g = trigger.Substring(6).Trim().ToLowerInvariant();
-                    bool found = false;
-                    foreach (var vg in ValidGestures) if (vg == g) { found = true; break; }
-                    if (!found) continue;
+                    if (!TriggerParser.ValidGestures.Contains(g)) continue;
                     nb.Kind = "mouse";
                     nb.MouseGesture = g;
                 }
                 else if (trigger.StartsWith("key:", StringComparison.Ordinal))
                 {
-                    var (mods, keys) = ResolveKeyTrigger(trigger.Substring(4));
+                    var parsed = TriggerParser.ParseKeyTrigger(trigger.Substring(4));
                     nb.Kind      = "key";
-                    nb.Mods      = mods;
-                    nb.Keys      = keys;
-                    nb.Signature = ShortcutHook.MakeSignature(mods, keys);
+                    nb.Mods      = parsed.Mods;
+                    nb.Keys      = parsed.Keys.Select(k => (byte)k).ToArray();
+                    nb.Signature = ShortcutHook.MakeSignature(parsed.Mods, nb.Keys);
                 }
                 else if (trigger.StartsWith("launch:", StringComparison.Ordinal))
                 {
@@ -277,10 +208,20 @@ public static class ConfigLoader
                 if (outputsList == null || outputsList.Count == 0) continue;
 
                 var steps = new List<ShortcutHook.ChainStep>();
-                foreach (var outStr in outputsList)
+                for (int i = 0; i < outputsList.Count; i++)
                 {
+                    var outStr = outputsList[i];
                     if (string.IsNullOrWhiteSpace(outStr)) continue;
                     var step = new ShortcutHook.ChainStep();
+
+                    if (b.outputDelays != null && i < b.outputDelays.Count)
+                    {
+                        step.Delay = b.outputDelays[i];
+                    }
+                    else
+                    {
+                        step.Delay = i == 0 ? 0 : b.outputDelay;
+                    }
 
                     if (outStr.StartsWith("open:", StringComparison.Ordinal))
                     {
@@ -313,6 +254,10 @@ public static class ConfigLoader
                     else if (outStr.StartsWith("profile:", StringComparison.Ordinal))
                     {
                         step.SwitchToProfile = outStr.Substring(8).Trim();
+                    }
+                    else if (outStr.StartsWith("type-enc:", StringComparison.Ordinal))
+                    {
+                        step.TypeText = DpapiHelper.Decrypt(outStr.Substring(9));
                     }
                     else if (outStr.StartsWith("type:", StringComparison.Ordinal))
                     {

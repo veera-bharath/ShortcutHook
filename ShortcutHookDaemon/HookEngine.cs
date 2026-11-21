@@ -6,6 +6,8 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
+using ShortcutHookCore.Enums;
+using System.Windows.Automation;
 
 namespace ShortcutHookDaemon;
 
@@ -50,10 +52,10 @@ public class ShortcutHook {
     private const byte VK_LMENU   = 0xA4;
     private const byte VK_RMENU   = 0xA5;
 
-    public const int MOD_CTRL  = 1;
-    public const int MOD_SHIFT = 2;
-    public const int MOD_ALT   = 4;
-    public const int MOD_WIN   = 8;
+    public const int MOD_CTRL  = (int)ModifierFlags.Control;
+    public const int MOD_SHIFT = (int)ModifierFlags.Shift;
+    public const int MOD_ALT   = (int)ModifierFlags.Alt;
+    public const int MOD_WIN   = (int)ModifierFlags.Win;
 
     // Global pause: while true, both hooks pass events through untouched except
     // for keyboard bindings that toggle this flag back off (see KbdCallback).
@@ -62,6 +64,7 @@ public class ShortcutHook {
 
     public static volatile string SwitchProfileRequest = null;
     public static string CurrentProfileName = "";
+    public static bool IsConfigAuthentic = false;
     public static uint MainThreadId = 0;
 
     public static HashSet<string> IgnoredApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -83,10 +86,97 @@ public class ShortcutHook {
     static extern IntPtr GetModuleHandle(string name);
     [DllImport("user32.dll")] static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")]
-    static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-    [DllImport("user32.dll")]
-    static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    private const uint INPUT_MOUSE    = 0;
+    private const uint INPUT_KEYBOARD = 1;
+
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUT_UNION
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT
+    {
+        public uint type;
+        public INPUT_UNION union;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
+    }
+
+    static void SendKey(byte vk, bool up)
+    {
+        uint flags = up ? KEYEVENTF_KEYUP : 0;
+        var input = new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            union = new INPUT_UNION
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = vk,
+                    wScan = 0,
+                    dwFlags = flags,
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero
+                }
+            }
+        };
+        SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    static void SendMouse(uint flags, int dx, int dy, int data)
+    {
+        var input = new INPUT
+        {
+            type = INPUT_MOUSE,
+            union = new INPUT_UNION
+            {
+                mi = new MOUSEINPUT
+                {
+                    dx = dx,
+                    dy = dy,
+                    mouseData = (uint)data,
+                    dwFlags = flags,
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero
+                }
+            }
+        };
+        SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT)));
+    }
     [DllImport("user32.dll")]
     static extern uint GetDoubleClickTime();
     [DllImport("user32.dll")]
@@ -130,6 +220,27 @@ public class ShortcutHook {
     [DllImport("user32.dll")] static extern bool   TranslateMessage(ref MSG msg);
     [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG msg);
 
+    [DllImport("user32.dll")]
+    static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventProc lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    [DllImport("user32.dll")]
+    static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetParent(IntPtr hWnd);
+
+    delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+    delegate void WinEventProc(IntPtr hWinEventHook, uint eventId, IntPtr hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime);
+
+    private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    private const uint EVENT_OBJECT_CREATE     = 0x8000;
+    private const uint EVENT_OBJECT_DESTROY    = 0x8001;
+    private const int  OBJID_WINDOW            = 0;
+    private const uint WINEVENT_OUTOFCONTEXT   = 0;
+
     [StructLayout(LayoutKind.Sequential)]
     public struct KBDLLHOOKSTRUCT {
         public uint vkCode; public uint scanCode; public uint flags;
@@ -169,6 +280,7 @@ public class ShortcutHook {
         public int    HScrollDelta;
         public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
         public string SwitchToProfile; // switches active profile and relaunches daemon; null for all other fields when set
+        public int    Delay; // delay after executing this step
     }
 
     public class Binding {
@@ -201,8 +313,11 @@ public class ShortcutHook {
     public static Dictionary<string, List<Binding>> BlurBindings   = new Dictionary<string, List<Binding>>(StringComparer.OrdinalIgnoreCase);
     static HashSet<string> KnownRunningApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     static string LastFocusedApp = "";
-    static System.Threading.Timer ProcessPollTimer;
-    const int PROCESS_POLL_MS = 1500;
+    static readonly Dictionary<IntPtr, string> ActiveWindows = new Dictionary<IntPtr, string>();
+
+    static IntPtr hFocusEventHook;
+    static IntPtr hCreateDestroyEventHook;
+    static WinEventProc winEventProcDelegate;
 
     // Per-gesture binding lists: app-scoped entries first, global last (mirrors KeySigIndex ordering).
     public static List<Binding> BLeftRight        = new List<Binding>();
@@ -308,50 +423,120 @@ public class ShortcutHook {
     static void AddAppNameBindings(Dictionary<string, List<Binding>> dict, Binding b) {
         if (b.AppNames == null) return;
         foreach (string name in b.AppNames) {
-            List<Binding> list;
-            if (!dict.TryGetValue(name, out list)) { list = new List<Binding>(); dict[name] = list; }
-            list.Add(b);
+            AddBindingKey(dict, name, b);
+            if (string.Equals(name, "wt.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "WindowsTerminal.exe", b);
+            else if (string.Equals(name, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "wt.exe", b);
+            else if (string.Equals(name, "Calculator.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "CalculatorApp.exe", b);
+            else if (string.Equals(name, "CalculatorApp.exe", StringComparison.OrdinalIgnoreCase))
+                AddBindingKey(dict, "Calculator.exe", b);
         }
     }
 
-    static HashSet<string> GetRunningAppNames() {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        try {
-            foreach (Process p in Process.GetProcesses()) {
-                try { if (!string.IsNullOrEmpty(p.ProcessName)) set.Add(p.ProcessName + ".exe"); }
-                catch { } finally { p.Dispose(); }
-            }
-        } catch { }
-        return set;
+    static void AddBindingKey(Dictionary<string, List<Binding>> dict, string key, Binding b) {
+        List<Binding> list;
+        if (!dict.TryGetValue(key, out list)) { list = new List<Binding>(); dict[key] = list; }
+        if (!list.Contains(b)) list.Add(b);
     }
 
-    static void PollProcesses(object state) {
+    static string GetProcessNameFromWindow(IntPtr hwnd) {
         try {
-            var current = GetRunningAppNames();
-            foreach (string name in current) {
-                if (KnownRunningApps.Contains(name)) continue;
-                List<Binding> list;
-                if (LaunchBindings.TryGetValue(name, out list))
-                    foreach (Binding b in list) ExecuteBinding(b);
-            }
-            foreach (string name in KnownRunningApps) {
-                if (current.Contains(name)) continue;
-                List<Binding> list;
-                if (ExitBindings.TryGetValue(name, out list))
-                    foreach (Binding b in list) ExecuteBinding(b);
-            }
-            KnownRunningApps = current;
+            if (hwnd == IntPtr.Zero) return "";
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            if (pid == 0) return "";
+            return GetProcessNameFromPid(pid);
+        } catch { return ""; }
+    }
 
-            if (FocusBindings.Count > 0 || BlurBindings.Count > 0) {
+    static string GetProcessNameFromPid(uint pid) {
+        try {
+            const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+            IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (hProc == IntPtr.Zero) return "";
+            try {
+                var sb = new System.Text.StringBuilder(1024);
+                uint size = 1024;
+                if (!QueryFullProcessImageName(hProc, 0, sb, ref size)) return "";
+                return System.IO.Path.GetFileName(sb.ToString(0, (int)size));
+            } finally { CloseHandle(hProc); }
+        } catch { return ""; }
+    }
+
+    static bool PopulateExistingWindows(IntPtr hwnd, IntPtr lParam) {
+        if (GetParent(hwnd) == IntPtr.Zero) {
+            string name = GetProcessNameFromWindow(hwnd);
+            if (!string.IsNullOrEmpty(name)) {
+                ActiveWindows[hwnd] = name;
+                KnownRunningApps.Add(name);
+            }
+        }
+        return true;
+    }
+
+    static void WinEventCallback(IntPtr hWinEventHook, uint eventId, IntPtr hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime) {
+        try {
+            if (eventId == EVENT_SYSTEM_FOREGROUND) {
                 string fgApp = GetForegroundProcessName();
                 if (!string.IsNullOrEmpty(fgApp) && !string.Equals(fgApp, LastFocusedApp, StringComparison.OrdinalIgnoreCase)) {
                     List<Binding> blist;
-                    if (!string.IsNullOrEmpty(LastFocusedApp) && BlurBindings.TryGetValue(LastFocusedApp, out blist))
+                    if (!string.IsNullOrEmpty(LastFocusedApp) && BlurBindings.TryGetValue(LastFocusedApp, out blist)) {
                         foreach (Binding b in blist) ExecuteBinding(b);
+                    }
                     List<Binding> flist;
-                    if (FocusBindings.TryGetValue(fgApp, out flist))
+                    if (FocusBindings.TryGetValue(fgApp, out flist)) {
                         foreach (Binding b in flist) ExecuteBinding(b);
+                    }
                     LastFocusedApp = fgApp;
+                }
+                return;
+            }
+
+            if (idObject != OBJID_WINDOW) return;
+
+            if (eventId == EVENT_OBJECT_CREATE) {
+                if (GetParent(hwnd) == IntPtr.Zero) {
+                    string name = GetProcessNameFromWindow(hwnd);
+                    if (!string.IsNullOrEmpty(name)) {
+                        ActiveWindows[hwnd] = name;
+                        if (!KnownRunningApps.Contains(name)) {
+                            KnownRunningApps.Add(name);
+                            List<Binding> list;
+                            if (LaunchBindings.TryGetValue(name, out list)) {
+                                foreach (Binding b in list) ExecuteBinding(b);
+                            }
+                        }
+                    }
+                }
+            }
+            else if (eventId == EVENT_OBJECT_DESTROY) {
+                if (ActiveWindows.TryGetValue(hwnd, out string name)) {
+                    ActiveWindows.Remove(hwnd);
+                    bool anyLeft = false;
+                    foreach (var pair in ActiveWindows) {
+                        if (string.Equals(pair.Value, name, StringComparison.OrdinalIgnoreCase)) {
+                            anyLeft = true;
+                            break;
+                        }
+                    }
+                    if (!anyLeft) {
+                        string procNameOnly = name;
+                        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) {
+                            procNameOnly = name.Substring(0, name.Length - 4);
+                        }
+                        var processes = Process.GetProcessesByName(procNameOnly);
+                        if (processes.Length == 0) {
+                            KnownRunningApps.Remove(name);
+                            List<Binding> list;
+                            if (ExitBindings.TryGetValue(name, out list)) {
+                                foreach (Binding b in list) ExecuteBinding(b);
+                            }
+                        } else {
+                            foreach (var p in processes) p.Dispose();
+                        }
+                    }
                 }
             }
         } catch { }
@@ -593,41 +778,25 @@ public class ShortcutHook {
         return -1;
     }
 
-    // Injects Ctrl+C, waits CLIP_WAIT_MS, then checks whether clipboard gained data.
-    // If no selection found, restores the clipboard to its prior state.
     static bool DetectTextSelection() {
         int explorerSelCount = GetExplorerSelectionCount();
         if (explorerSelCount >= 0) {
             return explorerSelCount > 0;
         }
 
-        // Fallback selection detection (text, files, etc. in other apps)
-        var saved = BackupClipboard();
-        ClearClipboard();
-        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-        keybd_event(0x43, 0, 0, UIntPtr.Zero);
-        keybd_event(0x43, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        Thread.Sleep(CLIP_WAIT_MS);
-
-        bool hasSel = ClipboardHasData();
-        if (hasSel) {
-            // Check if it's an Explorer default/invisible selection (e.g. $RECYCLE.BIN)
-            byte[] hdropData = GetClipboardFormatData(CF_HDROP);
-            if (hdropData != null) {
-                var files = GetCopiedFiles(hdropData);
-                if (IsExplorerInvisibleSelection(files)) {
-                    hasSel = false;
+        try {
+            AutomationElement focusedElement = AutomationElement.FocusedElement;
+            if (focusedElement != null && focusedElement.TryGetCurrentPattern(TextPattern.Pattern, out object patternObj)) {
+                var textPattern = (TextPattern)patternObj;
+                var selection = textPattern.GetSelection();
+                if (selection != null && selection.Length > 0) {
+                    string selectedText = selection[0].GetText(-1);
+                    return !string.IsNullOrEmpty(selectedText);
                 }
             }
-        }
+        } catch { }
 
-        if (!hasSel) {
-            RestoreClipboard(saved);
-        } else {
-            FreeBackup(saved); // Free GDI copies to prevent leaks when backup is discarded
-        }
-        return hasSel;
+        return false;
     }
     static void ExecuteDoubleRight() {
         if (BDoubleRightSel.Count == 0) { ExecuteBinding(ResolveMouseBinding(BDoubleRight)); return; }
@@ -653,7 +822,7 @@ public class ShortcutHook {
         if (step.IsHScroll) {
             int d = step.HScrollDelta;
             new Thread(() => {
-                try { mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)d, UIntPtr.Zero); }
+                try { SendMouse(MOUSEEVENTF_HWHEEL, 0, 0, d); }
                 catch { }
             }) { IsBackground = true }.Start();
             return;
@@ -665,25 +834,46 @@ public class ShortcutHook {
             // Instead mark that we need to release Win at physical Win-up time, where
             // we can sandwich it between Ctrl events to break the clean-tap sequence.
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
-            string path = step.OpenPath;
+            string path = step.OpenPath.Trim();
+            if (!IsConfigAuthentic &&
+                !path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) &&
+                !path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)) {
+                try {
+                    string fullPath = Path.GetFullPath(path);
+                    if (!IsPathSafe(fullPath)) return;
+                } catch { return; }
+            }
             try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
         } else if (step.CmdLine != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
             if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; releaseWinOnSuppress = true; }
             string cmd = step.CmdLine;
+            if (!IsConfigAuthentic) {
+                try {
+                    string exePath = ResolveCommandPath(cmd);
+                    if (!string.IsNullOrEmpty(exePath) && Path.IsPathRooted(exePath)) {
+                        if (!IsPathSafe(exePath)) return;
+                    }
+                } catch { return; }
+            }
             bool show = step.CmdShow;
             try {
-                if (show) {
-                    Process.Start(new ProcessStartInfo("cmd.exe") {
-                        Arguments = "/k " + cmd,
-                        UseShellExecute = true,
-                    });
-                } else {
-                    Process.Start(new ProcessStartInfo("cmd.exe") {
-                        Arguments = "/c " + cmd,
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
+                var (exe, args) = SplitCommandLine(cmd);
+                if (!string.IsNullOrEmpty(exe)) {
+                    string targetExe = exe;
+                    if (!Path.IsPathRooted(targetExe)) {
+                        string resolved = ResolveCommandPath(cmd);
+                        if (Path.IsPathRooted(resolved)) {
+                            targetExe = resolved;
+                        }
+                    }
+                    Process.Start(new ProcessStartInfo(targetExe) {
+                        Arguments = args,
+                        UseShellExecute = show,
+                        CreateNoWindow = !show,
                     });
                 }
             } catch { }
@@ -692,6 +882,86 @@ public class ShortcutHook {
         } else {
             FireOutput(step.Output);
         }
+    }
+
+    static bool IsPathSafe(string path) {
+        try {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            string fullPath = Path.GetFullPath(path);
+            string winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            string progFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string progFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+            if (fullPath.StartsWith(winDir, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(progFiles, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(progFilesX86, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(localAppData, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(appData, StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+        } catch { }
+        return false;
+    }
+
+    static string ResolveCommandPath(string cmd) {
+        if (string.IsNullOrWhiteSpace(cmd)) return "";
+        string exe = "";
+        cmd = cmd.Trim();
+        if (cmd.StartsWith("\"")) {
+            int end = cmd.IndexOf("\"", 1);
+            if (end > 0) exe = cmd.Substring(1, end - 1);
+        } else {
+            int space = cmd.IndexOf(' ');
+            exe = space > 0 ? cmd.Substring(0, space) : cmd;
+        }
+
+        if (Path.IsPathRooted(exe)) {
+            return exe;
+        }
+
+        if (File.Exists(exe)) return Path.GetFullPath(exe);
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (pathEnv != null) {
+            foreach (var p in pathEnv.Split(Path.PathSeparator)) {
+                try {
+                    var full = Path.Combine(p, exe);
+                    if (File.Exists(full)) return Path.GetFullPath(full);
+                    foreach (var ext in new[] { ".exe", ".cmd", ".bat" }) {
+                        var fullExt = full + ext;
+                        if (File.Exists(fullExt)) return Path.GetFullPath(fullExt);
+                    }
+                } catch { }
+            }
+        }
+        return exe;
+    }
+
+    static (string exe, string args) SplitCommandLine(string cmd) {
+        if (string.IsNullOrWhiteSpace(cmd)) return ("", "");
+        cmd = cmd.Trim();
+        string exe = "";
+        string args = "";
+        if (cmd.StartsWith("\"")) {
+            int end = cmd.IndexOf("\"", 1);
+            if (end > 0) {
+                exe = cmd.Substring(1, end - 1);
+                args = cmd.Substring(end + 1).Trim();
+            } else {
+                exe = cmd.Substring(1);
+            }
+        } else {
+            int space = cmd.IndexOf(' ');
+            if (space > 0) {
+                exe = cmd.Substring(0, space);
+                args = cmd.Substring(space + 1).Trim();
+            } else {
+                exe = cmd;
+            }
+        }
+        return (exe, args);
     }
 
     static bool HasTogglePause(Binding b) {
@@ -755,16 +1025,15 @@ public class ShortcutHook {
         if (IsPaused && !HasTogglePause(b)) return;
         if (b.ShowToast) ShowToast(b.ToastText);
         // Single-action with no delay: fast path — run inline (FireOutput is safe in hook callback).
-        if (b.Steps.Length == 1 && b.OutputDelay == 0 && b.Steps[0].Output != null) {
+        if (b.Steps.Length == 1 && b.Steps[0].Delay == 0 && b.Steps[0].Output != null) {
             FireOutput(b.Steps[0].Output);
             return;
         }
         // Chain or open/cmd step: run on background thread so the callback returns quickly.
         ChainStep[] steps = b.Steps;
-        int delay = b.OutputDelay;
         new Thread(() => {
             for (int i = 0; i < steps.Length; i++) {
-                if (i > 0 && delay > 0) Thread.Sleep(delay);
+                if (steps[i].Delay > 0) Thread.Sleep(steps[i].Delay);
                 ExecuteStep(steps[i]);
             }
         }) { IsBackground = true }.Start();
@@ -789,33 +1058,33 @@ public class ShortcutHook {
         // Release held modifiers that the chord does NOT want (prevent interference).
         // For modifiers that the chord DOES include, skip the pre-release — the chord
         // re-fires them itself and the app must see the modifier held continuously.
-        if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uShift && !cShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uCtrl  && !cCtrl)  SendKey(VK_CONTROL, true);
+        if (uShift && !cShift) SendKey(VK_SHIFT,   true);
+        if (uAlt   && !cAlt)   SendKey(VK_MENU,    true);
+        if (uWinL)  SendKey(VK_LWIN,    true);
+        if (uWinR)  SendKey(VK_RWIN,    true);
 
         // Fire the full chord — including any modifier keys it contains.
         // If a modifier was already physically held, injecting its key-down again fires
         // it as a synthetic repeat (WM_KEYDOWN with repeat count), which the target app
         // processes as "modifier still held" — guaranteeing it sees the modifier when
         // the action key arrives, regardless of any physical-key timing.
-        foreach (byte k in chord)                    keybd_event(k, 0, 0, UIntPtr.Zero);
-        for (int i = chord.Length - 1; i >= 0; i--) keybd_event(chord[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        foreach (byte k in chord)                    SendKey(k, false);
+        for (int i = chord.Length - 1; i >= 0; i--) SendKey(chord[i], true);
 
         // Re-press non-Win modifiers so the user's held keys remain active.
         // Group 1: modifiers that were released in the pre-release step above.
-        if (uAlt   && !cAlt)   keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
-        if (uShift && !cShift) keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
-        if (uCtrl  && !cCtrl)  keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        if (uAlt   && !cAlt)   SendKey(VK_MENU,    false);
+        if (uShift && !cShift) SendKey(VK_SHIFT,   false);
+        if (uCtrl  && !cCtrl)  SendKey(VK_CONTROL, false);
         // Group 2: chord modifiers that were physically held — the chord's own key-up
         // released them, so re-press to restore the user's hold state.
-        if (uAlt   && cAlt)    keybd_event(VK_MENU,    0, 0, UIntPtr.Zero);
-        if (uShift && cShift)  keybd_event(VK_SHIFT,   0, 0, UIntPtr.Zero);
-        if (uCtrl  && cCtrl)   keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        if (uAlt   && cAlt)    SendKey(VK_MENU,    false);
+        if (uShift && cShift)  SendKey(VK_SHIFT,   false);
+        if (uCtrl  && cCtrl)   SendKey(VK_CONTROL, false);
 
         if (uWinL || uWinR) lock (KLock) { suppressWinUp = true; }
-        else { if (uWinR) keybd_event(VK_RWIN, 0, 0, UIntPtr.Zero); if (uWinL) keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero); }
+        else { if (uWinR) SendKey(VK_RWIN, false); if (uWinL) SendKey(VK_LWIN, false); }
     }
 
     // Types a literal string in one shot via the clipboard: stash the current
@@ -831,19 +1100,19 @@ public class ShortcutHook {
         bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
 
         // Release held modifiers so they don't interfere with our own Ctrl+V.
-        if (uCtrl)  keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uShift) keybd_event(VK_SHIFT,   0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uAlt)   keybd_event(VK_MENU,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinL)  keybd_event(VK_LWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        if (uWinR)  keybd_event(VK_RWIN,    0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        if (uCtrl)  SendKey(VK_CONTROL, true);
+        if (uShift) SendKey(VK_SHIFT,   true);
+        if (uAlt)   SendKey(VK_MENU,    true);
+        if (uWinL)  SendKey(VK_LWIN,    true);
+        if (uWinR)  SendKey(VK_RWIN,    true);
 
         var saved = BackupClipboard();
         SetClipboardText(text);
 
-        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56 /* V */, 0, 0, UIntPtr.Zero);
-        keybd_event(0x56, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        SendKey(VK_CONTROL, false);
+        SendKey(0x56 /* V */, false);
+        SendKey(0x56, true);
+        SendKey(VK_CONTROL, true);
 
         // Give the target app time to read the clipboard before we restore it.
         Thread.Sleep(CLIP_WAIT_MS);
@@ -906,14 +1175,14 @@ public class ShortcutHook {
 
     static void Reinject(bool withUp) {
         Interlocked.Increment(ref reinjDown);
-        mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
-        if (withUp) { Interlocked.Increment(ref reinjUp); mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero); }
+        SendMouse(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0);
+        if (withUp) { Interlocked.Increment(ref reinjUp); SendMouse(MOUSEEVENTF_RIGHTUP, 0, 0, 0); }
     }
 
     static void ReinjectWheel(bool withUp) {
         Interlocked.Increment(ref reinjWheelDown);
-        mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, UIntPtr.Zero);
-        if (withUp) { Interlocked.Increment(ref reinjWheelUp); mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, UIntPtr.Zero); }
+        SendMouse(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0);
+        if (withUp) { Interlocked.Increment(ref reinjWheelUp); SendMouse(MOUSEEVENTF_MIDDLEUP, 0, 0, 0); }
     }
 
     static IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam) {
@@ -921,7 +1190,7 @@ public class ShortcutHook {
         // While paused, mouse input passes through untouched. Resuming is keyboard-only
         // (mouse gesture detection requires timers we don't want running while paused).
         if (IsPaused) return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
-        if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+        if (IsIgnoredApp(GetForegroundProcessName()))
             return CallNextHookEx(mouseHookId, nCode, wParam, lParam);
         try {
             int msg = wParam.ToInt32();
@@ -1155,11 +1424,44 @@ public class ShortcutHook {
         } catch { return ""; }
     }
 
-    // Case-insensitive search — avoids lambdas so ref parameters can safely call this.
+    // Case-insensitive search with alias matching (e.g. wt.exe <-> WindowsTerminal.exe)
     static bool AppsContain(string[] apps, string fgApp) {
-        if (apps == null) return false;
-        for (int i = 0; i < apps.Length; i++)
+        if (apps == null || string.IsNullOrEmpty(fgApp)) return false;
+        string fgBase = Path.GetFileNameWithoutExtension(fgApp);
+        for (int i = 0; i < apps.Length; i++) {
+            if (string.IsNullOrEmpty(apps[i])) continue;
             if (string.Equals(apps[i], fgApp, StringComparison.OrdinalIgnoreCase)) return true;
+            string appBase = Path.GetFileNameWithoutExtension(apps[i]);
+            if (string.Equals(appBase, fgBase, StringComparison.OrdinalIgnoreCase)) return true;
+            if (IsProcessAliasMatch(appBase, fgBase)) return true;
+        }
+        return false;
+    }
+
+    static bool IsProcessAliasMatch(string a, string b) {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        if ((string.Equals(a, "wt", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "WindowsTerminal", StringComparison.OrdinalIgnoreCase)) ||
+            (string.Equals(a, "WindowsTerminal", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "wt", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if ((string.Equals(a, "Calculator", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "CalculatorApp", StringComparison.OrdinalIgnoreCase)) ||
+            (string.Equals(a, "CalculatorApp", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "Calculator", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if ((string.Equals(a, "Settings", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "SystemSettings", StringComparison.OrdinalIgnoreCase)) ||
+            (string.Equals(a, "SystemSettings", StringComparison.OrdinalIgnoreCase) && string.Equals(b, "Settings", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return false;
+    }
+
+    static bool IsIgnoredApp(string fgApp) {
+        if (IgnoredApps.Count == 0 || string.IsNullOrEmpty(fgApp)) return false;
+        string fgBase = Path.GetFileNameWithoutExtension(fgApp);
+        foreach (var app in IgnoredApps) {
+            if (string.IsNullOrEmpty(app)) continue;
+            if (string.Equals(app, fgApp, StringComparison.OrdinalIgnoreCase)) return true;
+            string appBase = Path.GetFileNameWithoutExtension(app);
+            if (string.Equals(appBase, fgBase, StringComparison.OrdinalIgnoreCase)) return true;
+            if (IsProcessAliasMatch(appBase, fgBase)) return true;
+        }
         return false;
     }
 
@@ -1259,7 +1561,7 @@ public class ShortcutHook {
         try {
             KBDLLHOOKSTRUCT data = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
             if ((data.flags & LLKHF_INJECTED) != 0) return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
-            if (IgnoredApps.Count > 0 && IgnoredApps.Contains(GetForegroundProcessName()))
+            if (IsIgnoredApp(GetForegroundProcessName()))
                 return CallNextHookEx(kbdHookId, nCode, wParam, lParam);
 
             int  msg    = wParam.ToInt32();
@@ -1282,9 +1584,9 @@ public class ShortcutHook {
                                 releaseWinOnSuppress = false;
                                 // Ctrl before Win-up breaks Explorer's clean-tap detection;
                                 // Ctrl after cleans up. Injected Win-up restores key state.
-                                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-                                keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                                SendKey(VK_CONTROL, false);
+                                SendKey(vk, true);
+                                SendKey(VK_CONTROL, true);
                             }
                         }
                     }
@@ -1330,8 +1632,8 @@ public class ShortcutHook {
                         // Prefix-only swallow with no binding fired: replay the key so
                         // apps receive it (fixes Ctrl+S being lost when Ctrl+S+L is bound).
                         if (wasPrefix && !hadDeferred) {
-                            keybd_event(vk, 0, 0, UIntPtr.Zero);
-                            keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                            SendKey(vk, false);
+                            SendKey(vk, true);
                         }
                         return new IntPtr(1);
                     }
@@ -1365,16 +1667,27 @@ public class ShortcutHook {
         }
 
         if (LaunchBindings.Count > 0 || ExitBindings.Count > 0 || FocusBindings.Count > 0 || BlurBindings.Count > 0) {
-            KnownRunningApps = GetRunningAppNames();
+            ActiveWindows.Clear();
+            KnownRunningApps.Clear();
+            EnumWindows(PopulateExistingWindows, IntPtr.Zero);
             LastFocusedApp = GetForegroundProcessName();
-            ProcessPollTimer = new System.Threading.Timer(PollProcesses, null, PROCESS_POLL_MS, PROCESS_POLL_MS);
+
+            winEventProcDelegate = new WinEventProc(WinEventCallback);
+            hFocusEventHook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                IntPtr.Zero, winEventProcDelegate, 0, 0, WINEVENT_OUTOFCONTEXT);
+            hCreateDestroyEventHook = SetWinEventHook(
+                EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+                IntPtr.Zero, winEventProcDelegate, 0, 0, WINEVENT_OUTOFCONTEXT);
         }
 
         MSG msg; int r;
         while ((r = GetMessage(out msg, IntPtr.Zero, 0, 0)) > 0) {
             TranslateMessage(ref msg); DispatchMessage(ref msg);
         }
-        if (ProcessPollTimer != null) { ProcessPollTimer.Dispose(); ProcessPollTimer = null; }
+
+        if (hFocusEventHook != IntPtr.Zero) { UnhookWinEvent(hFocusEventHook); hFocusEventHook = IntPtr.Zero; }
+        if (hCreateDestroyEventHook != IntPtr.Zero) { UnhookWinEvent(hCreateDestroyEventHook); hCreateDestroyEventHook = IntPtr.Zero; }
         UnhookWindowsHookEx(kbdHookId); UnhookWindowsHookEx(mouseHookId);
     }
 }

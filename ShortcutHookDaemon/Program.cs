@@ -1,6 +1,10 @@
+using System;
 using System.Diagnostics;
+using System.IO;
 using System.Text.Json;
+using System.Threading;
 using ShortcutHookDaemon;
+using ConfigRoot = ShortcutHookCore.Models.ConfigRoot;
 
 var logPath    = Path.Combine(AppContext.BaseDirectory, "ShortcutHook.log");
 var configPath = Path.Combine(AppContext.BaseDirectory, "shortcuts.json");

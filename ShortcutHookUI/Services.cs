@@ -11,135 +11,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 
+using ShortcutHookCore.Models;
+using ShortcutHookCore.Parsing;
+using ShortcutHookCore.Security;
+
 namespace ShortcutHookUI;
-
-internal static class TriggerHelpers
-{
-    public const int MOD_CTRL  = 1;
-    public const int MOD_SHIFT = 2;
-    public const int MOD_ALT   = 4;
-    public const int MOD_WIN   = 8;
-
-    public static readonly string[] ValidGestures = {
-        "left+right","left+rightx2","left+rightx3",
-        "double-right","double-right-sel","triple-right",
-        "right-scroll-down","right-scroll-up",
-        "shift-scroll-down","shift-scroll-up",
-        "single-wheel","double-wheel","triple-wheel"
-    };
-
-    public static readonly Dictionary<string,int> VkMap = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ENTER"]=0x0D, ["RETURN"]=0x0D, ["ESC"]=0x1B, ["ESCAPE"]=0x1B,
-        ["TAB"]=0x09, ["SPACE"]=0x20, ["BACK"]=0x08, ["BACKSPACE"]=0x08,
-        ["DELETE"]=0x2E, ["DEL"]=0x2E, ["INSERT"]=0x2D, ["INS"]=0x2D,
-        ["HOME"]=0x24, ["END"]=0x23, ["PGUP"]=0x21, ["PAGEUP"]=0x21,
-        ["PGDN"]=0x22, ["PAGEDOWN"]=0x22,
-        ["LEFT"]=0x25, ["UP"]=0x26, ["RIGHT"]=0x27, ["DOWN"]=0x28,
-        ["PRTSCR"]=0x2C, ["PRINTSCREEN"]=0x2C,
-        ["F1"]=0x70, ["F2"]=0x71, ["F3"]=0x72, ["F4"]=0x73, ["F5"]=0x74, ["F6"]=0x75,
-        ["F7"]=0x76, ["F8"]=0x77, ["F9"]=0x78, ["F10"]=0x79, ["F11"]=0x7A, ["F12"]=0x7B,
-    };
-
-    static readonly HashSet<string> Mods =
-        new(StringComparer.OrdinalIgnoreCase) { "CTRL","CONTROL","SHIFT","ALT","MENU","WIN" };
-
-    public static int ResolveKeyCode(string k)
-    {
-        var u = k.Trim().ToUpperInvariant();
-        if (VkMap.TryGetValue(u, out var v)) return v;
-        if (u.Length == 1 && u[0] >= 'A' && u[0] <= 'Z') return u[0];
-        if (u.Length == 1 && u[0] >= '0' && u[0] <= '9') return u[0];
-        throw new ArgumentException($"Unknown key '{k}'");
-    }
-
-    public static ParsedKey ParseKeyTrigger(string combo)
-    {
-        var p = new ParsedKey();
-        var keys = new List<int>();
-        foreach (var tokRaw in combo.Split('+'))
-        {
-            var tok = tokRaw.Trim().ToUpperInvariant();
-            if (tok.Length == 0) continue;
-            if (tok is "CTRL" or "CONTROL") p.Mods |= MOD_CTRL;
-            else if (tok is "SHIFT")        p.Mods |= MOD_SHIFT;
-            else if (tok is "ALT" or "MENU") p.Mods |= MOD_ALT;
-            else if (tok is "WIN")          p.Mods |= MOD_WIN;
-            else keys.Add(ResolveKeyCode(tok));
-        }
-        if (keys.Count == 0) throw new ArgumentException($"No non-modifier key in '{combo}'");
-        keys.Sort();
-        p.Keys = keys.ToArray();
-        return p;
-    }
-
-    public static string CanonicalizeTrigger(string trigger)
-    {
-        var t = trigger.Trim();
-        if (t.StartsWith("mouse:", StringComparison.Ordinal))
-        {
-            var g = t.Substring(6).Trim().ToLowerInvariant();
-            if (!ValidGestures.Contains(g)) throw new ArgumentException($"Unknown mouse gesture '{g}'");
-            return "mouse:" + g;
-        }
-        if (t.StartsWith("key:", StringComparison.Ordinal))
-        {
-            var p = ParseKeyTrigger(t.Substring(4));
-            // Restrict single-letter Ctrl triggers (Ctrl + A-Z) to prevent conflicts with standard shortcuts
-            if (p.Mods == MOD_CTRL && p.Keys.Length == 1 && p.Keys[0] >= 0x41 && p.Keys[0] <= 0x5A)
-            {
-                throw new ArgumentException("Triggers like 'Ctrl+Letter' are restricted because they conflict with standard shortcuts. Please use a multi-key combo (e.g. Ctrl+K+C) or add another modifier (e.g. Ctrl+Shift+C).");
-            }
-            return "key:" + p.Mods + ":" + string.Join(",", p.Keys);
-        }
-        if (t.StartsWith("launch:", StringComparison.Ordinal) || t.StartsWith("exit:", StringComparison.Ordinal) ||
-            t.StartsWith("focus:", StringComparison.Ordinal)  || t.StartsWith("blur:", StringComparison.Ordinal))
-        {
-            string prefix =
-                t.StartsWith("launch:", StringComparison.Ordinal) ? "launch:" :
-                t.StartsWith("exit:",   StringComparison.Ordinal) ? "exit:"   :
-                t.StartsWith("focus:",  StringComparison.Ordinal) ? "focus:"  : "blur:";
-            var apps = t.Substring(prefix.Length).Split(',')
-                .Select(a => a.Trim().ToLowerInvariant())
-                .Where(a => a.Length > 0)
-                .Distinct()
-                .OrderBy(a => a, StringComparer.Ordinal)
-                .ToArray();
-            if (apps.Length == 0) throw new ArgumentException("App name cannot be empty");
-            return prefix + string.Join(",", apps);
-        }
-        throw new ArgumentException("Trigger must start with 'mouse:', 'key:', 'launch:', 'exit:', 'focus:', or 'blur:'");
-    }
-
-    public static void ValidateShortcutOutput(string combo)
-    {
-        var tokens = combo.Trim().Split('+').Select(t => t.Trim().ToUpperInvariant()).ToArray();
-        if (tokens.All(string.IsNullOrEmpty)) throw new ArgumentException("Output cannot be empty");
-        foreach (var tok in tokens)
-        {
-            if (string.IsNullOrEmpty(tok)) throw new ArgumentException("Empty token");
-            if (Mods.Contains(tok)) continue;
-            if (VkMap.ContainsKey(tok)) continue;
-            if (tok.Length == 1 && ((tok[0] >= 'A' && tok[0] <= 'Z') || (tok[0] >= '0' && tok[0] <= '9'))) continue;
-            throw new ArgumentException($"Unknown key '{tok}'");
-        }
-    }
-
-    public static bool IsKeyPrefixOf(ParsedKey a, ParsedKey b)
-    {
-        if (a.Mods != b.Mods || a.Keys.Length >= b.Keys.Length) return false;
-        foreach (var k in a.Keys) if (!b.Keys.Contains(k)) return false;
-        return true;
-    }
-}
 
 internal static class ConfigService
 {
-    static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never
-    };
+    static readonly JsonSerializerOptions JsonOpts = DpapiHelper.SignJsonOpts;
 
     public static readonly List<BindingEntry> Defaults = new()
     {
@@ -167,6 +47,48 @@ internal static class ConfigService
         }
     }
 
+    static void DecryptConfig(ConfigRoot doc)
+    {
+        if (doc.bindings != null)
+        {
+            foreach (var b in doc.bindings)
+            {
+                if (b.outputs != null)
+                {
+                    for (int i = 0; i < b.outputs.Count; i++)
+                    {
+                        if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                        {
+                            b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                        }
+                    }
+                }
+            }
+        }
+        if (doc.profiles != null)
+        {
+            foreach (var profile in doc.profiles)
+            {
+                if (profile.bindings != null)
+                {
+                    foreach (var b in profile.bindings)
+                    {
+                        if (b.outputs != null)
+                        {
+                            for (int i = 0; i < b.outputs.Count; i++)
+                            {
+                                if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                                {
+                                    b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     public static ConfigRoot ReadConfig(string root)
     {
         var p = ConfigPath(root);
@@ -177,7 +99,10 @@ internal static class ConfigService
                 var txt = File.ReadAllText(p);
                 var doc = JsonSerializer.Deserialize<ConfigRoot>(txt);
                 if (doc is not null)
+                {
+                    DecryptConfig(doc);
                     return Migrate(doc, root);
+                }
             }
             catch { }
         }
@@ -225,7 +150,63 @@ internal static class ConfigService
     {
         config.bindings = null;
         Directory.CreateDirectory(root);
-        File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(config, JsonOpts));
+
+        // Encrypt type outputs in memory before serialization
+        if (config.profiles != null)
+        {
+            foreach (var profile in config.profiles)
+            {
+                if (profile.bindings != null)
+                {
+                    foreach (var b in profile.bindings)
+                    {
+                        if (b.outputs != null)
+                        {
+                            for (int i = 0; i < b.outputs.Count; i++)
+                            {
+                                if (b.outputs[i].StartsWith("type:", StringComparison.Ordinal))
+                                {
+                                    b.outputs[i] = "type-enc:" + DpapiHelper.Encrypt(b.outputs[i].Substring(5));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        DpapiHelper.SignConfig(config, root);
+
+        try
+        {
+            File.WriteAllText(ConfigPath(root), JsonSerializer.Serialize(config, JsonOpts));
+        }
+        finally
+        {
+            // Decrypt back to plaintext in memory
+            if (config.profiles != null)
+            {
+                foreach (var profile in config.profiles)
+                {
+                    if (profile.bindings != null)
+                    {
+                        foreach (var b in profile.bindings)
+                        {
+                            if (b.outputs != null)
+                            {
+                                for (int i = 0; i < b.outputs.Count; i++)
+                                {
+                                    if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                                    {
+                                        b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Replaces the active profile's bindings, preserving other profiles and settings.
@@ -305,8 +286,47 @@ internal static class ConfigService
     // Serializes a single profile as a standalone JSON document: { "name": ..., "bindings": [...] }.
     public static void ExportProfile(string path, ProfileEntry profile)
     {
-        var export = new ProfileEntry { name = profile.name, bindings = profile.bindings };
-        File.WriteAllText(path, JsonSerializer.Serialize(export, JsonOpts));
+        if (profile.bindings != null)
+        {
+            foreach (var b in profile.bindings)
+            {
+                if (b.outputs != null)
+                {
+                    for (int i = 0; i < b.outputs.Count; i++)
+                    {
+                        if (b.outputs[i].StartsWith("type:", StringComparison.Ordinal))
+                        {
+                            b.outputs[i] = "type-enc:" + DpapiHelper.Encrypt(b.outputs[i].Substring(5));
+                        }
+                    }
+                }
+            }
+        }
+
+        try
+        {
+            var export = new ProfileEntry { name = profile.name, bindings = profile.bindings ?? new() };
+            File.WriteAllText(path, JsonSerializer.Serialize(export, JsonOpts));
+        }
+        finally
+        {
+            if (profile.bindings != null)
+            {
+                foreach (var b in profile.bindings)
+                {
+                    if (b.outputs != null)
+                    {
+                        for (int i = 0; i < b.outputs.Count; i++)
+                        {
+                            if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                            {
+                                b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Parses a standalone profile export file. Throws FormatException/JsonException if invalid.
@@ -322,6 +342,21 @@ internal static class ConfigService
 
         var name     = nameEl.GetString()!;
         var bindings = JsonSerializer.Deserialize<List<BindingEntry>>(bindingsEl.GetRawText()) ?? new();
+
+        foreach (var b in bindings)
+        {
+            if (b.outputs != null)
+            {
+                for (int i = 0; i < b.outputs.Count; i++)
+                {
+                    if (b.outputs[i].StartsWith("type-enc:", StringComparison.Ordinal))
+                    {
+                        b.outputs[i] = "type:" + DpapiHelper.Decrypt(b.outputs[i].Substring(9));
+                    }
+                }
+            }
+        }
+
         return new ProfileEntry { name = name, bindings = bindings };
     }
 
@@ -336,7 +371,7 @@ internal static class ConfigService
         skipped = 0;
         foreach (var b in bindings)
         {
-            try { TriggerHelpers.CanonicalizeTrigger(b.trigger); }
+            try { TriggerParser.CanonicalizeTrigger(b.trigger); }
             catch { skipped++; continue; }
             result.Add(b);
         }
@@ -385,7 +420,10 @@ internal static class InstallService
     const string UiExeFileName        = "ShortcutHookUI.exe";
 
     // Script + config always live here — fixed, never changes.
-    public static readonly string ScriptRoot = @"C:\Tools\ShortcutHook";
+    public static string ScriptRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ShortcutHook"
+    );
 
     // Primary name for the daemon executable path.
     public static string DaemonPath => Path.Combine(ScriptRoot, ScriptFileName);
@@ -482,9 +520,48 @@ internal static class InstallService
         if (!string.Equals(Path.GetFullPath(sourceExe), Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase))
             File.Copy(sourceExe, targetExe, overwrite: true);
 
-        // 3. Write default config if absent.
-        if (!File.Exists(ConfigService.ConfigPath(ScriptRoot)))
-            ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
+        // 3. Write default config if absent (migrating from old path if available).
+        var newConfigPath = ConfigService.ConfigPath(ScriptRoot);
+        if (!File.Exists(newConfigPath))
+        {
+            var oldConfigPath = Path.Combine(@"C:\Tools\ShortcutHook", "shortcuts.json");
+            if (File.Exists(oldConfigPath))
+            {
+                try
+                {
+                    File.Copy(oldConfigPath, newConfigPath, overwrite: true);
+                }
+                catch
+                {
+                    ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
+                }
+            }
+            else
+            {
+                ConfigService.Save(ScriptRoot, ConfigService.DefaultConfig());
+            }
+        }
+
+        // Migrate startup shortcut if it exists to point to the new daemon path.
+        try
+        {
+            if (StartupService.IsEnabled())
+            {
+                StartupService.Set(true);
+            }
+        }
+        catch { }
+
+        // Clean up old daemon to avoid confusion.
+        try
+        {
+            var oldDaemonPath = Path.Combine(@"C:\Tools\ShortcutHook", "ShortcutHookDaemon.exe");
+            if (File.Exists(oldDaemonPath))
+            {
+                File.Delete(oldDaemonPath);
+            }
+        }
+        catch { }
 
         SaveAppRoot(appRoot);
 
@@ -628,53 +705,349 @@ internal static class StartupService
 
 internal static class AppScanner
 {
-    // Resolves a .lnk shortcut to the process executable name it launches (e.g. "chrome.exe").
-    // Returns null for shortcuts with no resolvable file target (e.g. UWP "shell:AppsFolder\..." links).
-    public static string? ResolveProcessName(string lnkPath)
+    // Resolves an app path (shortcut .lnk, direct .exe, or shell:AppsFolder/AUMID) to the
+    // foreground process executable name (e.g. "chrome.exe", "WindowsTerminal.exe").
+    public static string? ResolveProcessName(string path)
     {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        path = path.Trim();
+
+        // 1. Direct .exe file path or executable name
+        if (path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            var exe = Path.GetFileName(path);
+            return MapAliasToProcess(exe);
+        }
+
+        // 2. shell:AppsFolder\... or package AUMID
+        if (path.StartsWith("shell:AppsFolder\\", StringComparison.OrdinalIgnoreCase) || path.Contains('!'))
+        {
+            var resolved = ResolveUwpProcessName(path);
+            if (!string.IsNullOrEmpty(resolved)) return resolved;
+        }
+
+        // 3. .lnk shortcut file
+        if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+        {
+            try
+            {
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType != null)
+                {
+                    dynamic shell = Activator.CreateInstance(shellType)!;
+                    dynamic shortcut = shell.CreateShortcut(path);
+                    string target = shortcut.TargetPath as string ?? "";
+                    if (!string.IsNullOrWhiteSpace(target))
+                    {
+                        if (target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                            return MapAliasToProcess(Path.GetFileName(target));
+
+                        if (target.StartsWith("shell:AppsFolder\\", StringComparison.OrdinalIgnoreCase) || target.Contains('!'))
+                        {
+                            var uwp = ResolveUwpProcessName(target);
+                            if (!string.IsNullOrEmpty(uwp)) return uwp;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // If WScript failed to resolve (e.g. modern MSIX shortcut), check shortcut name
+            var lnkName = Path.GetFileNameWithoutExtension(path);
+            var fallback = MapNameToProcess(lnkName);
+            if (!string.IsNullOrEmpty(fallback)) return fallback;
+        }
+
+        return null;
+    }
+
+    private static string MapAliasToProcess(string exe)
+    {
+        if (string.Equals(exe, "wt.exe", StringComparison.OrdinalIgnoreCase))
+            return "WindowsTerminal.exe";
+        if (string.Equals(exe, "Calculator.exe", StringComparison.OrdinalIgnoreCase))
+            return "CalculatorApp.exe";
+        return exe;
+    }
+
+    private static string? MapNameToProcess(string name)
+    {
+        if (name.IndexOf("Terminal", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsTerminal.exe";
+        if (name.IndexOf("Calculator", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "CalculatorApp.exe";
+        if (name.IndexOf("Snipping Tool", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            name.IndexOf("Snip & Sketch", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SnippingTool.exe";
+        if (name.IndexOf("Settings", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SystemSettings.exe";
+        if (name.IndexOf("Camera", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsCamera.exe";
+        if (name.IndexOf("Photos", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Photos.exe";
+        return null;
+    }
+
+    private static string? ResolveUwpProcessName(string uwpPath)
+    {
+        string aumid = uwpPath;
+        if (aumid.StartsWith("shell:AppsFolder\\", StringComparison.OrdinalIgnoreCase))
+            aumid = aumid.Substring("shell:AppsFolder\\".Length);
+
+        // Check known patterns first
+        if (aumid.IndexOf("WindowsTerminal", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsTerminal.exe";
+        if (aumid.IndexOf("WindowsCalculator", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "CalculatorApp.exe";
+        if (aumid.IndexOf("WindowsCamera", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "WindowsCamera.exe";
+        if (aumid.IndexOf("ScreenSketch", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            aumid.IndexOf("SnippingTool", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SnippingTool.exe";
+        if (aumid.IndexOf("WindowsNotepad", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Notepad.exe";
+        if (aumid.IndexOf("Microsoft.Paint", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "mspaint.exe";
+        if (aumid.IndexOf("SystemSettings", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            aumid.IndexOf("ImmersiveControlPanel", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "SystemSettings.exe";
+        if (aumid.IndexOf("Windows.Photos", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Photos.exe";
+        if (aumid.IndexOf("ZuneMusic", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            aumid.IndexOf("Media.Player", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Media.Player.exe";
+        if (aumid.IndexOf("OutlookForWindows", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "olk.exe";
+        if (aumid.IndexOf("DesktopAppInstaller", StringComparison.OrdinalIgnoreCase) >= 0)
+            return "winget.exe";
+
+        // Dynamic registry lookup in HKCU AppModel Repository
         try
         {
-            var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return null;
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic shortcut = shell.CreateShortcut(lnkPath);
-            string target = shortcut.TargetPath as string ?? "";
-            if (string.IsNullOrWhiteSpace(target) || !target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                return null;
-            return Path.GetFileName(target);
+            int bang = aumid.IndexOf('!');
+            string family = bang > 0 ? aumid.Substring(0, bang) : aumid;
+            using var famKey = Registry.CurrentUser.OpenSubKey(
+                $@"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Families\{family}");
+            if (famKey != null)
+            {
+                var pkgNames = famKey.GetSubKeyNames();
+                if (pkgNames.Length > 0)
+                {
+                    string pkgFullName = pkgNames[0];
+                    using var pkgKey = Registry.CurrentUser.OpenSubKey(
+                        $@"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\{pkgFullName}");
+                    if (pkgKey != null)
+                    {
+                        var rootFolder = pkgKey.GetValue("PackageRootFolder") as string;
+                        if (!string.IsNullOrEmpty(rootFolder) && Directory.Exists(rootFolder))
+                        {
+                            var manifestPath = Path.Combine(rootFolder, "AppxManifest.xml");
+                            if (File.Exists(manifestPath))
+                            {
+                                string manifestText = File.ReadAllText(manifestPath);
+                                var m = System.Text.RegularExpressions.Regex.Match(manifestText, @"<Application\b[^>]*\bExecutable=""([^""]+)""", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                if (m.Success && !string.IsNullOrEmpty(m.Groups[1].Value))
+                                    return Path.GetFileName(m.Groups[1].Value);
+                            }
+                        }
+                    }
+                }
+            }
         }
-        catch { return null; }
+        catch { }
+
+        return null;
+    }
+
+    private static bool IsJunk(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return true;
+        if (name.IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("uninst",    StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("remove",    StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("setup",     StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (name.IndexOf("help",      StringComparison.OrdinalIgnoreCase) >= 0 && name.Length <= 8) return true;
+        return false;
     }
 
     public static List<AppEntry> Scan()
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var list = new List<AppEntry>();
+
+        void AddEntry(string name, string path)
+        {
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(path)) return;
+            name = name.Trim();
+            path = path.Trim();
+            if (IsJunk(name)) return;
+
+            // Normalize terminal display name
+            if (name.Equals("Terminal", StringComparison.OrdinalIgnoreCase) &&
+                (path.IndexOf("WindowsTerminal", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 path.EndsWith("wt.exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                name = "Windows Terminal";
+            }
+
+            // Deduplicate by path or display name
+            if (!seenPaths.Add(path)) return;
+            if (!seenNames.Add(name)) return;
+
+            list.Add(new AppEntry { Name = name, Path = path });
+        }
+
+        // 1. Packaged & Store apps via shell:AppsFolder (COM)
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellType != null)
+            {
+                dynamic shell = Activator.CreateInstance(shellType)!;
+                dynamic folder = shell.NameSpace("shell:AppsFolder");
+                if (folder != null)
+                {
+                    foreach (dynamic item in folder.Items())
+                    {
+                        try
+                        {
+                            string name = item.Name as string ?? "";
+                            string p = item.Path as string ?? "";
+                            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(p)) continue;
+                            if (p.StartsWith("::{", StringComparison.Ordinal)) continue; // ignore GUIDs
+                            if (p.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
+                                p.EndsWith(".url",  StringComparison.OrdinalIgnoreCase) ||
+                                p.EndsWith(".pdf",  StringComparison.OrdinalIgnoreCase)) continue;
+
+                            string launchPath = (p.Contains(":\\") || p.StartsWith("\\\\"))
+                                ? p
+                                : "shell:AppsFolder\\" + p;
+
+                            AddEntry(name, launchPath);
+                        }
+                        catch { }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        // 2. Start Menu & Desktop .lnk files
         var dirs = new[]
         {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                          "Microsoft", "Windows", "Start Menu", "Programs"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                          "Microsoft", "Windows", "Start Menu", "Programs"),
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
         };
         foreach (var dir in dirs)
         {
-            if (!Directory.Exists(dir)) continue;
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
             IEnumerable<string> files;
             try { files = Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories); }
             catch { continue; }
             foreach (var f in files)
             {
                 var name = Path.GetFileNameWithoutExtension(f);
-                if (name.IndexOf("uninstall", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                if (name.IndexOf("uninst",    StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                if (name.IndexOf("remove",    StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                if (!seen.Add(name)) continue;
-                list.Add(new AppEntry { Name = name, Path = f });
+                AddEntry(name, f);
             }
         }
+
+        // 3. Execution aliases (%LOCALAPPDATA%\Microsoft\WindowsApps)
+        try
+        {
+            var winAppsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                          "Microsoft", "WindowsApps");
+            if (Directory.Exists(winAppsDir))
+            {
+                foreach (var file in Directory.EnumerateFiles(winAppsDir, "*.exe"))
+                {
+                    var fileName = Path.GetFileName(file);
+                    var baseName = Path.GetFileNameWithoutExtension(file);
+                    string friendlyName = fileName.ToLowerInvariant() switch
+                    {
+                        "wt.exe" => "Windows Terminal",
+                        "winget.exe" => "Windows Package Manager",
+                        "mediaplayer.exe" => "Windows Media Player",
+                        "olk.exe" => "Outlook",
+                        "python.exe" => "Python",
+                        "python3.exe" => "Python 3",
+                        _ => baseName
+                    };
+                    AddEntry(friendlyName, file);
+                }
+            }
+        }
+        catch { }
+
+        // 4. Registry App Paths (HKCU & HKLM)
+        ScanAppPathsRegistry(Registry.CurrentUser, AddEntry);
+        ScanAppPathsRegistry(Registry.LocalMachine, AddEntry);
+
+        // 5. Currently running top-level processes
+        try
+        {
+            foreach (var proc in Process.GetProcesses())
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(proc.MainWindowTitle)) continue;
+                    string exePath;
+                    try { exePath = proc.MainModule?.FileName ?? ""; } catch { continue; }
+                    if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) continue;
+
+                    string pName = proc.ProcessName;
+                    string friendlyName = pName.Equals("WindowsTerminal", StringComparison.OrdinalIgnoreCase)
+                        ? "Windows Terminal"
+                        : pName;
+
+                    AddEntry(friendlyName, exePath);
+                }
+                catch { }
+            }
+        }
+        catch { }
+
         list.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
         return list;
+    }
+
+    private static void ScanAppPathsRegistry(RegistryKey root, Action<string, string> add)
+    {
+        try
+        {
+            using var key = root.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths");
+            if (key == null) return;
+            foreach (var subName in key.GetSubKeyNames())
+            {
+                try
+                {
+                    using var sub = key.OpenSubKey(subName);
+                    var target = sub?.GetValue("") as string;
+                    if (string.IsNullOrWhiteSpace(target)) continue;
+                    target = target.Trim('"');
+                    if (!File.Exists(target)) continue;
+
+                    string baseName = Path.GetFileNameWithoutExtension(subName);
+                    string friendlyName = subName.ToLowerInvariant() switch
+                    {
+                        "wt.exe" => "Windows Terminal",
+                        "chrome.exe" => "Google Chrome",
+                        "msedge.exe" => "Microsoft Edge",
+                        "brave.exe" => "Brave Browser",
+                        "code.exe" => "Visual Studio Code",
+                        "devenv.exe" => "Visual Studio",
+                        _ => baseName
+                    };
+                    add(friendlyName, target);
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 }
 
