@@ -47,7 +47,7 @@ Organize hotkeys into profiles (e.g., Default, Coding, Gaming) and switch betwee
 
 Grab the latest **ShortcutHookUI.exe** directly or browse all available versions:
 
-* 🚀 **[Download v2.0.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v2.0.0/ShortcutHookUI-2.0.0.exe)**
+* 🚀 **[Download v2.1.0 EXE](https://github.com/veera-bharath/ShortcutHook/releases/download/v2.1.0/ShortcutHookUI-2.1.0.exe)**
 * 📦 **[Browse Releases](https://github.com/veera-bharath/ShortcutHook/releases)**
 
 ### Quick Setup:
