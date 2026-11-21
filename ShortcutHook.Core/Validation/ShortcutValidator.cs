@@ -13,6 +13,33 @@ public static class ShortcutValidator
     public static void ValidateShortcutOutput(string combo)
     {
         if (combo.StartsWith("hscroll:", StringComparison.OrdinalIgnoreCase)) return;
+        if (combo.StartsWith("volume:", StringComparison.OrdinalIgnoreCase))
+        {
+            var act = combo.Substring(7).Trim();
+            if (string.Equals(act, "up", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "down", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "mute", StringComparison.OrdinalIgnoreCase)) return;
+            throw new ArgumentException($"Unknown volume action '{act}'");
+        }
+        if (combo.StartsWith("brightness:", StringComparison.OrdinalIgnoreCase))
+        {
+            var act = combo.Substring(11).Trim();
+            if (string.Equals(act, "up", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "down", StringComparison.OrdinalIgnoreCase)) return;
+            throw new ArgumentException($"Unknown brightness action '{act}'");
+        }
+        if (combo.StartsWith("media:", StringComparison.OrdinalIgnoreCase))
+        {
+            var act = combo.Substring(6).Trim();
+            if (string.Equals(act, "next", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "prev", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "previous", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "playpause", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "play", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "pause", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(act, "stop", StringComparison.OrdinalIgnoreCase)) return;
+            throw new ArgumentException($"Unknown media action '{act}'");
+        }
         var tokens = combo.Trim().Split('+').Select(t => t.Trim().ToUpperInvariant()).ToArray();
         if (tokens.All(string.IsNullOrEmpty)) throw new ArgumentException("Output cannot be empty");
         foreach (var tok in tokens)

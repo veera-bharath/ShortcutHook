@@ -15,7 +15,15 @@ public enum ActionKind
     HScrollLeft,
     HScrollRight,
     TogglePause,
-    SwitchProfile
+    SwitchProfile,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    BrightnessUp,
+    BrightnessDown,
+    MediaNext,
+    MediaPrev,
+    MediaPlayPause
 }
 
 public record ActionDef(string Label, ActionKind Kind)

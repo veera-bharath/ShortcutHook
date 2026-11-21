@@ -33,6 +33,7 @@ public class ShortcutHook {
     private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
     private const uint MOUSEEVENTF_MIDDLEUP   = 0x0040;
     private const uint MOUSEEVENTF_HWHEEL     = 0x1000;
+    private const uint KEYEVENTF_EXTENDEDKEY  = 0x0001;
     private const uint KEYEVENTF_KEYUP        = 0x0002;
     private const uint LLKHF_INJECTED         = 0x10;
     private const uint CF_UNICODETEXT         = 13;
@@ -51,6 +52,14 @@ public class ShortcutHook {
     private const byte VK_RCTRL   = 0xA3;
     private const byte VK_LMENU   = 0xA4;
     private const byte VK_RMENU   = 0xA5;
+
+    private const byte VK_VOLUME_MUTE      = 0xAD;
+    private const byte VK_VOLUME_DOWN      = 0xAE;
+    private const byte VK_VOLUME_UP        = 0xAF;
+    private const byte VK_MEDIA_NEXT_TRACK = 0xB0;
+    private const byte VK_MEDIA_PREV_TRACK = 0xB1;
+    private const byte VK_MEDIA_STOP       = 0xB2;
+    private const byte VK_MEDIA_PLAY_PAUSE = 0xB3;
 
     public const int MOD_CTRL  = (int)ModifierFlags.Control;
     public const int MOD_SHIFT = (int)ModifierFlags.Shift;
@@ -139,6 +148,7 @@ public class ShortcutHook {
     static void SendKey(byte vk, bool up)
     {
         uint flags = up ? KEYEVENTF_KEYUP : 0;
+        if (IsExtendedKey(vk)) flags |= KEYEVENTF_EXTENDEDKEY;
         var input = new INPUT
         {
             type = INPUT_KEYBOARD,
@@ -156,6 +166,11 @@ public class ShortcutHook {
         };
         SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT)));
     }
+
+    static bool IsExtendedKey(byte vk) =>
+        (vk >= 0x21 && vk <= 0x2E) ||
+        (vk >= 0xAD && vk <= 0xB3) ||
+        vk == 0x5B || vk == 0x5C || vk == 0xA3 || vk == 0xA5;
 
     static void SendMouse(uint flags, int dx, int dy, int data)
     {
@@ -280,6 +295,9 @@ public class ShortcutHook {
         public int    HScrollDelta;
         public bool   IsTogglePause; // flips IsPaused; null for all other fields when set
         public string SwitchToProfile; // switches active profile and relaunches daemon; null for all other fields when set
+        public string VolumeAction; // "up", "down", "mute"; null for other actions
+        public string MediaAction;  // "next", "prev", "playpause", "stop"; null for other actions
+        public string BrightnessAction; // "up", "down"; null for other actions
         public int    Delay; // delay after executing this step
     }
 
@@ -829,6 +847,18 @@ public class ShortcutHook {
             }) { IsBackground = true }.Start();
             return;
         }
+        if (step.VolumeAction != null) {
+            DispatchVolume(step.VolumeAction);
+            return;
+        }
+        if (step.MediaAction != null) {
+            DispatchMedia(step.MediaAction);
+            return;
+        }
+        if (step.BrightnessAction != null) {
+            DispatchBrightness(step.BrightnessAction);
+            return;
+        }
         if (step.OpenPath != null) {
             bool uWinL = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0;
             bool uWinR = (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
@@ -884,6 +914,64 @@ public class ShortcutHook {
         } else {
             FireOutput(step.Output);
         }
+    }
+
+    static void DispatchVolume(string action) {
+        byte vk = action switch {
+            "up"   => VK_VOLUME_UP,
+            "down" => VK_VOLUME_DOWN,
+            "mute" => VK_VOLUME_MUTE,
+            _      => 0
+        };
+        if (vk != 0) DispatchMediaOrVolumeKey(vk);
+    }
+
+    static void DispatchMedia(string action) {
+        byte vk = action switch {
+            "next"      => VK_MEDIA_NEXT_TRACK,
+            "prev"      => VK_MEDIA_PREV_TRACK,
+            "previous"  => VK_MEDIA_PREV_TRACK,
+            "playpause" => VK_MEDIA_PLAY_PAUSE,
+            "play"      => VK_MEDIA_PLAY_PAUSE,
+            "pause"     => VK_MEDIA_PLAY_PAUSE,
+            "stop"      => VK_MEDIA_STOP,
+            _           => 0
+        };
+        if (vk != 0) DispatchMediaOrVolumeKey(vk);
+    }
+
+    static void DispatchBrightness(string action) {
+        int delta = action switch {
+            "up"   => 10,
+            "down" => -10,
+            _      => 0
+        };
+        if (delta != 0) BrightnessController.Adjust(delta);
+    }
+
+    static void DispatchMediaOrVolumeKey(byte vk) {
+        new Thread(() => {
+            try {
+                bool uCtrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                bool uShift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+                bool uAlt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+                bool uWinL  = (GetAsyncKeyState(VK_LWIN)    & 0x8000) != 0;
+                bool uWinR  = (GetAsyncKeyState(VK_RWIN)    & 0x8000) != 0;
+
+                if (uCtrl)  SendKey(VK_CONTROL, true);
+                if (uShift) SendKey(VK_SHIFT,   true);
+                if (uAlt)   SendKey(VK_MENU,    true);
+                if (uWinL)  SendKey(VK_LWIN,    true);
+                if (uWinR)  SendKey(VK_RWIN,    true);
+
+                SendKey(vk, false);
+                SendKey(vk, true);
+
+                if (uCtrl)  SendKey(VK_CONTROL, false);
+                if (uShift) SendKey(VK_SHIFT,   false);
+                if (uAlt)   SendKey(VK_MENU,    false);
+            } catch { }
+        }) { IsBackground = true }.Start();
     }
 
     static bool IsPathSafe(string path) {

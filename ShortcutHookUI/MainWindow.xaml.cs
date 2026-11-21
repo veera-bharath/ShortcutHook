@@ -730,6 +730,14 @@ public partial class MainWindow : Window
                 ActionKind.HScrollRight => "hscroll:right",
                 ActionKind.TogglePause => "toggle:pause",
                 ActionKind.SwitchProfile => string.IsNullOrEmpty(item.OutputValue) ? "" : "profile:" + item.OutputValue,
+                ActionKind.VolumeUp => "volume:up",
+                ActionKind.VolumeDown => "volume:down",
+                ActionKind.VolumeMute => "volume:mute",
+                ActionKind.BrightnessUp => "brightness:up",
+                ActionKind.BrightnessDown => "brightness:down",
+                ActionKind.MediaNext => "media:next",
+                ActionKind.MediaPrev => "media:prev",
+                ActionKind.MediaPlayPause => "media:playpause",
                 _ => ""
             })
             .Where(s => !string.IsNullOrEmpty(s))

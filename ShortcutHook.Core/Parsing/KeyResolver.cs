@@ -44,6 +44,17 @@ public static class KeyResolver
         ["F10"]         = (byte)VirtualKeys.F10,
         ["F11"]         = (byte)VirtualKeys.F11,
         ["F12"]         = (byte)VirtualKeys.F12,
+        ["VOLUMEUP"]       = (byte)VirtualKeys.VolumeUp,
+        ["VOLUMEDOWN"]     = (byte)VirtualKeys.VolumeDown,
+        ["VOLUMEMUTE"]     = (byte)VirtualKeys.VolumeMute,
+        ["MUTE"]           = (byte)VirtualKeys.VolumeMute,
+        ["MEDIANEXT"]      = (byte)VirtualKeys.MediaNextTrack,
+        ["MEDIANEXTTRACK"] = (byte)VirtualKeys.MediaNextTrack,
+        ["MEDIAPREV"]      = (byte)VirtualKeys.MediaPrevTrack,
+        ["MEDIAPREVTRACK"] = (byte)VirtualKeys.MediaPrevTrack,
+        ["MEDIAPREVIOUS"]  = (byte)VirtualKeys.MediaPrevTrack,
+        ["MEDIAPLAYPAUSE"] = (byte)VirtualKeys.MediaPlayPause,
+        ["MEDIASTOP"]      = (byte)VirtualKeys.MediaStop,
     };
 
     public static int ResolveKeyCode(string k)
